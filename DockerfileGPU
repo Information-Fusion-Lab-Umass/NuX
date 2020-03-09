@@ -1,0 +1,54 @@
+FROM nvidia/cuda:10.1-cudnn7-devel-ubuntu18.04
+
+USER root
+
+# Install base stuff
+RUN apt-get update && \
+    apt-get install -y \
+    wget \
+    ca-certificates \
+    git-core \
+    pkg-config \
+    tree \
+    freetds-dev && \
+    # clean up
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+# Install Anaconda
+RUN echo 'export PATH=/opt/conda/bin:$PATH' > /etc/profile.d/conda.sh
+RUN wget --quiet https://repo.anaconda.com/archive/Anaconda3-2019.10-Linux-x86_64.sh -O ~/anaconda.sh
+RUN /bin/bash ~/anaconda.sh -b -p /opt/conda
+RUN rm ~/anaconda.sh
+ENV PATH /opt/conda/bin:$PATH
+RUN conda update conda && conda update anaconda && conda update --all
+
+# Install jax
+RUN PYTHON_VERSION=cp37 && \
+    CUDA_VERSION=cuda101 && \
+    PLATFORM=linux_x86_64 && \
+    BASE_URL='https://storage.googleapis.com/jax-releases' && \
+    pip install --upgrade $BASE_URL/$CUDA_VERSION/jaxlib-0.1.39-$PYTHON_VERSION-none-$PLATFORM.whl && \
+    pip install --upgrade jax
+
+# Install graphviz
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends graphviz graphviz-dev && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+# Install the latest versions of these python packages
+RUN python -m pip install --upgrade pip && \
+    pip uninstall numpy -y && \
+    pip install --user numpy scipy pandas bokeh cython networkx graphviz \
+    pygraphviz PyQt5 matplotlib opt_einsum autograd pymc3 recordclass seaborn torch umap-learn tqdm
+
+# Set the base directory
+WORKDIR /app
+
+# Expose a port for jupyter
+EXPOSE 8888
+
+# Make jupyter act like sublime (https://forums.fast.ai/t/tip-using-sublime-text-editing-shortcuts-in-jupyter-notebook-cells/8259)
+# RUN mkdir /home/jovyan/.jupyter/custom
+# ADD custom.js /home/jovyan/.jupyter/custom/

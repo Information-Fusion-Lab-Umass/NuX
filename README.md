@@ -1,1 +1,2 @@
-# NoX
+# Normalizing-Flows
+Normalizing Flows using JAX
