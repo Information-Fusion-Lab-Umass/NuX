@@ -14,11 +14,6 @@
 # limitations under the License.
 
 """Datasets used in examples."""
-
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-
 import array
 import gzip
 import os
@@ -32,10 +27,8 @@ import platform
 
 import numpy as np
 
-
 _MNIST_DATA = "/tmp/mnist/"
 _FASHION_MNIST_DATA = "/tmp/fashion_mnist/"
-
 
 def _download(data_folder, url, filename):
   """Download a url to a file in the JAX data temp directory."""
@@ -144,7 +137,7 @@ def load_CIFAR10(ROOT):
   xs = []
   ys = []
   for b in range(1,6):
-    f = os.path.join(ROOT, 'data_batch_%d' % (b, ))
+    f = os.path.join(ROOT, 'data_batch_%d' % (b,))
     X, Y = load_CIFAR_batch(f)
     xs.append(X)
     ys.append(Y)
@@ -196,23 +189,23 @@ def get_CIFAR10_data(num_training=49000, num_validation=1000, num_test=1000,
       'X_test': X_test, 'y_test': y_test,
     }
 
-def get_celeb_dataset( n_images=50000 ):
+def get_celeb_dataset(n_images=50000):
     import matplotlib.pyplot as plt
     from tqdm import tqdm_notebook
 
     all_files = []
-    for root, dirs, files in os.walk( 'img_align_celeba/' ):
+    for root, dirs, files in os.walk('img_align_celeba/'):
         for file in files:
-            if( file.endswith( '.jpg' ) ):
-                path = os.path.join( root, file )
-                all_files.append( path )
+            if(file.endswith('.jpg')):
+                path = os.path.join(root, file)
+                all_files.append(path)
 
     images = []
-    for path in tqdm_notebook( all_files[:n_images] ):
-        im = plt.imread( path, format='jpg' )
-        im = np.pad( im, ( ( 0, 2 ), ( 0, 2 ), ( 0, 0 ) ) )
-        images.append( im )
+    for path in tqdm_notebook(all_files[:n_images]):
+        im = plt.imread(path, format='jpg')
+        im = np.pad(im, ((0, 2), (0, 2), (0, 0)))
+        images.append(im)
 
-    np_images = np.array( images, dtype=np.int32 ) / 255.0
+    np_images = np.array(images, dtype=np.int32) / 255.0
 
     return np_images
