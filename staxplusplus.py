@@ -235,6 +235,23 @@ def Reshape(shape, name='unnamed'):
 
 ################################################################################################################
 
+def ScalarMultiply(val, name='unnamed'):
+    # language=rst
+    """
+    Multiply an input by a constant scalar value
+
+    :param val - The constant value
+    """
+    def init_fun(key, input_shape):
+        params = ()
+        state = ()
+        return name, input_shape, params, state
+
+    def apply_fun(params, state, inputs, **kwargs):
+        return inputs*val, state
+
+    return init_fun, apply_fun
+
 def Dense(out_dim, mask_id=None, keep_prob=1.0, W_init=glorot_normal(), b_init=normal(), name='unnamed'):
     # language=rst
     """

@@ -1,19 +1,7 @@
-# TAKEN FROM https://github.com/google/jax/blob/master/examples/datasets.py
-# Copyright 2018 Google LLC
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# MNIST downloaders are taken from https://github.com/google/jax/blob/master/examples/datasets.py
 
 """Datasets used in examples."""
+import tarfile
 import array
 import gzip
 import os
@@ -30,178 +18,202 @@ import numpy as np
 _MNIST_DATA = "/tmp/mnist/"
 _FASHION_MNIST_DATA = "/tmp/fashion_mnist/"
 
-def _download(data_folder, url, filename):
-  """Download a url to a file in the JAX data temp directory."""
-  if not path.exists(data_folder):
-    os.makedirs(data_folder)
-  out_file = path.join(data_folder, filename)
-  if not path.isfile(out_file):
-    urlretrieve(url, out_file)
-    print("downloaded {} to {}".format(url, data_folder))
+def download_url(data_folder, filename, url):
+    # language=rst
+    """
+    Download a url to a specified location
 
+    :param data_folder: Target folder location.  Will be created if doesn't exist
+    :param filename: What to name the file
+    :param url: url to download
+    """
+    if(path.exists(data_folder) == False):
+        os.makedirs(data_folder)
 
-def _partial_flatten(x):
-  """Flatten all but the first dimension of an ndarray."""
-  return np.reshape(x, (x.shape[0], -1))
+    out_file = path.join(data_folder, filename)
+    if(path.isfile(out_file) == False):
+        urlretrieve(url, out_file)
+        print('downloaded {} to {}'.format(url, data_folder))
 
+    return out_file
 
-def _one_hot(x, k, dtype=np.float32):
-  """Create a one-hot encoding of x of size k."""
-  return np.array(x[:, None] == np.arange(k), dtype)
+def parse_mnist_struct(filename, struct_format='>II'):
+    # language=rst
+    """
+    Unpack the data in the mnist files
 
+    :param filename: MNIST .gz filename
+    :param struct_format: How to read the files
+    """
+    struct_size = struct.calcsize(struct_format)
+    with gzip.open(filename, 'rb') as file:
+        header = struct.unpack(struct_format, file.read(struct_size))
+        return header, np.array(array.array("B", file.read()), dtype=np.uint8)
 
-def mnist_raw(data_folder, base_url):
-  """Download and parse the raw MNIST dataset."""
+def download_mnist(data_folder, base_url):
+    # language=rst
+    """
+    Get the raw mnist data
 
-  def parse_labels(filename):
-    with gzip.open(filename, "rb") as fh:
-      _ = struct.unpack(">II", fh.read(8))
-      return np.array(array.array("B", fh.read()), dtype=np.uint8)
+    :param data_folder: Where to download the data to
+    :param base_url: Where to download the files from
+    """
+    mnist_filenames = ['train-images-idx3-ubyte.gz', 'train-labels-idx1-ubyte.gz', 't10k-images-idx3-ubyte.gz', 't10k-labels-idx1-ubyte.gz']
+    for filename in mnist_filenames:
+        download_url(data_folder, filename, base_url + filename)
 
-  def parse_images(filename):
-    with gzip.open(filename, "rb") as fh:
-      _, num_data, rows, cols = struct.unpack(">IIII", fh.read(16))
-      return np.array(array.array("B", fh.read()),
-                      dtype=np.uint8).reshape(num_data, rows, cols)
+    (_, n_train_data, n_rows, n_cols), train_images = parse_mnist_struct(path.join(data_folder, "train-images-idx3-ubyte.gz"), struct_format='>IIII')
+    (_, n_test_data, n_rows, n_cols), test_images = parse_mnist_struct(path.join(data_folder, "t10k-images-idx3-ubyte.gz"), struct_format='>IIII')
+    train_images = train_images.reshape((n_train_data, n_rows, n_cols))
+    test_images = test_images.reshape((n_test_data, n_rows, n_cols))
 
-  for filename in ["train-images-idx3-ubyte.gz", "train-labels-idx1-ubyte.gz",
-                   "t10k-images-idx3-ubyte.gz", "t10k-labels-idx1-ubyte.gz"]:
-    _download(data_folder, base_url + filename, filename)
+    _, train_labels = parse_mnist_struct(path.join(data_folder, "train-labels-idx1-ubyte.gz"), struct_format='>II')
+    _, test_labels = parse_mnist_struct(path.join(data_folder, "t10k-labels-idx1-ubyte.gz"), struct_format='>II')
 
-  train_images = parse_images(path.join(data_folder, "train-images-idx3-ubyte.gz"))
-  train_labels = parse_labels(path.join(data_folder, "train-labels-idx1-ubyte.gz"))
-  test_images = parse_images(path.join(data_folder, "t10k-images-idx3-ubyte.gz"))
-  test_labels = parse_labels(path.join(data_folder, "t10k-labels-idx1-ubyte.gz"))
+    return train_images, train_labels, test_images, test_labels
 
-  return train_images, train_labels, test_images, test_labels
+def get_mnist_data(data_folder='/tmp/mnist/', kind='digits'):
+    # language=rst
+    """
+    Retrive an mnist dataset.  Either get the digits or fashion datasets.
 
+    :param data_folder: Where to download the data to
+    :param kind: Choice of dataset to retrieve
+    """
+    if(kind == 'digits'):
+        base_url = "https://storage.googleapis.com/cvdf-datasets/mnist/"
+    elif(kind == 'fashion'):
+        base_url = "http://fashion-mnist.s3-website.eu-central-1.amazonaws.com/"
 
-def mnist(permute_train=False):
-  """Download, parse and process MNIST data to unit scale and one-hot labels."""
-  # CVDF mirror of http://yann.lecun.com/exdb/mnist/
-  base_url = "https://storage.googleapis.com/cvdf-datasets/mnist/"
-  train_images, train_labels, test_images, test_labels = mnist_raw(_MNIST_DATA, base_url)
+    # Download and get the raw dataset
+    train_images, train_labels, test_images, test_labels = download_mnist(data_folder, base_url)
 
-  train_images = _partial_flatten(train_images) / np.float32(255.)
-  test_images = _partial_flatten(test_images) / np.float32(255.)
-  train_labels = _one_hot(train_labels, 10)
-  test_labels = _one_hot(test_labels, 10)
+    # Put the dataset between 0 and 1
+    train_images = train_images.reshape((train_images.shape[0], -1))/255
+    test_images = test_images.reshape((test_images.shape[0], -1))/255
 
-  if permute_train:
-    perm = np.random.RandomState(0).permutation(train_images.shape[0])
-    train_images = train_images[perm]
-    train_labels = train_labels[perm]
+    # Add a dummy channel dimension
+    train_images = train_images[...,None]
+    test_images = test_images[...,None]
 
-  return train_images, train_labels, test_images, test_labels
+    # Turn the labels to one hot vectors
+    train_labels = train_labels == np.arange(10)[:,None]
+    test_labels = test_labels == np.arange(10)[:,None]
 
+    train_labels = train_labels.astype(np.int32).T
+    test_labels = test_labels.astype(np.int32).T
 
-def fashion_mnist(permute_train=False):
-  """Download, parse and process MNIST data to unit scale and one-hot labels."""
-  base_url = "http://fashion-mnist.s3-website.eu-central-1.amazonaws.com/"
-  train_images, train_labels, test_images, test_labels = mnist_raw(_FASHION_MNIST_DATA, base_url)
+    return train_images, train_labels, test_images, test_labels
 
-  train_images = _partial_flatten(train_images) / np.float32(255.)
-  test_images = _partial_flatten(test_images) / np.float32(255.)
-  train_labels = _one_hot(train_labels, 10)
-  test_labels = _one_hot(test_labels, 10)
+############################################################################################################################################################
 
-  if permute_train:
-    perm = np.random.RandomState(0).permutation(train_images.shape[0])
-    train_images = train_images[perm]
-    train_labels = train_labels[perm]
+def download_cifar10(data_folder, base_url):
+    # language=rst
+    """
+    Get the raw cifar data
 
-  return train_images, train_labels, test_images, test_labels
+    :param data_folder: Where to download the data to
+    :param base_url: Where to download the files from
+    """
+    # Download the cifar data
+    filename = 'cifar-10-python.tar.gz'
+    download_filename = download_url(data_folder, filename, base_url)
 
+    # Extract the batches
+    with tarfile.open(download_filename) as tar_file:
+        tar_file.extractall(data_folder)
 
+    # Remove the tar file
+    os.remove(download_filename)
 
-def load_pickle(f):
+def load_cifar_batch(filename):
+    # language=rst
+    """
+    Load a single batch of the cifar dataset
+
+    :param filename: Where the batch is located
+    """
     version = platform.python_version_tuple()
-    if version[0] == '2':
-        return  pickle.load(f)
-    elif version[0] == '3':
-        return  pickle.load(f, encoding='latin1')
-    raise ValueError("invalid python version: {}".format(version))
+    py_version = version[0]
+    assert py_version == '2' or py_version == '3', 'Invalid python version'
+    with open(filename, 'rb') as f:
+        # Load the data into a dictionary
+        datadict = pickle.load(f) if py_version == '2' else pickle.load(f, encoding='latin1')
+        images, labels = datadict['data'], datadict['labels']
 
-def load_CIFAR_batch(filename):
-  """ load single batch of cifar """
-  with open(filename, 'rb') as f:
-    datadict = load_pickle(f)
-    X = datadict['data']
-    Y = datadict['labels']
-    X = X.reshape(10000, 3, 32, 32).transpose(0,2,3,1).astype("float")
-    Y = np.array(Y)
-    return X, Y
+        # Reshape the images so that the channel dim is at the end
+        images = images.reshape((-1, 3, 32, 32)).transpose(0, 2, 3, 1).astype(np.float32)/255
 
-def load_CIFAR10(ROOT):
-  """ load all of cifar """
-  xs = []
-  ys = []
-  for b in range(1,6):
-    f = os.path.join(ROOT, 'data_batch_%d' % (b,))
-    X, Y = load_CIFAR_batch(f)
-    xs.append(X)
-    ys.append(Y)
-  Xtr = np.concatenate(xs)
-  Ytr = np.concatenate(ys)
-  del X, Y
-  Xte, Yte = load_CIFAR_batch(os.path.join(ROOT, 'test_batch'))
-  return Xtr, Ytr, Xte, Yte
+        # Turn the labels into onehot vectors
+        labels = np.array(labels)
+        return images, labels
 
-
-def get_CIFAR10_data(num_training=49000, num_validation=1000, num_test=1000,
-                     subtract_mean=True):
+def load_cifar10(batches_data_folder):
+    # language=rst
     """
-    Load the CIFAR-10 dataset from disk and perform preprocessing to prepare
-    it for classifiers. These are the same steps as we used for the SVM, but
-    condensed to a single function.
+    Load a single batch of the cifar dataset
+
+    :param filename: Where the batch is located
     """
-    # Load the raw CIFAR-10 data
-    cifar10_dir = 'cifar-10-batches-py'
-    X_train, y_train, X_test, y_test = load_CIFAR10(cifar10_dir)
+    # Load the cifar training data batches
+    xs, ys = [], []
+    for batch_idx in range(1,6):
+        filename = os.path.join(batches_data_folder, 'data_batch_%d'%batch_idx)
+        images, labels = load_cifar_batch(filename)
+        xs.append(images)
+        ys.append(labels)
+    train_images = np.concatenate(xs)
+    train_labels = np.concatenate(ys) == np.arange(10)[:,None]
 
-    # Subsample the data
-    mask = list(range(num_training, num_training + num_validation))
-    X_val = X_train[mask]
-    y_val = y_train[mask]
-    mask = list(range(num_training))
-    X_train = X_train[mask]
-    y_train = y_train[mask]
-    mask = list(range(num_test))
-    X_test = X_test[mask]
-    y_test = y_test[mask]
+    # Load the test data
+    test_images, test_labels = load_cifar_batch(os.path.join(batches_data_folder, 'test_batch'))
+    test_labels = test_labels == np.arange(10)[:,None]
 
-    # Normalize the data: subtract the mean image
-    if subtract_mean:
-      mean_image = np.mean(X_train, axis=0)
-      X_train -= mean_image
-      X_val -= mean_image
-      X_test -= mean_image
+    train_labels = train_labels.astype(np.int32).T
+    test_labels = test_labels.astype(np.int32).T
+    return train_images, train_labels, test_images, test_labels
 
-    # Transpose so that channels come first
-    X_train = X_train.transpose(0, 3, 1, 2).copy()
-    X_val = X_val.transpose(0, 3, 1, 2).copy()
-    X_test = X_test.transpose(0, 3, 1, 2).copy()
+def get_cifar10_data(data_folder='/tmp/cifar10/'):
+    # language=rst
+    """
+    Load the cifar 10 dataset.
 
-    # Package data into a dictionary
-    return {
-      'X_train': X_train, 'y_train': y_train,
-      'X_val': X_val, 'y_val': y_val,
-      'X_test': X_test, 'y_test': y_test,
-    }
+    :param data_folder: Where to download the data to
+    """
+    cifar10_dir = os.path.join(data_folder, 'cifar-10-batches-py')
+
+    if(os.path.exists(cifar10_dir) == False):
+        # Download the cifar dataset
+        cifar_url = 'http://www.cs.toronto.edu/~kriz/cifar-10-python.tar.gz'
+        download_cifar10(data_folder, cifar_url)
+
+    # Load the raw cifar-10 data
+    train_images, train_labels, test_images, test_labels = load_cifar10(cifar10_dir)
+
+    return train_images, train_labels, test_images, test_labels
+
+############################################################################################################################################################
 
 def get_celeb_dataset(n_images=50000):
+    assert 0, 'Downloader not implemented yet'
     import matplotlib.pyplot as plt
     from tqdm import tqdm_notebook
 
+    def file_iter():
+        for root, dirs, files in os.walk('img_align_celeba/'):
+            for file in files:
+                if(file.endswith('.jpg')):
+                    path = os.path.join(root, file)
+                    yield path
+
     all_files = []
-    for root, dirs, files in os.walk('img_align_celeba/'):
-        for file in files:
-            if(file.endswith('.jpg')):
-                path = os.path.join(root, file)
-                all_files.append(path)
+    for path in file_iter():
+        all_files.append(path)
+        if(len(all_files) == n_images):
+            break
 
     images = []
-    for path in tqdm_notebook(all_files[:n_images]):
+    for path in tqdm_notebook(all_files):
         im = plt.imread(path, format='jpg')
         im = np.pad(im, ((0, 2), (0, 2), (0, 0)))
         images.append(im)
