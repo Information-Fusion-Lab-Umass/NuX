@@ -55,19 +55,19 @@ def sequential(*layers):
 
     def apply_fun(params, state, inputs, **kwargs):
 
-        # Need to store the ouputs of the functions and the updated static params
+        # Need to store the ouputs of the functions and the updated states
         updated_states = []
 
         # Need to pop so that we don't resuse random keys!
         key = kwargs.pop('key', None)
         keys = random.split(key, n_layers) if key is not None else (None,)*n_layers
 
-        # Evaluate each function and store the updated static parameters
+        # Evaluate each function and store the updated states
         for fun, param, s, key in zip(apply_funs, params, state, keys):
             inputs, updated_state = fun(param, s, inputs, key=key, **kwargs)
             updated_states.append(updated_state)
 
-        return inputs, updated_states
+        return inputs, tuple(updated_states)
 
     return init_fun, apply_fun
 
@@ -109,14 +109,14 @@ def parallel(*layers):
             output_shapes.append(output_shape)
             params.append(param)
             states.append(state)
-        return names, output_shapes, params, states
+        return tuple(names), output_shapes, tuple(params), tuple(states)
 
     def apply_fun(params, state, inputs, **kwargs):
         # Need to pop so that we don't resuse random keys!
         key = kwargs.pop('key', None)
         keys = random.split(key, n_layers) if key is not None else (None,)*n_layers
 
-        # We need to store each of the outputs and static params
+        # We need to store each of the outputs and states
         outputs = []
         updated_states = []
         zipped_iterables = zip(apply_funs, params, state, inputs, keys)
@@ -125,7 +125,7 @@ def parallel(*layers):
             outputs.append(output)
             updated_states.append(updated_state)
 
-        return outputs, updated_states
+        return outputs, tuple(updated_states)
 
     return init_fun, apply_fun
 
@@ -170,6 +170,30 @@ FanInConcat = stax_wrapper(stax.FanInConcat)
 
 ################################################################################################################
 
+def Split(num, axis=-1, name='unnamed'):
+    # language=rst
+    """
+    Split an input along an axis
+
+    :param num - Number of pieces to split into
+    :param axis - Axis to split on
+    """
+    def init_fun(key, input_shape):
+        ax = axis % len(input_shape)
+        assert input_shape[-1]%num == 0
+        split_dim = input_shape[ax]//num
+        split_input_shape = input_shape[:ax] + (split_dim,) + input_shape[ax + 1:]
+        output_shape = (split_input_shape,)*num
+        params, states = (), ()
+        return name, output_shape, params, states
+
+    def apply_fun(params, state, inputs, **kwargs):
+        return np.split(inputs, num, axis=axis), state
+
+    return init_fun, apply_fun
+
+################################################################################################################
+
 def stax_conv_wrapper(fun):
     """ Convenience wrapper around existing stax functions that work on images """
     def ret(*args, name='unnamed', **kwargs):
@@ -206,6 +230,151 @@ ConvTranspose = stax_conv_wrapper(stax.ConvTranspose)
 MaxPool = stax_conv_wrapper(stax.MaxPool)
 SumPool = stax_conv_wrapper(stax.SumPool)
 AvgPool = stax_conv_wrapper(stax.AvgPool)
+
+def WeightNormConv(out_channel, filter_shape, strides=None, padding='VALID', W_init=normal(1e-6), b_init=normal(1e-6), name='unnamed'):
+    # language=rst
+    """
+    Convolution with weight norm applied
+
+    :param out_channel - Number of output channels
+    :param filter_shape - Size of filter
+    :param strides - Strides for each axis
+    :param padding - Padding for each axis
+    """
+    _init_fun, _apply_fun = None, None
+    def init_fun(key, input_shape):
+        nonlocal _init_fun, _apply_fun
+        _init_fun, _apply_fun = Conv(out_channel, filter_shape, strides=strides, padding=padding, W_init=W_init, b_init=b_init)
+        _, output_shape, params, state = _init_fun(key, input_shape)
+        v, b = params
+
+        # Weight norm is defined over each scalar element of the output
+        g = 1.0
+        params = (g, v, b)
+        state = ()
+        return name, output_shape, params, state
+
+    def apply_fun(params, state, inputs, **kwargs):
+        g, v, b = params
+
+        weightnorm_seed = kwargs.get('weightnorm_seed', False)
+        if(weightnorm_seed == True):
+            # Data dependent initialization
+            t, _ = _apply_fun((v, b), state, inputs, **kwargs)
+            mean = np.mean(t, axis=0)
+            std = np.std(t, axis=0)
+            g = 1/std
+            b = -mean/std
+            state = (g, v, b)
+            assert 0
+
+        # Apply weight normalization
+        W = g*v/np.linalg.norm(v)
+        normalized_params = (W, b)
+
+        # Convolve using the weight norm kernel.  JAX conv has a dummy state, so can ignore
+        ans, _ = _apply_fun(normalized_params, state, inputs, **kwargs)
+
+        return ans, state
+
+    return init_fun, apply_fun
+
+# def WeightNormConv(out_channel, filter_shape, strides=None, padding='VALID', W_init=normal(1e-6), b_init=normal(1e-6), name='unnamed'):
+#     # language=rst
+#     """
+#     Convolution with weight norm applied
+
+#     :param out_channel - Number of output channels
+#     :param filter_shape - Size of filter
+#     :param strides - Strides for each axis
+#     :param padding - Padding for each axis
+#     """
+#     _init_fun, _apply_fun = None, None
+#     def init_fun(key, input_shape):
+#         nonlocal _init_fun, _apply_fun
+#         _init_fun, _apply_fun = Conv(out_channel, filter_shape, strides=strides, padding=padding, W_init=W_init, b_init=b_init)
+#         _, output_shape, params, state = _init_fun(key, input_shape)
+#         v, b = params
+
+#         # Weight norm is defined over each scalar element of the output
+#         g = np.ones_like(b)
+#         params = (g, v, b)
+#         state = ()
+#         return name, output_shape, params, state
+
+#     def apply_fun(params, state, inputs, **kwargs):
+#         g, v, b = params
+
+#         weightnorm_seed = kwargs.get('weightnorm_seed', False)
+#         if(weightnorm_seed == True):
+#             # Data dependent initialization
+#             t, _ = _apply_fun((v, b), state, inputs, **kwargs)
+#             mean = np.mean(t, axis=0)
+#             std = np.std(t, axis=0)
+#             g = 1/std
+#             b = -mean/std
+#             state = (g, v, b)
+
+#         # Apply weight normalization
+#         W = g*v/np.linalg.norm(v)
+#         normalized_params = (W, b)
+
+#         # Convolve using the weight norm kernel.  JAX conv has a dummy state, so can ignore
+#         ans, _ = _apply_fun(normalized_params, state, inputs, **kwargs)
+
+#         return ans, state
+
+#     return init_fun, apply_fun
+
+def data_dependent_init(x, target_param_names, name_tree, params, state, apply_fun, flag_names, **kwargs):
+    # language=rst
+    """
+    Data dependent initialization.
+
+    :param x: The data seed
+    :param target_param_names: A list of the names of parameters to seed
+    :param name_tree: A pytree (nested structure) of names.  This is the first output of an init_fun call
+    :param params: The parameter pytree
+    :param states: The states pytree
+    :param apply_fun: Apply function
+    :param flag_names: The names of the flag that will turn on seeding.
+
+    **Example**
+
+    .. code-block:: python
+        from jax import random
+        import jax.numpy as np
+        from staxplusplus import WeightNormConv, data_dependent_init
+        from util import TRAIN, TEST
+
+        # Create the model
+        model = WeightNormConv(4, (3, 3), padding='SAME', name='wn')
+
+        # Initialize it
+        init_fun, apply_fun = model
+        key = random.PRNGKey(0)
+        names, output_shape, params, state = init_fun(key, input_shape=(5, 5, 3))
+
+        # Seed weight norm and retrieve the new parameters
+        data_seed = np.ones((10, 5, 5, 3))
+        weightnorm_names = ['wn']
+        params = data_dependent_init(data_seed, weightnorm_names, names, params, state, apply_fun, 'weightnorm_seed')
+    """
+    if(isinstance(flag_names, list) == False or isinstance(flag_names, tuple) == False):
+        flag_names = (flag_names,)
+
+    # Pass the seed name to the apply function
+    for name in flag_names:
+        kwargs[name] = True
+
+    # Run the network.  The state should include the seeded parameters
+    _, states_with_seed = apply_fun(params, state, x, **kwargs)
+
+    # Replace the parameters with the seeded parameters
+    for name in target_param_names:
+        seeded_param = get_param(name, name_tree, states_with_seed)
+        params = modify_param(name, name_tree, params, seeded_param)
+    return params
 
 ################################################################################################################
 
@@ -364,7 +533,7 @@ def Residual(network, name='unnamed'):
     def init_fun(key, input_shape):
         name, output_shape, params, state = _init_fun(key, input_shape)
         # We're adding the input and output, so need to preserve shape
-        assert output_shape == input_shape
+        assert output_shape == input_shape, 'Output shape is %s and input shape is %s'%(str(output_shape), str(input_shape))
         return name, input_shape, params, state
 
     def apply_fun(params, state, inputs, **kwargs):

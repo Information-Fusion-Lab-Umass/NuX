@@ -190,10 +190,10 @@ def factored_flow(*layers):
         # We need to store each of the outputs and state
         densities, outputs, states = [], [], []
         for apply_fun, param, s, lpz, inp in zip(inverse_funs, params, state, log_pz, z):
-            lpz, output, updated_static_param = apply_fun(param, s, lpz, inp, condition, key=next(key_iter), **kwargs)
+            lpz, output, updated_state = apply_fun(param, s, lpz, inp, condition, key=next(key_iter), **kwargs)
             densities.append(lpz)
             outputs.append(output)
-            states.append(updated_static_param)
+            states.append(updated_state)
 
             # Conditioners are inputs during the inverse pass
             condition = condition + (inp,)
@@ -224,6 +224,91 @@ def UnitGaussianPrior(axis=(-1,), name='unnamed'):
         dim = np.prod([z.shape[ax] for ax in axis])
         log_pz += -0.5*np.sum(z**2, axis=axis) + -0.5*dim*np.log(2*np.pi)
         return log_pz, z, state
+
+    return init_fun, forward, inverse
+
+def Dequantization(scale=256.0, name='unnamed'):
+    # language=rst
+    """
+    Dequantization for images.
+
+    :param scale: What to divide the image by
+    """
+    def init_fun(key, input_shape, condition_shape):
+        params, state = (), ()
+        return name, input_shape, params, state
+
+    def forward(params, state, log_px, x, condition, **kwargs):
+        # Add uniform noise
+        key = kwargs.pop('key', None)
+        if(key is None):
+            assert 0, 'Need a random key for dequantization'
+
+        noise = random.uniform(key, x.shape)
+
+        log_det = -np.log(scale)
+        if(x.ndim > 2):
+            if(x.ndim == 4):
+                log_det *= np.prod(x.shape[1:])
+            else:
+                log_det *= np.prod(x.shape)
+
+        return log_px + log_det, (x + noise)/scale, state
+
+    def inverse(params, state, log_pz, z, condition, **kwargs):
+        # Put the image back on the set of integers between 0 and 255
+        z = z*scale
+        # z = np.floor(z*scale).astype(np.int32)
+
+        log_det = -np.log(scale)
+        if(z.ndim > 2):
+            if(z.ndim == 4):
+                log_det *= np.prod(z.shape[1:])
+            else:
+                log_det *= np.prod(z.shape)
+
+        return log_pz + log_det, z, state
+
+    return init_fun, forward, inverse
+
+def Convolve(flow, conv_sampler, var=0.3, name='unnamed'):
+    # language=rst
+    """
+    Convolve a normalizing flow with noise
+
+    :param flow: The normalizing flow
+    :param conv_sampler: Function to sample from the convolving distribution
+    """
+    _init_fun, _forward, _inverse = flow
+
+    def init_fun(key, input_shape, condition_shape):
+        return _init_fun(key, input_shape, condition_shape)
+
+    def forward(params, state, log_px, x, condition, **kwargs):
+        # Sample epsilon, subtract it from x and then pass that through the rest of the flow
+
+        key = kwargs.pop('key', None)
+        if(key is None):
+            assert 0, 'Need a key for this'
+        k1, k2 = random.split(key, 2)
+
+        epsilon = conv_sampler(k1, x.shape)
+        return _forward(params, state, log_px, x - epsilon, condition, key=k2, **kwargs)
+
+    def inverse(params, state, log_pz, z, condition, **kwargs):
+        # Want to sample p(x|f(z))
+
+        key = kwargs.pop('key', None)
+        if(key is None):
+            assert 0, 'Need a key for this'
+        k1, k2 = random.split(key, 2)
+
+        # The forward pass does not need a determinant
+        _, fz, updated_state = _inverse(params, state, log_pz, z, condition, key=k1, **kwargs)
+
+        # Sample from p(x|f(z))
+        epsilon = conv_sampler(k1, fz.shape)
+        return log_pz, fz + epsilon, updated_state
 
     return init_fun, forward, inverse
 
@@ -725,63 +810,58 @@ def CheckerboardUnSqueeze(num=2, name='unnamed'):
 
 ################################################################################################################
 
-def actnorm_init(x, actnorm_names, names, params, state, forward):
+def flow_data_dependent_init(x, target_param_names, name_tree, params, state, forward, condition, flag_names, **kwargs):
     # language=rst
     """
-    Initialize a network that has actnorm layers. https://arxiv.org/pdf/1807.03039.pdf section 3.1
+    Data dependent initialization for a normalizing flow.
 
     :param x: The data seed
-    :param actnorm_names: A list of the actnorm parameters to update
-    :param names: A pytree (nested structure) of names
+    :param target_param_names: A list of the names of parameters to seed
+    :param name_tree: A pytree (nested structure) of names.  This is the first output of an init_fun call
     :param params: The parameter pytree
-    :param staic_params: The static parameter pytree
+    :param state: The state pytree
     :param forward: Forward function
+    :param flag_names: The names of the flag that will turn on seeding.
 
     **Example**
 
     .. code-block:: python
-
         from jax import random
-        from normalizing_flows import sequential_flow, MAF, ActNorm, UnitGaussianPrior
+        import jax.numpy as np
+        from normalizing_flows import ActNorm, flow_data_dependent_init
         from util import TRAIN, TEST
-        key = random.PRNGKey(0)
 
-        # Create the flow
-        input_shape = (6,)
-        condition_shape = ()
-        flow = sequential_flow(MAF([1024]), Reverse(), ActNorm( name='an' ), MAF([1024]), UnitGaussianPrior())
+        # Create the model
+        flow = ActNorm(name='an')
 
         # Initialize it
         init_fun, forward, inverse = flow
-        names, output_shape, params, state = init_fun(key, input_shape)
+        key = random.PRNGKey(0)
+        names, output_shape, params, state = init_fun(key, input_shape=(5, 5, 3), condition_shape=())
 
-        # Seed act norm and retrieve the new parameters
-        data_seed = np.ones((3, 5))
+        # Seed weight norm and retrieve the new parameters
+        data_seed = np.ones((10, 5, 5, 3))
         actnorm_names = ['an']
-        params = actnorm_init(data_seed, actnorm_names, names, params, state, forward)
-
-        # Run the network as usual
-        inputs = np.ones((10, 5))
-        log_px = np.zeros(inputs.shape[0]) # Need to pass in a correctly shaped initial density
-        condition = ()
-        log_px, z, updated_state = forward(params, state, log_px, inputs, condition, test=TEST)
+        params = flow_data_dependent_init(data_seed, actnorm_names, names, params, state, forward, (), 'actnorm_seed')
     """
-    _, _, states_with_actnorm_seed = forward(params, state, np.zeros(x.shape[0]), x, (), actnorm_seed=True)
-    for an_name in actnorm_names:
-        seeded_parm = get_param(an_name, names, states_with_actnorm_seed)
-        params = modify_param(an_name, names, params, seeded_parm)
-    return params
+    def filled_forward_function(params, state, x, **kwargs):
+        _, ans, updated_states = forward(params, state, np.zeros(x.shape[0]), x, condition, **kwargs)
+        return ans, updated_states
+
+    return data_dependent_init(x, target_param_names, name_tree, params, state, filled_forward_function, flag_names, **kwargs)
 
 def ActNorm(log_s_init=zeros, b_init=zeros, name='unnamed'):
-    """ Act norm normalization.  Act norm requires a data seed in order to properly initialize
-        its parameters.  This will be done at runtime.
+    # language=rst
+    """
+    Act norm normalization.  Act norm requires a data seed in order to properly initialize
+    its parameters.  This will be done at runtime.
 
-        Args:
+    :param axis: Batch axis
     """
 
     def init_fun(key, input_shape, condition_shape):
         k1, k2 = random.split(key)
-        log_s = b_init(k1, (input_shape[-1],))
+        log_s = log_s_init(k1, (input_shape[-1],))
         b = b_init(k2, (input_shape[-1],))
 
         params = (log_s, b)
@@ -795,22 +875,24 @@ def ActNorm(log_s_init=zeros, b_init=zeros, name='unnamed'):
         actnorm_seed = kwargs.get('actnorm_seed', False)
         if(actnorm_seed == True):
             # The initial parameters should normalize the input
-            mean = np.mean(x, axis=0)
-            std = np.std(x, axis=0) + 1e-5
-            log_s = -np.log(std)
-            b = -mean/std
+            # We want it to be normalized over the channel dimension!
+            axes = tuple(np.arange(len(x.shape) - 1))
+            mean = np.mean(x, axis=axes)
+            std = np.std(x, axis=axes) + 1e-5
+            log_s = np.log(std)
+            b = mean
             updated_state = (log_s, b)
         else:
             updated_state = ()
 
-        z = np.exp(log_s)*x + b
+        z = (x - b)*np.exp(-log_s)
         log_det = log_s.sum()
 
         return log_px + log_det, z, updated_state
 
     def inverse(params, state, log_pz, z, condition, **kwargs):
         log_s, b = params
-        x = (z - b)*np.exp(-log_s)
+        x = np.exp(log_s)*z + b
 
         log_det = log_s.sum()
         return log_pz + log_det, x, state
@@ -1018,7 +1100,7 @@ def pinv(A):
 
 ################################################################################################################
 
-def OnebyOneConv(name=None):
+def OnebyOneConv(name='unnamed'):
     # language=rst
     """
     Invertible 1x1 convolution.  Implemented as matrix multiplication over the channel dimension
@@ -1097,11 +1179,13 @@ def LeakyReLU(alpha=0.01, name='unnamed'):
 
 ################################################################################################################
 
-def Sigmoid(name=None):
+def Sigmoid(safe=True, name='unnamed'):
     # language=rst
     """
     Invertible sigmoid.  The logit function is its inverse.  Remember to apply sigmoid before logit so that
-        the input ranges are as expected!
+    the input ranges are as expected!
+
+    :param safe: Whether or not to tighten the values
     """
     def init_fun(key, input_shape, condition_shape):
         params, state = (), ()
@@ -1109,46 +1193,82 @@ def Sigmoid(name=None):
 
     def forward(params, state, log_px, x, condition, **kwargs):
         z = jax.nn.sigmoid(x)
-        log_det = -(jax.nn.softplus(x) + jax.nn.softplus(-x)).sum(axis=-1)
+        log_det = -(jax.nn.softplus(x) + jax.nn.softplus(-x))
+
+        if(safe == True):
+            z -= 0.05
+            z /= 0.9
+            log_det -= np.log(0.9)
+
+        log_det = log_det.sum(axis=-1)
+
         if(log_det.ndim > 1):
-            # Then we have an image and have to sum more
+            # Then we have an image and have to sum over the height and width axes
             log_det = log_det.sum(axis=(-2, -1))
+
         return log_px + log_det, z, state
 
     def inverse(params, state, log_pz, z, condition, **kwargs):
-        z = np.maximum(1e-6, z)
-        z = np.minimum(1-1e-6, z)
+        if(safe == True):
+            z *= 0.9
+            z += 0.05
+
         x = jax.scipy.special.logit(z)
         log_det = -(jax.nn.softplus(x) + jax.nn.softplus(-x)).sum(axis=-1)
+
+        if(safe == True):
+            log_det -= np.log(0.9)
+
+        log_det = log_det.sum(axis=-1)
+
         if(log_det.ndim > 1):
-            # Then we have an image and have to sum more
+            # Then we have an image and have to sum over the height and width axes
             log_det = log_det.sum(axis=(-2, -1))
+
         return log_pz + log_det, x, state
 
     return init_fun, forward, inverse
 
-def Logit(name=None):
+def Logit(safe=True, name='unnamed'):
     # language=rst
     """
     Inverse of Sigmoid
+
+    :param safe: Whether or not to tighten the values
     """
     def init_fun(key, input_shape, condition_shape):
         params, state = (), ()
         return name, input_shape, params, state
 
     def forward(params, state, log_px, x, condition, **kwargs):
-        x = np.maximum(1e-6, x)
-        x = np.minimum(1-1e-6, x)
+
+        if(safe == True):
+            x *= 0.9
+            x += 0.05
+
         z = jax.scipy.special.logit(x)
-        log_det = (jax.nn.softplus(z) + jax.nn.softplus(-z)).sum(axis=-1)
+        log_det = (jax.nn.softplus(z) + jax.nn.softplus(-z))
+
+        if(safe == True):
+            log_det += np.log(0.9)
+
+        log_det = log_det.sum(axis=-1)
         if(log_det.ndim > 1):
             # Then we have an image and have to sum more
             log_det = log_det.sum(axis=(-2, -1))
         return log_px + log_det, z, state
 
     def inverse(params, state, log_pz, z, condition, **kwargs):
+
         x = jax.nn.sigmoid(z)
-        log_det = (jax.nn.softplus(z) + jax.nn.softplus(-z)).sum(axis=-1)
+        log_det = (jax.nn.softplus(z) + jax.nn.softplus(-z))
+
+        if(safe == True):
+            x -= 0.05
+            x /= 0.9
+            log_det += np.log(0.9)
+
+        log_det = log_det.sum(axis=-1)
         if(log_det.ndim > 1):
             # Then we have an image and have to sum more
             log_det = log_det.sum(axis=(-2, -1))
@@ -1158,11 +1278,52 @@ def Logit(name=None):
 
 ################################################################################################################
 
+def GaussianMixtureCDF(n_components=4, weight_logits_init=normal(), mean_init=normal(), variance_init=ones, name='unnamed'):
+    # language=rst
+    """
+    Inverse transform sampling of a Gaussian Mixture Model.  CDF(x|pi,mus,sigmas) = sum[pi_i*erf(x|mu, sigma)]
+
+    :param n_components: The number of components to use in the GMM
+    """
+    def init_fun(key, input_shape, condition_shape):
+        k1, k2, k3 = random.split(key, 3)
+        weight_logits = weight_logits_init(k1, (n_components,))
+        means = mean_init(k2, (n_components,))
+        variances = variance_init(k3, (n_components,))
+        params = (weight_logits, means, variances)
+        state = ()
+        return name, input_shape, params, state
+
+    def forward(params, state, log_px, x, condition, **kwargs):
+        weights, means, variances = params
+
+        # z is the CDF of x
+        dxs = x[...,None] - means[...,:]
+        cdfs = 0.5*(1 + jax.scipy.special.erf(dxs/np.sqrt(2*variances[...,:])))
+        z = np.sum(np.exp(weights)*cdfs, axis=-1)
+
+        # log_det is log_pdf(x)
+        log_pdfs = -0.5*(dxs**2)/variances[...,:] - 0.5*np.log(variances[...,:]) - 0.5*np.log(2*np.pi)
+        log_det = logsumexp(weight_logits + log_pdfs, axis=-1)
+
+        # We computed the element-wise log_dets, so sum over the dimension axis
+        log_det = log_det.sum(axis=-1)
+
+        return log_px + log_det, z, state
+
+    def inverse(params, state, log_px, x, condition, **kwargs):
+        # TODO: Implement iterative method to do this
+        assert 0, 'Not implemented'
+
+    return init_fun, forward, inverse
+
+################################################################################################################
+
 def MAF(hidden_layer_sizes,
         reverse=False,
         method='sequential',
         key=None,
-        name=None,
+        name='unnamed',
         **kwargs):
     # language=rst
     """
@@ -1216,10 +1377,95 @@ def MAF(hidden_layer_sizes,
 
 ################################################################################################################
 
+def MaskedAffineCoupling(transform_fun, axis=-1, mask_type='channel_wise', top_left_zero=False, name='unnamed'):
+    # language=rst
+    """
+    Apply an arbitrary transform to half of the input vector.  Uses masking instead of explicitly splitting inputs
+
+    :param transform: A transformation that will act on half of the input vector. Must return 2 vectors!!!
+    :param axis: Axis to split on
+    :param mask_type: What kind of masking to use.  For images, can use checkerboard
+    :param top_left_zero: Whether or not top left pixel should be 0.  Basically like the Reverse layer
+    """
+    apply_fun = None
+    reduce_axes = None
+    mask = None
+
+    def init_fun(key, input_shape, condition_shape):
+        ax = axis % len(input_shape)
+
+        # We need to keep track of the input shape in order to know how to reduce the log det
+        nonlocal reduce_axes
+        reduce_axes = tuple(range(-1, -(len(input_shape) + 1), -1))
+
+        # Generate the mask we'll use for training
+        nonlocal mask
+        if(mask_type == 'channel_wise'):
+            mask_index = [slice(0,s//2) if i == ax else slice(None) for i, s in enumerate(input_shape)]
+            mask_index = tuple(mask_index)
+            mask = onp.ones(input_shape)
+            mask[mask_index] = 0.0
+        elif(mask_type == 'checkerboard'):
+            assert len(input_shape) == 3
+            height, width, channel = input_shape
+
+            # Mask should be the same shape as the input
+            mask = onp.ones(input_shape)
+
+            # Build the checkerboard mask and fill in the mask
+            masks, _, _ = checkerboard_masks(2, (height, width))
+            if(top_left_zero == False):
+                mask[:,:] = masks[0][:,:,None]
+            else:
+                mask[:,:] = masks[1][:,:,None]
+        else:
+            assert 0, 'Invalid mask type'
+
+        # Ugly, but saves us from initializing when calling function
+        nonlocal apply_fun
+        transform_input_shape = input_shape if len(condition_shape) == 0 else (input_shape,) + condition_shape
+        _init_fun, apply_fun = transform_fun(out_shape=input_shape)
+        name, (log_s_shape, t_shape), params, state = _init_fun(key, transform_input_shape)
+
+        return name, input_shape, params, state
+
+    def forward(params, state, log_px, x, condition, **kwargs):
+        # Apply the nonlinearity to the masked input
+        masked_input = (1.0 - mask)*x
+        network_input = masked_input if len(condition) == 0 else (masked_input, *condition)
+        (log_s, t), updated_state = apply_fun(params, state, network_input, **kwargs)
+
+        # Remask the result and compute the output
+        log_s, t = mask*log_s, mask*t
+        z = x*np.exp(log_s) + t
+
+        log_det = np.sum(log_s, axis=reduce_axes)
+
+        return log_px + log_det, z, updated_state
+
+    def inverse(params, state, log_pz, z, condition, **kwargs):
+        # Apply the nonlinearity to the masked input
+        masked_input = (1.0 - mask)*z
+        network_input = masked_input if len(condition) == 0 else (masked_input, *condition)
+        (log_s, t), updated_state = apply_fun(params, state, network_input, **kwargs)
+
+        # Remask the result and compute the output
+        log_s, t = mask*log_s, mask*t
+        x = (z - t)*np.exp(-log_s)
+
+        log_det = np.sum(log_s, axis=reduce_axes)
+
+        return log_pz + log_det, x, updated_state
+
+    return init_fun, forward, inverse
+
+################################################################################################################
+
 def AffineCoupling(transform_fun, axis=-1, name='unnamed'):
     # language=rst
     """
-    Apply an arbitrary transform to half of the input vector.
+    Apply an arbitrary transform to half of the input vector.  Probably slower than masked version, but is
+    more memory efficient.
 
     :param transform: A transformation that will act on half of the input vector. Must return 2 vectors!!!
     :param axis: Axis to split on
@@ -1238,17 +1484,19 @@ def AffineCoupling(transform_fun, axis=-1, name='unnamed'):
 
         # Find the split shape
         split_input_shape = input_shape[:ax] + (half_split_dim,) + input_shape[ax + 1:]
+        transform_input_shape = split_input_shape if len(condition_shape) == 0 else (split_input_shape,) + condition_shape
 
         # Ugly, but saves us from initializing when calling function
         nonlocal apply_fun
         _init_fun, apply_fun = transform_fun(out_shape=split_input_shape)
-        _, (log_s_shape, t_shape), params, state = _init_fun(key, split_input_shape)
+        name, (log_s_shape, t_shape), params, state = _init_fun(key, transform_input_shape)
 
         return name, input_shape, params, state
 
     def forward(params, state, log_px, x, condition, **kwargs):
 
         xa, xb = np.split(x, 2, axis=axis)
+        network_input = xb if len(condition) == 0 else (xb, *condition)
         (log_s, t), updated_state = apply_fun(params, state, xb, **kwargs)
 
         za = xa*np.exp(log_s) + t
@@ -1261,64 +1509,8 @@ def AffineCoupling(transform_fun, axis=-1, name='unnamed'):
     def inverse(params, state, log_pz, z, condition, **kwargs):
 
         za, zb = np.split(z, 2, axis=axis)
+        network_input = zb if len(condition) == 0 else (zb, *condition)
         (log_s, t), updated_state = apply_fun(params, state, zb, **kwargs)
-
-        xa = (za - t)*np.exp(-log_s)
-        x = np.concatenate([xa, zb], axis=axis)
-
-        log_det = np.sum(log_s, axis=reduce_axes)
-
-        return log_pz + log_det, x, updated_state
-
-    return init_fun, forward, inverse
-
-def ConditionedAffineCoupling(transform_fun, axis=-1, name='unnamed'):
-    # language=rst
-    """
-    Apply an arbitrary transform to half of the input vector with conditioning
-
-    :param transform: A transformation that will act on half of the input vector. Must return 2 vectors!!!
-    :param axis: Axis to split on
-    """
-    apply_fun = None
-    reduce_axes = None
-
-    def init_fun(key, input_shape, condition_shape):
-        ax = axis % len(input_shape)
-        assert input_shape[-1]%2 == 0
-        half_split_dim = input_shape[ax]//2
-
-        # We need to keep track of the input shape in order to know how to reduce the log det
-        nonlocal reduce_axes
-        reduce_axes = tuple(range(-1, -(len(input_shape) + 1), -1))
-
-        # Find the split shape
-        split_input_shape = input_shape[:ax] + (half_split_dim,) + input_shape[ax + 1:]
-        transform_input_shape = (split_input_shape,) + condition_shape
-
-        # Ugly, but saves us from initializing when calling function
-        nonlocal apply_fun
-        _init_fun, apply_fun = transform_fun(out_shape=split_input_shape)
-        _, (log_s_shape, t_shape), params, state = _init_fun(key, transform_input_shape)
-
-        return name, input_shape, params, state
-
-    def forward(params, state, log_px, x, condition, **kwargs):
-
-        xa, xb = np.split(x, 2, axis=axis)
-        (log_s, t), updated_state = apply_fun(params, state, (xb, *condition), **kwargs)
-
-        za = xa*np.exp(log_s) + t
-        z = np.concatenate([za, xb], axis=axis)
-
-        log_det = np.sum(log_s, axis=reduce_axes)
-
-        return log_px + log_det, z, updated_state
-
-    def inverse(params, state, log_pz, z, condition, **kwargs):
-
-        za, zb = np.split(z, 2, axis=axis)
-        (log_s, t), updated_state = apply_fun(params, state, (zb, *condition), **kwargs)
 
         xa = (za - t)*np.exp(-log_s)
         x = np.concatenate([xa, zb], axis=axis)
@@ -1331,27 +1523,17 @@ def ConditionedAffineCoupling(transform_fun, axis=-1, name='unnamed'):
 
 ################################################################################################################
 
-def GLOWBlock(transform_fun, name='unnamed'):
+def GLOWBlock(transform_fun, mask_type='channel_wise', name='unnamed'):
     # language=rst
     """
     One step of GLOW https://arxiv.org/pdf/1807.03039.pdf
 
     :param transform: A transformation that will act on half of the input vector. Must return 2 vectors!!!
+    :param mask_type: What kind of masking to use.  For images, can use checkerboard
     """
     return sequential_flow(ActNorm(name='%s_act_norm'%name),
                            OnebyOneConv(name='%s_one_by_one_conv'%name),
-                           AffineCoupling(transform_fun, name='%s_affine_coupling'%name))
-
-def ConditionedGLOW(transform_fun, name='unnamed'):
-    # language=rst
-    """
-    One step of GLOW https://arxiv.org/pdf/1807.03039.pdf with conditioning
-
-    :param transform: A transformation that will act on half of the input vector. Must return 2 vectors!!!
-    """
-    return sequential_flow(ActNorm(name='%s_act_norm'%name),
-                           OnebyOneConv(name='%s_one_by_one_conv'%name),
-                           ConditionedAffineCoupling(transform_fun, name='%s_affine_coupling'%name))
+                           MaskedAffineCoupling(transform_fun, mask_type=mask_type, name='%s_affine_coupling'%name))
 
 ################################################################################################################
 
@@ -1364,7 +1546,7 @@ inv_height_width_vmap = vmap(inv_height_vmap)
 
 slogdet_height_width_vmap = vmap(vmap(lambda x: np.linalg.slogdet(x)[1]))
 
-def CircularConv(filter_size, kernel_init=glorot_normal(), name=None):
+def CircularConv(filter_size, kernel_init=glorot_normal(), name='unnamed'):
     # language=rst
     """
     Invertible circular convolution
@@ -1463,8 +1645,8 @@ def flow_test(flow, x, key, **kwargs):
     names, output_shape, params, state = init_fun(key, input_shape, condition_shape)
 
     # Make sure that the forwards and inverse functions are consistent
-    log_px, z, updated_state = forward(params, state, np.zeros(x.shape[0]), x, cond, test=TEST, **kwargs)
-    log_pfz, fz, updated_state = inverse(params, state, np.zeros(z.shape[0]), z, cond, test=TEST, **kwargs)
+    log_px, z, updated_state = forward(params, state, np.zeros(x.shape[0]), x, cond, test=TEST, key=key, **kwargs)
+    log_pfz, fz, updated_state = inverse(params, state, np.zeros(z.shape[0]), z, cond, test=TEST, key=key, **kwargs)
 
     x_diff = np.linalg.norm(x - fz)
     log_px_diff = np.linalg.norm(log_px - log_pfz)
@@ -1476,7 +1658,7 @@ def flow_test(flow, x, key, **kwargs):
     # Make sure that the log det terms are correct
     def z_from_x(unflatten, x_flat, cond, **kwargs):
         x = unflatten(x_flat)
-        z = forward(params, state, 0, x, cond, test=TEST, **kwargs)[1]
+        z = forward(params, state, 0, x, cond, test=TEST, key=key, **kwargs)[1]
         return ravel_pytree(z)[0]
 
     def single_elt_logdet(x, cond, **kwargs):

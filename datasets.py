@@ -88,9 +88,9 @@ def get_mnist_data(data_folder='/tmp/mnist/', kind='digits'):
     # Download and get the raw dataset
     train_images, train_labels, test_images, test_labels = download_mnist(data_folder, base_url)
 
-    # Put the dataset between 0 and 1
-    train_images = train_images.reshape((train_images.shape[0], -1))/255
-    test_images = test_images.reshape((test_images.shape[0], -1))/255
+    # Flatten the images?
+    train_images = train_images.reshape((train_images.shape[0], -1))
+    test_images = test_images.reshape((test_images.shape[0], -1))
 
     # Add a dummy channel dimension
     train_images = train_images[...,None]
@@ -142,7 +142,7 @@ def load_cifar_batch(filename):
         images, labels = datadict['data'], datadict['labels']
 
         # Reshape the images so that the channel dim is at the end
-        images = images.reshape((-1, 3, 32, 32)).transpose(0, 2, 3, 1).astype(np.float32)/255
+        images = images.reshape((-1, 3, 32, 32)).transpose(0, 2, 3, 1).astype(np.float32)
 
         # Turn the labels into onehot vectors
         labels = np.array(labels)
@@ -173,7 +173,7 @@ def load_cifar10(batches_data_folder):
     test_labels = test_labels.astype(np.int32).T
     return train_images, train_labels, test_images, test_labels
 
-def get_cifar10_data(data_folder='/tmp/cifar10/'):
+def get_cifar10_data(quantize_level_bits=2, data_folder='/tmp/cifar10/'):
     # language=rst
     """
     Load the cifar 10 dataset.
@@ -190,17 +190,53 @@ def get_cifar10_data(data_folder='/tmp/cifar10/'):
     # Load the raw cifar-10 data
     train_images, train_labels, test_images, test_labels = load_cifar10(cifar10_dir)
 
+    # Quantize
+    factor = 256/(2**quantize_level_bits)
+    train_images = train_images//factor
+    test_images = test_images//factor
+
     return train_images, train_labels, test_images, test_labels
 
 ############################################################################################################################################################
 
-def get_celeb_dataset(n_images=50000):
-    assert 0, 'Downloader not implemented yet'
+def download_celeb(data_folder, base_url):
+    # language=rst
+    """
+    Get the raw cifar data
+
+    :param data_folder: Where to download the data to
+    :param base_url: Where to download the files from
+    """
+    # Download the cifar data
+    filename = 'img_align_celeba.zip'
+    download_filename = download_url(data_folder, filename, base_url)
+
+    assert 0
+
+    # Extract the batches
+    with tarfile.open(download_filename) as tar_file:
+        tar_file.extractall(data_folder)
+
+    # Remove the zip file
+    os.remove(download_filename)
+
+def get_celeb_dataset(downsize=True, quantize_level_bits=2, n_images=10000, data_folder='.'):
+    # language=rst
+    """
+    Load the celeb A dataset.
+
+    :param data_folder: Where to download the data to
+    """
+    celeb_dir = os.path.join(data_folder, 'img_align_celeba')
+
+    if(os.path.exists(celeb_dir) == False):
+        assert 0, 'Need to manually download the celeb-A dataset.  Download the zip file from here: %s'%('https://drive.google.com/open?id=0B7EVK8r0v71pZjFTYXZWM3FlRnM')
+
     import matplotlib.pyplot as plt
     from tqdm import tqdm_notebook
 
     def file_iter():
-        for root, dirs, files in os.walk('img_align_celeba/'):
+        for root, dirs, files in os.walk(celeb_dir):
             for file in files:
                 if(file.endswith('.jpg')):
                     path = os.path.join(root, file)
@@ -212,12 +248,14 @@ def get_celeb_dataset(n_images=50000):
         if(len(all_files) == n_images):
             break
 
+    quantize_factor = 256/(2**quantize_level_bits)
+
     images = []
     for path in tqdm_notebook(all_files):
         im = plt.imread(path, format='jpg')
-        im = np.pad(im, ((0, 2), (0, 2), (0, 0)))
-        images.append(im)
+        im = im[::6,::6][7:]
+        images.append(im//quantize_factor)
 
-    np_images = np.array(images, dtype=np.int32) / 255.0
+    np_images = np.array(images, dtype=np.int32)
 
     return np_images
