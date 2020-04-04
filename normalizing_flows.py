@@ -10,6 +10,7 @@ from jax.ops import index, index_add, index_update
 from staxplusplus import *
 from jax.flatten_util import ravel_pytree
 from jax.tree_util import tree_multimap
+from jax.scipy.special import logsumexp
 from util import is_testing, TRAIN, TEST
 
 ################################################################################################################
@@ -271,7 +272,7 @@ def Dequantization(scale=256.0, name='unnamed'):
 
     return init_fun, forward, inverse
 
-def Convolve(flow, conv_sampler, var=0.3, name='unnamed'):
+def Convolve(flow, conv_sampler, n_training_importance_samples=16, name='unnamed'):
     # language=rst
     """
     Convolve a normalizing flow with noise
@@ -284,16 +285,35 @@ def Convolve(flow, conv_sampler, var=0.3, name='unnamed'):
     def init_fun(key, input_shape, condition_shape):
         return _init_fun(key, input_shape, condition_shape)
 
+    def apply_forward(params, state, log_px, x, condition, key, **kwargs):
+        k1, k2 = random.split(key, 2)
+
+        epsilon = conv_sampler(k1, x.shape, **kwargs)
+        return _forward(params, state, log_px, x - epsilon, condition, key=k2, **kwargs)
+
     def forward(params, state, log_px, x, condition, **kwargs):
         # Sample epsilon, subtract it from x and then pass that through the rest of the flow
 
         key = kwargs.pop('key', None)
         if(key is None):
             assert 0, 'Need a key for this'
+
+        filled_forward = partial(apply_forward, params, state, log_px, x, condition, **kwargs)
+
+        n_importance_samples = kwargs.get('n_importance_samples', n_training_importance_samples)
+        keys = random.split(key, n_importance_samples)
+        log_pxs, zs, updated_states = vmap(filled_forward)(keys)
+        return logsumexp(log_pxs, axis=0) - np.log(n_importance_samples), np.mean(zs, axis=0), updated_states#[0]
+
+    def apply_inverse(params, state, log_pz, z, condition, key, **kwargs):
         k1, k2 = random.split(key, 2)
 
-        epsilon = conv_sampler(k1, x.shape)
-        return _forward(params, state, log_px, x - epsilon, condition, key=k2, **kwargs)
+        # The forward pass does not need a determinant
+        _, fz, updated_state = _inverse(params, state, log_pz, z, condition, key=k1, **kwargs)
+
+        # Sample from p(x|f(z))
+        epsilon = conv_sampler(k1, fz.shape, **kwargs)
+        return log_pz, fz + epsilon, updated_state
 
     def inverse(params, state, log_pz, z, condition, **kwargs):
         # Want to sample p(x|f(z))
@@ -301,20 +321,42 @@ def Convolve(flow, conv_sampler, var=0.3, name='unnamed'):
         key = kwargs.pop('key', None)
         if(key is None):
             assert 0, 'Need a key for this'
-        k1, k2 = random.split(key, 2)
 
-        # The forward pass does not need a determinant
-        _, fz, updated_state = _inverse(params, state, log_pz, z, condition, key=k1, **kwargs)
+        filled_inverse = partial(apply_inverse, params, state, log_pz, z, condition, **kwargs)
 
-        # Sample from p(x|f(z))
-        epsilon = conv_sampler(k1, fz.shape)
-        return log_pz, fz + epsilon, updated_state
+        n_importance_samples = kwargs.get('n_importance_samples', n_training_importance_samples)
+        keys = random.split(key, n_importance_samples)
+        log_pxs, xs, updated_states = vmap(filled_inverse)(keys)
+        return logsumexp(log_pxs, axis=0) - np.log(n_importance_samples), np.mean(xs, axis=0), updated_states#[0]
+
+    return init_fun, forward, inverse
+
+def OneWay(transform, name='unnamed'):
+    # language=rst
+    """
+    Wrapper for staxplusplus networks.
+
+    :param transform: spp network
+    """
+    _init_fun, _apply_fun = transform
+
+    def init_fun(key, input_shape, condition_shape):
+        transform_input_shape = input_shape if len(condition_shape) == 0 else (input_shape,) + condition_shape
+        return _init_fun(key, transform_input_shape)
+
+    def forward(params, state, log_px, x, condition, **kwargs):
+        network_input = x if len(condition) == 0 else (x, *condition)
+        z, updated_state = _apply_fun(params, state, network_input, **kwargs)
+        return log_px, z, updated_state
+
+    def inverse(params, state, log_pz, z, condition, **kwargs):
+        assert 0, 'Not invertible'
 
     return init_fun, forward, inverse
 
 ################################################################################################################
 
-def Identity(name=None):
+def Identity(name='unnamed'):
     # language=rst
     """
     Just pass an input forward.
@@ -331,7 +373,7 @@ def Identity(name=None):
 
     return init_fun, forward, inverse
 
-def Reverse(name=None):
+def Reverse(name='unnamed'):
     # language=rst
     """
     Reverse an input.
@@ -886,15 +928,25 @@ def ActNorm(log_s_init=zeros, b_init=zeros, name='unnamed'):
             updated_state = ()
 
         z = (x - b)*np.exp(-log_s)
-        log_det = log_s.sum()
+        log_det = -log_s.sum()
+
+        # Need to multiply by the height/width!
+        if(z.ndim == 4 or z.ndim == 3):
+            height, width, channel = z.shape[-3], z.shape[-2], z.shape[-1]
+            log_det *= height*width
 
         return log_px + log_det, z, updated_state
 
     def inverse(params, state, log_pz, z, condition, **kwargs):
         log_s, b = params
         x = np.exp(log_s)*z + b
+        log_det = -log_s.sum()
 
-        log_det = log_s.sum()
+        # Need to multiply by the height/width!
+        if(z.ndim == 4 or z.ndim == 3):
+            height, width, channel = z.shape[-3], z.shape[-2], z.shape[-1]
+            log_det *= height*width
+
         return log_pz + log_det, x, state
 
     return init_fun, forward, inverse
@@ -1078,7 +1130,7 @@ def Affine(*args, mode='LDU', **kwargs):
     else:
         assert 0, 'Invalid choice of affine backend'
 
-def pinv_logdet(A):
+def pinv_logdet(A, **kwargs):
     # language=rst
     """
     Compute the volume change of an affine transformation
@@ -1088,7 +1140,7 @@ def pinv_logdet(A):
     ATA = A.T@A
     return -0.5*np.linalg.slogdet(ATA)[1]
 
-def pinv(A):
+def pinv(A, **kwargs):
     # language=rst
     """
     Compute pseudo inverse of a tall matrix
@@ -1097,6 +1149,107 @@ def pinv(A):
     """
     ATA = A.T@A
     return np.linalg.inv(ATA)@A.T
+
+def TallAffine(flow, out_dim, n_training_importance_samples=1, A_init=glorot_normal(), name='unnamed'):
+    """ Affine function to go up a dimension
+
+        Args:
+    """
+    _init_fun, _forward, _inverse = flow
+
+    def init_fun(key, input_shape, condition_shape):
+        x_shape = input_shape
+        output_shape = x_shape[:-1] + (out_dim,)
+        keys = random.split(key, 2)
+        A = A_init(keys[0], (x_shape[-1], out_dim))
+        flow_name, flow_output_shape, flow_params, flow_state = _init_fun(keys[1], output_shape, condition_shape)
+        params = (A, flow_params)
+        state = flow_state
+        return name, flow_output_shape, params, flow_state
+
+    def apply_forward(params, state, log_px, x, condition, z, sigma_ATA_chol, key, **kwargs):
+        A, flow_params = params
+        flow_state = state
+
+        k1, k2 = random.split(key, 2)
+
+        # Sample from N(z|\mu(x),\Sigma(x))
+        noise = random.normal(k1, z.shape)
+        if(x.ndim == 1):
+            z += sigma_ATA_chol@noise
+        elif(x.ndim == 2):
+            z += np.einsum('ij,bj->bi', sigma_ATA_chol, noise)
+        else:
+            assert 0, 'Can only handle 1d or 2d inputs'
+
+        return _forward(flow_params, state, log_px, z, condition, key=k2, **kwargs)
+
+    def forward(params, state, log_px, x, condition, **kwargs):
+        A, flow_params = params
+
+        key = kwargs.pop('key', None)
+        if(key is None):
+            assert 0, 'Need a key for this'
+
+        # Compute the pseudoinverse
+        ATA = A.T@A
+        ATA_inv = np.linalg.inv(ATA)
+        A_pinv = ATA_inv@A.T
+        if(x.ndim == 1):
+            z = np.einsum('ij,j->i', A_pinv, x)
+            x_proj = np.einsum('ij,j->i', A, z)
+        elif(x.ndim == 2):
+            z = np.einsum('ij,bj->bi', A_pinv, x)
+            x_proj = np.einsum('ij,bj->bi', A, z)
+        else:
+            assert 0, 'Can only handle 1d or 2d inputs'
+
+        # Get the conv noise
+        sigma = kwargs.pop('sigma', 0.1)
+        sigma_ATA_chol = np.linalg.cholesky(sigma*ATA_inv)
+
+        # Get the terms from N(x|Az,\sigma)
+        dim_x, dim_z = A.shape
+        log_hx = 0.5/sigma*np.sum(x*(x_proj - x), axis=-1) - 0.5*np.linalg.slogdet(ATA)[1] + 0.5*(dim_x - dim_z)*np.log(2*np.pi)
+
+        filled_forward = partial(apply_forward, params, state, log_px, x, condition, z, sigma_ATA_chol, **kwargs)
+        n_importance_samples = kwargs.get('n_importance_samples', n_training_importance_samples)
+        keys = random.split(key, n_importance_samples)
+
+        # log_pxs, z, updated_states = filled_forward(key)
+        # return log_pxs + log_hx, z, updated_states
+
+        log_pxs, zs, updated_states = vmap(filled_forward)(keys)
+        return log_hx + logsumexp(log_pxs, axis=0) - np.log(n_importance_samples), np.mean(zs, axis=0), updated_states
+
+    def inverse(params, state, log_pz, z, condition, **kwargs):
+        A, flow_params = params
+        flow_state = state
+
+        log_pz, z, updated_state = _inverse(flow_params, flow_state, log_pz, z, condition, **kwargs)
+
+        if(z.ndim == 1):
+            x = np.einsum('ij,j->i', A, z)
+        elif(z.ndim == 2):
+            x = np.einsum('ij,bj->bi', A, z)
+        else:
+            assert 0, 'Got an invalid shape.  z.shape: %s'%(str(z.shape))
+
+        ATA = A.T@A
+
+        # Get the conv noise
+        sigma = kwargs.pop('sigma', 0.1)
+
+        key = kwargs.pop('key', None)
+        if(key is None):
+            assert 0, 'Need a key for this'
+        noise = random.normal(key, x.shape)*np.sqrt(sigma)
+        x += noise
+
+        # There is no manifold loss in this direction
+        return log_pz - 0.5*np.linalg.slogdet(ATA)[1], x, updated_state
+
+    return init_fun, forward, inverse
 
 ################################################################################################################
 
@@ -1342,7 +1495,6 @@ def MAF(hidden_layer_sizes,
         # Ugly, but saves us from initializing when calling function
         nonlocal made_apply_fun
         made_init_fun, made_apply_fun = GaussianMADE(input_shape[-1], hidden_layer_sizes, reverse=reverse, method=method, key=key, name=name, **kwargs)
-
         _, (mu_shape, alpha_shape), params, state = made_init_fun(key, input_shape)
         return name, input_shape, params, state
 
@@ -1401,7 +1553,7 @@ def MaskedAffineCoupling(transform_fun, axis=-1, mask_type='channel_wise', top_l
         # Generate the mask we'll use for training
         nonlocal mask
         if(mask_type == 'channel_wise'):
-            mask_index = [slice(0,s//2) if i == ax else slice(None) for i, s in enumerate(input_shape)]
+            mask_index = [slice(0, s//2) if i == ax else slice(None) for i, s in enumerate(input_shape)]
             mask_index = tuple(mask_index)
             mask = onp.ones(input_shape)
             mask[mask_index] = 0.0
@@ -1425,15 +1577,24 @@ def MaskedAffineCoupling(transform_fun, axis=-1, mask_type='channel_wise', top_l
         nonlocal apply_fun
         transform_input_shape = input_shape if len(condition_shape) == 0 else (input_shape,) + condition_shape
         _init_fun, apply_fun = transform_fun(out_shape=input_shape)
-        name, (log_s_shape, t_shape), params, state = _init_fun(key, transform_input_shape)
+        _, (log_s_shape, t_shape), transform_params, state = _init_fun(key, transform_input_shape)
+
+        scale = 0.0
+        shift = 0.0
+        params = (transform_params, scale, shift)
 
         return name, input_shape, params, state
 
     def forward(params, state, log_px, x, condition, **kwargs):
+        transform_params, scale, shift = params
+
         # Apply the nonlinearity to the masked input
         masked_input = (1.0 - mask)*x
         network_input = masked_input if len(condition) == 0 else (masked_input, *condition)
-        (log_s, t), updated_state = apply_fun(params, state, network_input, **kwargs)
+        (log_s, t), updated_state = apply_fun(transform_params, state, network_input, **kwargs)
+
+        # To control the variance
+        log_s = np.tanh(scale)*log_s + 2*np.tanh(shift)
 
         # Remask the result and compute the output
         log_s, t = mask*log_s, mask*t
@@ -1444,10 +1605,15 @@ def MaskedAffineCoupling(transform_fun, axis=-1, mask_type='channel_wise', top_l
         return log_px + log_det, z, updated_state
 
     def inverse(params, state, log_pz, z, condition, **kwargs):
+        transform_params, scale, shift = params
+
         # Apply the nonlinearity to the masked input
         masked_input = (1.0 - mask)*z
         network_input = masked_input if len(condition) == 0 else (masked_input, *condition)
-        (log_s, t), updated_state = apply_fun(params, state, network_input, **kwargs)
+        (log_s, t), updated_state = apply_fun(transform_params, state, network_input, **kwargs)
+
+        # To control the variance
+        log_s = np.tanh(scale)*log_s + 2*np.tanh(shift)
 
         # Remask the result and compute the output
         log_s, t = mask*log_s, mask*t
@@ -1640,8 +1806,10 @@ def flow_test(flow, x, key, **kwargs):
     init_fun, forward, inverse = flow
 
     input_shape = x.shape[1:]
-    condition_shape = (input_shape,)
-    cond = (x,)
+    # condition_shape = (input_shape,)
+    # cond = (x,)
+    condition_shape = ()
+    cond = ()
     names, output_shape, params, state = init_fun(key, input_shape, condition_shape)
 
     # Make sure that the forwards and inverse functions are consistent
@@ -1668,8 +1836,8 @@ def flow_test(flow, x, key, **kwargs):
 
     actual_log_det = vmap(single_elt_logdet)(x, cond, **kwargs)
 
-    # print('actual_log_det', actual_log_det)
-    # print('log_det', log_det)
+    print('actual_log_det', actual_log_det)
+    print('log_det', log_det)
 
     log_det_diff = np.linalg.norm(log_det - actual_log_det)
     print('Log det diff: %5.3f'%(log_det_diff))

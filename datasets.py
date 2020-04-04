@@ -220,7 +220,7 @@ def download_celeb(data_folder, base_url):
     # Remove the zip file
     os.remove(download_filename)
 
-def get_celeb_dataset(downsize=True, quantize_level_bits=2, n_images=10000, data_folder='.'):
+def get_celeb_dataset(downsize=True, quantize_level_bits=2, n_images=20000, data_folder='.'):
     # language=rst
     """
     Load the celeb A dataset.
@@ -253,7 +253,8 @@ def get_celeb_dataset(downsize=True, quantize_level_bits=2, n_images=10000, data
     images = []
     for path in tqdm_notebook(all_files):
         im = plt.imread(path, format='jpg')
-        im = im[::6,::6][7:]
+        im = im[::1,::1][40:]
+        # im = im[::3,::3][13:]
         images.append(im//quantize_factor)
 
     np_images = np.array(images, dtype=np.int32)

@@ -249,7 +249,7 @@ def WeightNormConv(out_channel, filter_shape, strides=None, padding='VALID', W_i
         v, b = params
 
         # Weight norm is defined over each scalar element of the output
-        g = 1.0
+        g = np.zeros_like(b)
         params = (g, v, b)
         state = ()
         return name, output_shape, params, state
@@ -266,7 +266,6 @@ def WeightNormConv(out_channel, filter_shape, strides=None, padding='VALID', W_i
             g = 1/std
             b = -mean/std
             state = (g, v, b)
-            assert 0
 
         # Apply weight normalization
         W = g*v/np.linalg.norm(v)
@@ -278,53 +277,6 @@ def WeightNormConv(out_channel, filter_shape, strides=None, padding='VALID', W_i
         return ans, state
 
     return init_fun, apply_fun
-
-# def WeightNormConv(out_channel, filter_shape, strides=None, padding='VALID', W_init=normal(1e-6), b_init=normal(1e-6), name='unnamed'):
-#     # language=rst
-#     """
-#     Convolution with weight norm applied
-
-#     :param out_channel - Number of output channels
-#     :param filter_shape - Size of filter
-#     :param strides - Strides for each axis
-#     :param padding - Padding for each axis
-#     """
-#     _init_fun, _apply_fun = None, None
-#     def init_fun(key, input_shape):
-#         nonlocal _init_fun, _apply_fun
-#         _init_fun, _apply_fun = Conv(out_channel, filter_shape, strides=strides, padding=padding, W_init=W_init, b_init=b_init)
-#         _, output_shape, params, state = _init_fun(key, input_shape)
-#         v, b = params
-
-#         # Weight norm is defined over each scalar element of the output
-#         g = np.ones_like(b)
-#         params = (g, v, b)
-#         state = ()
-#         return name, output_shape, params, state
-
-#     def apply_fun(params, state, inputs, **kwargs):
-#         g, v, b = params
-
-#         weightnorm_seed = kwargs.get('weightnorm_seed', False)
-#         if(weightnorm_seed == True):
-#             # Data dependent initialization
-#             t, _ = _apply_fun((v, b), state, inputs, **kwargs)
-#             mean = np.mean(t, axis=0)
-#             std = np.std(t, axis=0)
-#             g = 1/std
-#             b = -mean/std
-#             state = (g, v, b)
-
-#         # Apply weight normalization
-#         W = g*v/np.linalg.norm(v)
-#         normalized_params = (W, b)
-
-#         # Convolve using the weight norm kernel.  JAX conv has a dummy state, so can ignore
-#         ans, _ = _apply_fun(normalized_params, state, inputs, **kwargs)
-
-#         return ans, state
-
-#     return init_fun, apply_fun
 
 def data_dependent_init(x, target_param_names, name_tree, params, state, apply_fun, flag_names, **kwargs):
     # language=rst
@@ -360,6 +312,9 @@ def data_dependent_init(x, target_param_names, name_tree, params, state, apply_f
         weightnorm_names = ['wn']
         params = data_dependent_init(data_seed, weightnorm_names, names, params, state, apply_fun, 'weightnorm_seed')
     """
+    if(len(target_param_names) == 0):
+        return params
+
     if(isinstance(flag_names, list) == False or isinstance(flag_names, tuple) == False):
         flag_names = (flag_names,)
 
@@ -445,7 +400,7 @@ def Dense(out_dim, mask_id=None, keep_prob=1.0, W_init=glorot_normal(), b_init=n
         W, b = params
 
         # See if we are testing or training
-        test = kwargs['test'] if 'test' in kwargs else TRAIN
+        test = kwargs.get('test', TRAIN)
 
         # Dropout
         if(use_dropout and is_testing(test) == False):
@@ -487,6 +442,7 @@ def BatchNorm(axis=0, epsilon=1e-5, alpha=0.05, beta_init=zeros, gamma_init=ones
         state = (running_mean, running_var)
         return name, input_shape, params, state
 
+    @jit
     def get_bn_params(x, test, running_mean, running_var):
         """ Update the batch norm statistics """
         if(is_testing(test)):
@@ -505,7 +461,7 @@ def BatchNorm(axis=0, epsilon=1e-5, alpha=0.05, beta_init=zeros, gamma_init=ones
         x = inputs
 
         # Check if we're training or testing
-        test = kwargs['test'] if 'test' in kwargs else TRAIN
+        test = kwargs.get('test', TRAIN)
 
         # Update the running population parameters
         (mean, var), (running_mean, running_var) = get_bn_params(x, test, running_mean, running_var)
@@ -632,6 +588,7 @@ def GaussianMADE(dim,
     dense_layers = []
     for j, size in enumerate(layer_sizes):
         dense_layers.append(Dense(size, mask_id='mask_%d'%(j), **kwargs))
+        # dense_layers.append(BatchNorm()),
         dense_layers.append(Relu())
     hidden_path = sequential(*dense_layers)
 
