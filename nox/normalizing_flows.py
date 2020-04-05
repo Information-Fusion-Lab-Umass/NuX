@@ -7,11 +7,11 @@ from functools import partial, reduce
 from jax.experimental import stax
 from jax.nn.initializers import glorot_normal, normal, ones, zeros
 from jax.ops import index, index_add, index_update
-from staxplusplus import *
+from .staxplusplus import *
 from jax.flatten_util import ravel_pytree
 from jax.tree_util import tree_multimap
 from jax.scipy.special import logsumexp
-from util import is_testing, TRAIN, TEST
+from .util import is_testing, TRAIN, TEST
 
 ################################################################################################################
 

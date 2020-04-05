@@ -1,13 +1,17 @@
 from jax import random, vmap, jit, value_and_grad
 from jax.experimental import optimizers, stax
 import jax.numpy as np
-import staxplusplus as spp
-from ..normalizing_flows import *
-from ..util import *
+from nox.staxplusplus import *
+import nox.staxplusplus as spp
+from nox.normalizing_flows import *
+from nox.util import *
 import matplotlib.pyplot as plt
-from ..datasets import get_cifar10_data, get_mnist_data
+from nox.datasets import get_celeb_dataset, get_cifar10_data, get_mnist_data
 import jax.nn.initializers
 z_dim = 100
+
+quantize_level_bits = 8
+x_train = get_celeb_dataset(downsize=True, quantize_level_bits=quantize_level_bits)
 
 def Transform(out_shape, n_hidden_layers=5, layer_size=1024):
     out_dim = out_shape[-1]
