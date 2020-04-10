@@ -14,6 +14,7 @@ from imageio import imread
 import platform
 
 import numpy as np
+import pandas as pd
 
 _MNIST_DATA = "/tmp/mnist/"
 _FASHION_MNIST_DATA = "/tmp/fashion_mnist/"
@@ -32,8 +33,9 @@ def download_url(data_folder, filename, url):
 
     out_file = path.join(data_folder, filename)
     if(path.isfile(out_file) == False):
+        print('Downloading {} to {}'.format(url, data_folder))
         urlretrieve(url, out_file)
-        print('downloaded {} to {}'.format(url, data_folder))
+        print('Done.')
 
     return out_file
 
@@ -72,7 +74,7 @@ def download_mnist(data_folder, base_url):
 
     return train_images, train_labels, test_images, test_labels
 
-def get_mnist_data(data_folder='/tmp/mnist/', kind='digits'):
+def get_mnist_data(quantize_level_bits=2, data_folder='/tmp/mnist/', kind='digits'):
     # language=rst
     """
     Retrive an mnist dataset.  Either get the digits or fashion datasets.
@@ -88,10 +90,6 @@ def get_mnist_data(data_folder='/tmp/mnist/', kind='digits'):
     # Download and get the raw dataset
     train_images, train_labels, test_images, test_labels = download_mnist(data_folder, base_url)
 
-    # Flatten the images?
-    train_images = train_images.reshape((train_images.shape[0], -1))
-    test_images = test_images.reshape((test_images.shape[0], -1))
-
     # Add a dummy channel dimension
     train_images = train_images[...,None]
     test_images = test_images[...,None]
@@ -102,6 +100,11 @@ def get_mnist_data(data_folder='/tmp/mnist/', kind='digits'):
 
     train_labels = train_labels.astype(np.int32).T
     test_labels = test_labels.astype(np.int32).T
+
+    # Quantize
+    factor = 256/(2**quantize_level_bits)
+    train_images = train_images//factor
+    test_images = test_images//factor
 
     return train_images, train_labels, test_images, test_labels
 
@@ -220,7 +223,7 @@ def download_celeb(data_folder, base_url):
     # Remove the zip file
     os.remove(download_filename)
 
-def get_celeb_dataset(downsize=True, quantize_level_bits=2, n_images=20000, data_folder='.'):
+def get_celeb_dataset(downsize=True, quantize_level_bits=2, n_images=200, data_folder='.'):
     # language=rst
     """
     Load the celeb A dataset.
@@ -253,10 +256,34 @@ def get_celeb_dataset(downsize=True, quantize_level_bits=2, n_images=20000, data
     images = []
     for path in tqdm_notebook(all_files):
         im = plt.imread(path, format='jpg')
-        im = im[::1,::1][40:]
+        # im = im[::1,::1][40:]
         # im = im[::3,::3][13:]
+        im = im[::6,::6][7:]
         images.append(im//quantize_factor)
 
     np_images = np.array(images, dtype=np.int32)
 
     return np_images
+
+    n_images, train_labels, test_images, test_labels
+
+############################################################################################################################################################
+
+def get_hepmass_data(data_folder='/tmp/hepmass/'):
+    # language=rst
+    """
+    Load the HEPMASS dataset.
+
+    :param data_folder: Where to download the data to
+    """
+
+    filename = 'all_test.csv.gz'
+    full_filename = '%s%s'%(data_folder, filename)
+
+    if(os.path.exists(data_folder) == False):
+        # Download the cifar dataset
+        cifar_url = 'http://archive.ics.uci.edu/ml/machine-learning-databases/00347/all_test.csv.gz'
+        download_filename = download_url(data_folder, filename, cifar_url)
+        assert full_filename == download_filename
+
+    return pd.read_csv(full_filename, compression='gzip')
