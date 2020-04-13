@@ -1,27 +1,12 @@
+from jax.flatten_util import ravel_pytree
 import jax
 import scipy
 from jax import random, vmap, jit, grad
+ravel_pytree = jit(ravel_pytree)
 import jax.numpy as np
 from jax.scipy.special import multigammaln
 from functools import partial
-# from jax import custom_jvp
-
-@jit
-# def multigammaln_derivative(a, p):
-#     return np.sum(digamma(a + (1 - np.arange(1, p + 1))/2))
-
-# @jax.custom_gradient
-# def multigammaln(a, p):
-#     ans = np.sum([gammaln(a + (1 - j - 1)/2) for j in np.arange(p)])
-#     ans = ans + np.log(np.pi)*p*(p - 1)/4
-
-#     @jit
-#     def multigammaln_derivative(tangents):
-#         a_dot, p_dot = tangents
-#         da = np.sum(digamma(a + (1 - np.arange(1, p + 1))/2))
-#         return ()
-
-#     return ans, multigammaln_derivative
+from jax import custom_jvp
 
 @jit
 def cho_solve(chol, x):
@@ -40,6 +25,7 @@ def easy_niw(key, n):
     psi = random.normal(keys[1], (n, n))
     psi = psi.T@psi + np.eye(n)
     nu = n + 1.0
+
     return mu, kappa, psi, nu
 
 @partial(jit, static_argnums=(1,))
@@ -83,7 +69,8 @@ def niw_logZ_from_nat(n1, n2, n3, n4):
 def niw_expected_stats(n1, n2, n3, n4):
     ret = jit(jax.grad(niw_logZ_from_nat, argnums=(0, 1, 2, 3)))(n1, n2, n3, n4)
     Sigma_inv, mu0TSigma_invmu0, mu0TSigma_inv, logdetSigma = ret
-    return ret
+    Sigma_inv = 0.5*(Sigma_inv.T + Sigma_inv)
+    return Sigma_inv, mu0TSigma_invmu0, mu0TSigma_inv, logdetSigma
 
 def niw_sample(mu, kappa, psi, nu):
     Sigma = scipy.stats.invwishart.rvs(scale=psi, df=int(nu))
@@ -105,6 +92,7 @@ def easy_mniw(key, n, p):
     psi = random.normal(keys[2], (n, n))
     psi = psi.T@psi + np.eye(n)
     nu = n + p + 1.0
+
     return M, V, psi, nu
 
 @partial(jit, static_argnums=(1, 2))
@@ -152,7 +140,12 @@ def mniw_logZ_from_nat(n1, n2, n3, n4):
 def mniw_expected_stats(n1, n2, n3, n4):
     ret = jit(jax.grad(mniw_logZ_from_nat, argnums=(0, 1, 2, 3)))(n1, n2, n3, n4)
     Sigma_inv, ATSigma_invA, ATSigma_inv, logdetSigma = ret
-    return ret
+    Sigma_inv = 0.5*(Sigma_inv.T + Sigma_inv)
+    ATSigma_invA = 0.5*(ATSigma_invA.T + ATSigma_invA)
+    return Sigma_inv, ATSigma_invA, ATSigma_inv, logdetSigma
+
+# def mniw_nat_from_expected_stats(t1, t2, t3, t4):
+#     return n1, n2, n3, n4
 
 def mniw_sample(M, V, psi, nu):
     Sigma = scipy.stats.invwishart.rvs(scale=psi, df=int(nu))
@@ -402,7 +395,7 @@ def lds(us, masks, params, ys):
     return logpy, Ext
 
 @jit
-def lds_svi_full_step(us, mask, priors, params, ys):
+def lds_qx_stats(us, mask, params, ys):
     qmu0Sigma0_nat_params, qASigma_nat_params, qCR_nat_params = params
 
     # Compute the expected sufficient stats of q(mu0, Sigma0), q(A, Sigma) and q(C, R)
@@ -416,15 +409,14 @@ def lds_svi_full_step(us, mask, priors, params, ys):
     T = ys.shape[0]
 
     # Update the natural parameters
-    qmu0Sigma0_prior, qASigma_prior, qCR_prior = priors
     eltwise_add = lambda x, y: tuple(map(np.add, x, y))
 
     # Update the initial state parameters
-    # t1 = -0.5*Extxt[0]
-    # t2 = -0.5
-    # t3 = Ext[0]
-    # t4 = -0.5
-    # qmu0Sigma0_nat_params = eltwise_add(qmu0Sigma0_prior, (t1, t2, t3, t4))
+    t1 = -0.5*Extxt[0]
+    t2 = -0.5
+    t3 = Ext[0]
+    t4 = -0.5
+    qmu0Sigma0_stats = (t1, t2, t3, t4)
 
     # Update the transition parameters
     vmap_outer = jit(vmap(np.outer))
@@ -438,29 +430,57 @@ def lds_svi_full_step(us, mask, priors, params, ys):
     t3 -= vmap_outer(us[1:], Ext[:-1]).sum(axis=0)
 
     t4 = -0.5*(T - 1)
-    # qASigma_nat_params = eltwise_add(qASigma_prior, (t1, t2, t3, t4))
+    qASigma_stats = (t1, t2, t3, t4)
 
     # Update the emission parameters
-    t1 = -0.5*vmap_outer(ys, ys).sum(axis=0)
+    t1 = -0.5*vmap_outer(ys*mask[:,None], ys*mask[:,None]).sum(axis=0)
     t2 = -0.5*Extxt.sum(axis=0)
-    t3 = vmap_outer(Ext, ys).sum(axis=0)
+    t3 = vmap_outer(Ext, ys*mask[:,None]).sum(axis=0)
     t4 = -0.5*T
-    qCR_nat_params = eltwise_add(qCR_prior, (t1, t2, t3, t4))
+    qCR_stats = (t1, t2, t3, t4)
 
-    natural_gradient = (qmu0Sigma0_nat_params, qASigma_nat_params, qCR_nat_params)
-    return Ext, logpy, natural_gradient, dy
+    qx_stats = (qmu0Sigma0_stats, qASigma_stats, qCR_stats)
+    return Ext, logpy, qx_stats, dy
 
-# @partial(custom_jvp, nondiff_argnums=(0, 1, 2))
-# def lds_svi(us, mask, priors, params, ys):
-#     Ext, logpy, natural_gradient, dy = lds_full_step(us, mask, priors, params, ys)
-#     return logpy, Ext
+@partial(custom_jvp, nondiff_argnums=(0, 1, 2, 3, 4, 5))
+def lds_svi(us, mask, priors, T, rho, theta, y_batch):
+    Ext, logpy, qx_stats, dy = lds_qx_stats(us, mask, theta, y_batch)
 
-# @lds_svi.defjvp
-# def lds_svi_jvp(us, mask, priors, primals, tangents):
-#     params, ys = primals
-#     dparams, dys = tangents
-#     Ext, logpy, natural_gradient, dy = lds_full_step(us, mask, priors, params, ys)
+    # SVI update
+    stat_scale = T/y_batch.shape[0]
+    flat_stats, unflatten = ravel_pytree(qx_stats)
+    flat_theta, _ = ravel_pytree(theta)
+    flat_priors, _ = ravel_pytree(priors)
+    flat_updated_theta = (1.0 - rho)*flat_theta + rho*(flat_priors + stat_scale*flat_stats)
+    updated_theta = unflatten(flat_updated_theta)
 
-#     primals_out = (logpy, Ext)
-#     tangents_out = ((natural_gradient, dy), None)
-#     return primals_out, tangents_out
+    return logpy, Ext, updated_theta
+
+@lds_svi.defjvp
+def lds_svi_jvp(us, mask, priors, T, rho, theta, primals, tangents):
+    y_batch, = primals
+    y_batch_dot, = tangents
+    Ext, logpy, qx_stats, dy = lds_qx_stats(us, mask, theta, y_batch)
+
+    # SVI update
+    stat_scale = T/y_batch.shape[0]
+    flat_stats, unflatten = ravel_pytree(qx_stats)
+    flat_theta, _ = ravel_pytree(theta)
+    flat_priors, _ = ravel_pytree(priors)
+    flat_updated_theta = (1.0 - rho)*flat_theta + rho*(flat_priors + stat_scale*flat_stats)
+    updated_theta = unflatten(flat_updated_theta)
+
+    primals_out = (logpy, Ext, updated_theta)
+
+    # Make dummy outputs for grads of Ext and theta
+    dupdated_theta = unflatten(0.0*flat_updated_theta)
+    dExt = 0.0*Ext
+
+    dy_batch = np.sum(y_batch_dot*dy)
+
+    tangents_out = (dy_batch, dExt, dupdated_theta)
+    return primals_out, tangents_out
+
+"""
+FOR EM, NEED TO FIND MAPPING FROM EXPECTED SUFFICIENT STATS TO NATURAL PARAMETERS
+"""

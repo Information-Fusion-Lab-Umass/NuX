@@ -12,6 +12,7 @@ from jax.flatten_util import ravel_pytree
 from jax.tree_util import tree_multimap
 from jax.scipy.special import logsumexp
 from util import is_testing, TRAIN, TEST
+from lds_svi import easy_niw_nat, easy_mniw_nat, mniw_nat_to_std, lds_svi, mniw_sample
 
 ################################################################################################################
 
@@ -92,7 +93,7 @@ def sequential_flow(*layers):
 
     return init_fun, forward, inverse
 
-def factored_flow(*layers):
+def factored_flow(*layers, condition_on_results=False):
     # language=rst
     """
     Parallel flow builder.  Like spp.parallel, but also passes density and works in reverse.
@@ -155,7 +156,8 @@ def factored_flow(*layers):
             params.append(param)
             states.append(state)
 
-            condition_shape = condition_shape + (output_shape,)
+            if(condition_on_results):
+                condition_shape = condition_shape + (output_shape,)
 
         return tuple(names), output_shapes, tuple(params), tuple(states)
 
@@ -175,8 +177,8 @@ def factored_flow(*layers):
             outputs.append(output)
             states.append(s)
 
-            # Need to do autoregressive type conditioning
-            condition = condition + (output,)
+            if(condition_on_results):
+                condition = condition + (output,)
 
         return densities, outputs, tuple(states)
 
@@ -197,7 +199,8 @@ def factored_flow(*layers):
             states.append(updated_state)
 
             # Conditioners are inputs during the inverse pass
-            condition = condition + (inp,)
+            if(condition_on_results):
+                condition = condition + (inp,)
 
         return densities, outputs, tuple(states)
 
@@ -351,6 +354,61 @@ def OneWay(transform, name='unnamed'):
 
     def inverse(params, state, log_pz, z, condition, **kwargs):
         assert 0, 'Not invertible'
+
+    return init_fun, forward, inverse
+
+def LDSPrior(x_dim, name='unnamed'):
+    # language=rst
+    """
+    Linear dynamical system prior.
+
+    :param x_dim: Latent state dim
+    """
+    # lds = build_lds()
+    priors = None
+
+    def init_fun(key, input_shape, condition_shape):
+        y_dim = input_shape[-1]
+        output_shape = input_shape[:-1] + (x_dim,)
+
+        # No choice to initialize prior yet
+        keys = random.split(key, 6)
+        state = (easy_niw_nat(keys[0], x_dim), easy_mniw_nat(keys[1], x_dim, x_dim), easy_mniw_nat(keys[2], y_dim, x_dim))
+
+        nonlocal priors
+        priors = (easy_niw_nat(keys[3], x_dim), easy_mniw_nat(keys[4], x_dim, x_dim), easy_mniw_nat(keys[5], y_dim, x_dim))
+
+        params = ()
+
+        return name, input_shape, params, state
+
+    def forward(params, state, log_px, x, condition, **kwargs):
+        # Must work with time series
+        assert x.ndim == 2
+        T = kwargs.get('T', x.shape[0])
+
+        us = np.zeros((x.shape[0], x_dim))
+        mask = np.ones(x.shape[0]).astype(bool)
+        rho = 1.0
+
+        # Run the kalman filter
+        marginal, z, state = lds_svi(us, mask, priors, T, rho, state, x)
+        return marginal + log_px.sum(), z, state
+
+    def inverse(params, state, log_pz, z, condition, **kwargs):
+        assert z.ndim == 2
+        T = kwargs.get('T', z.shape[0])
+
+        us = np.zeros((z.shape[0], x_dim))
+        mask = np.ones(z.shape[0]).astype(bool)
+        rho = 1.0
+
+        # Sample forward using the emission paramters
+        # C = mniw_sample(*mniw_nat_to_std(*state[2]))[0]
+        C = mniw_nat_to_std(*state[2])[0]
+        x = np.einsum('ij,tj->ti', C, z)
+        marginal, _, _ = lds_svi(us, mask, priors, T, rho, state, x)
+        return (marginal + log_pz), x, state
 
     return init_fun, forward, inverse
 
@@ -1418,10 +1476,6 @@ def TallAffine(flow, out_dim, n_training_importance_samples=1, A_init=glorot_nor
         diag_cov = np.exp(log_diag_cov)
         flow_state = state
 
-        key = kwargs.pop('key', None)
-        if(key is None):
-            assert 0, 'Need a key for this'
-
         # Compute the regularized pseudoinverse
         ATSA = A.T/diag_cov@A
         ATSA_inv = np.linalg.inv(ATSA)
@@ -1441,6 +1495,13 @@ def TallAffine(flow, out_dim, n_training_importance_samples=1, A_init=glorot_nor
         log_hx -= 0.5*np.linalg.slogdet(ATSA)[1]
         log_hx -= 0.5*log_diag_cov.sum()
         log_hx -= 0.5*(dim_x - dim_z)*np.log(2*np.pi)
+
+        key = kwargs.pop('key', None)
+        if(key is None):
+            # Then we're just getting the mean!
+            return _forward(flow_params, flow_state, log_px + log_hx, z, condition, **kwargs)
+
+        # Otherwise, we need to importance sample
 
         # Get the conv noise
         sigma_ATA_chol = np.linalg.cholesky(ATSA_inv)
