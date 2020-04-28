@@ -18,6 +18,67 @@ def is_testing(x):
 
 ################################################################################################################
 
+def gaussian_logpdf(x, mean, cov):
+    dx = x - mean
+    cov_inv = np.linalg.inv(cov)
+    log_px = -0.5*np.sum(np.dot(dx, cov_inv.T)*dx, axis=-1)
+    return log_px - 0.5*np.linalg.slogdet(cov)[1] - 0.5*x.shape[-1]*np.log(2*np.pi)
+
+def gaussian_diag_cov_logpdf(x, mean, log_diag_cov):
+    dx = x - mean
+    log_px = -0.5*np.sum(dx*np.exp(-log_diag_cov)*dx, axis=-1)
+    return log_px - 0.5*np.sum(log_diag_cov) - 0.5*x.shape[-1]*np.log(2*np.pi)
+
+################################################################################################################
+
+@jit
+def upper_cho_solve(chol, x):
+    return jax.scipy.linalg.cho_solve((chol, True), x)
+
+def upper_triangular_indices(N):
+    values = np.arange(N)
+    padded_values = np.hstack([values, 0])
+
+    idx = onp.ogrid[:N,N:0:-1]
+    idx = sum(idx) - 1
+
+    mask = np.arange(N) >= np.arange(N)[:,None]
+    return (idx + np.cumsum(values + 1)[:,None][::-1] - N + 1)*mask
+
+def n_elts_upper_triangular(N):
+    return N*(N + 1) // 2 - 1
+
+def upper_triangular_from_values(vals, N):
+    assert n_elts_upper_triangular(N) == vals.shape[-1]
+    zero_padded_vals = np.pad(vals, (1, 0))
+    return zero_padded_vals[upper_triangular_indices(N)]
+
+tri_solve = jax.scipy.linalg.solve_triangular
+L_solve = jit(partial(tri_solve, lower=True, unit_diagonal=True))
+U_solve = jit(partial(tri_solve, lower=False, unit_diagonal=True))
+
+################################################################################################################
+
+@jit
+def householder(x, v):
+    return x - 2*np.einsum('i,j,j', v, v, x)/np.sum(v**2)
+
+@jit
+def householder_prod_body(carry, inputs):
+    x = carry
+    v = inputs
+    return householder(x, v), 0
+
+@jit
+def householder_prod(x, vs):
+    return jax.lax.scan(householder_prod_body, x, vs)[0]
+
+@jit
+def householder_prod_transpose(x, vs):
+    return jax.lax.scan(householder_prod_body, x, vs[::-1])[0]
+
+################################################################################################################
+
 def slogsumexp(x, signs, axis=None):
     """ logsumexp with signs (b argument for logsumexp isn't implemented in JAX!)
     """

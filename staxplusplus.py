@@ -245,17 +245,16 @@ def WeightNormConv(out_channel, filter_shape, strides=None, padding='VALID', W_i
     def init_fun(key, input_shape):
         nonlocal _init_fun, _apply_fun
         _init_fun, _apply_fun = Conv(out_channel, filter_shape, strides=strides, padding=padding, W_init=W_init, b_init=b_init)
-        _, output_shape, params, state = _init_fun(key, input_shape)
-        v, b = params
+        conv_name, output_shape, conv_params, conv_state = _init_fun(key, input_shape)
+        v, b = conv_params
 
         # Weight norm is defined over each scalar element of the output
         g = np.zeros_like(b)
-        params = (g, v, b)
-        state = ()
-        return name, output_shape, params, state
+        return (name, conv_name), output_shape, (g, conv_params), ((), conv_state)
 
     def apply_fun(params, state, inputs, **kwargs):
-        g, v, b = params
+        g, (v, b) = params
+        _, conv_state = state
 
         weightnorm_seed = kwargs.get('weightnorm_seed', False)
         if(weightnorm_seed == True):
@@ -265,16 +264,19 @@ def WeightNormConv(out_channel, filter_shape, strides=None, padding='VALID', W_i
             std = np.std(t, axis=0)
             g = 1/std
             b = -mean/std
-            state = (g, v, b)
+            new_params = (g, (v, b))
 
         # Apply weight normalization
         W = g*v/np.linalg.norm(v)
         normalized_params = (W, b)
 
-        # Convolve using the weight norm kernel.  JAX conv has a dummy state, so can ignore
-        ans, _ = _apply_fun(normalized_params, state, inputs, **kwargs)
+        # Convolve using the weight norm kernel
+        ans, updated_conv_state = _apply_fun(normalized_params, conv_state, inputs, **kwargs)
 
-        return ans, state
+        if(weightnorm_seed == False):
+            return ans, ((), updated_conv_state)
+        else:
+            return ans, new_params
 
     return init_fun, apply_fun
 
@@ -315,7 +317,7 @@ def data_dependent_init(x, target_param_names, name_tree, params, state, apply_f
     if(len(target_param_names) == 0):
         return params
 
-    if(isinstance(flag_names, list) == False or isinstance(flag_names, tuple) == False):
+    if(isinstance(flag_names, list) == False and isinstance(flag_names, tuple) == False):
         flag_names = (flag_names,)
 
     # Pass the seed name to the apply function

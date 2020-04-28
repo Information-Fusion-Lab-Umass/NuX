@@ -7,12 +7,16 @@ from functools import partial, reduce
 from jax.experimental import stax
 from jax.nn.initializers import glorot_normal, normal, ones, zeros
 from jax.ops import index, index_add, index_update
-from staxplusplus import *
+# from staxplusplus import *
+import staxplusplus as spp
 from jax.flatten_util import ravel_pytree
 from jax.tree_util import tree_multimap
+from jax.tree_util import tree_flatten
 from jax.scipy.special import logsumexp
-from util import is_testing, TRAIN, TEST
-from lds_svi import easy_niw_nat, easy_mniw_nat, mniw_nat_to_std, lds_svi, mniw_sample
+from util import is_testing, TRAIN, TEST, householder_prod, householder_prod_transpose
+import util
+from lds_svi import easy_niw_nat, easy_mniw_nat, mniw_params_to_stats, niw_nat_to_std, mniw_nat_to_std, lds_svi, mniw_sample, easy_niw_params, easy_mniw_params, niw_sample, niw_params_to_stats
+from non_dim_preserving import *
 
 ################################################################################################################
 
@@ -54,7 +58,6 @@ def sequential_flow(*layers):
         assert np.allclose(fz, x)
         assert np.allclose(log_pfz, log_px)
     """
-
     n_layers = len(layers)
     init_funs, forward_funs, inverse_funs = zip(*layers)
 
@@ -206,6 +209,23 @@ def factored_flow(*layers, condition_on_results=False):
 
     return init_fun, forward, inverse
 
+def ReverseInputs(name='unnamed'):
+    # language=rst
+    """
+    Reverse the order of inputs.  Not the same as reversing an array!
+    """
+    def init_fun(key, input_shape, condition_shape):
+        params, state = (), ()
+        return name, input_shape[::-1], params, state
+
+    def forward(params, state, log_px, x, condition, **kwargs):
+        return log_px[::-1], x[::-1], state[::-1]
+
+    def inverse(params, state, log_pz, z, condition, **kwargs):
+        return log_pz[::-1], z[::-1], state[::-1]
+
+    return init_fun, forward, inverse
+
 ################################################################################################################
 
 def UnitGaussianPrior(axis=(-1,), name='unnamed'):
@@ -225,30 +245,41 @@ def UnitGaussianPrior(axis=(-1,), name='unnamed'):
         return log_px, x, state
 
     def inverse(params, state, log_pz, z, condition, **kwargs):
-        dim = np.prod([z.shape[ax] for ax in axis])
-        log_pz += -0.5*np.sum(z**2, axis=axis) + -0.5*dim*np.log(2*np.pi)
+        # Usually we're sampling z from a Gaussian, so if we want to do Monte Carlo
+        # estimation, ignore the value of N(z|0,I).
         return log_pz, z, state
 
     return init_fun, forward, inverse
 
-def Dequantization(scale=256.0, name='unnamed'):
+def Dequantization(noise_scale=None, scale=256.0, name='unnamed'):
     # language=rst
     """
     Dequantization for images.
 
+    :param noise_scale: An array that tells us how much noise to add to each dimension
     :param scale: What to divide the image by
     """
+    noise_scale_array = None
     def init_fun(key, input_shape, condition_shape):
         params, state = (), ()
+        if(noise_scale is None):
+            nonlocal noise_scale_array
+            noise_scale_array = np.ones(input_shape)
+        else:
+            assert noise_scale.shape == input_shape
+            noise_scale_array = noise_scale
         return name, input_shape, params, state
 
     def forward(params, state, log_px, x, condition, **kwargs):
         # Add uniform noise
-        key = kwargs.pop('key', None)
+        key = kwargs.pop('dq_key', None)
         if(key is None):
-            assert 0, 'Need a random key for dequantization'
-
-        noise = random.uniform(key, x.shape)
+            # Try again
+            key = kwargs.pop('key', None)
+        if(key is None):
+            noise = np.zeros_like(x)
+        else:
+            noise = random.uniform(key, x.shape)*noise_scale_array
 
         log_det = -np.log(scale)
         if(x.ndim > 2):
@@ -275,7 +306,45 @@ def Dequantization(scale=256.0, name='unnamed'):
 
     return init_fun, forward, inverse
 
-def Convolve(flow, conv_sampler, n_training_importance_samples=16, name='unnamed'):
+def Augment(flow, sampler, name='unnamed'):
+    # language=rst
+    """
+    Run a normalizing flow in an augmented space https://arxiv.org/pdf/2002.07101.pdf
+
+    :param flow: The normalizing flow
+    :param sampler: Function to sample from the convolving distribution
+    """
+    _init_fun, _forward, _inverse = flow
+
+    def init_fun(key, input_shape, condition_shape):
+        augmented_input_shape = input_shape[:-1] + (2*input_shape[-1],)
+        return _init_fun(key, augmented_input_shape, condition_shape)
+
+    def forward(params, state, log_px, x, condition, **kwargs):
+        key = kwargs.pop('key', None)
+        if(key is None):
+            assert 0, 'Need a key for this'
+        k1, k2 = random.split(key, 2)
+
+        # Sample e and concatenate it to x
+        e = random.normal(k1, x.shape)
+        xe = np.concatenate([x, e], axis=-1)
+
+        return _forward(params, state, log_px, xe, condition, key=k2, **kwargs)
+
+    def inverse(params, state, log_pz, z, condition, **kwargs):
+        key = kwargs.pop('key', None)
+        if(key is None):
+            assert 0, 'Need a key for this'
+        k1, k2 = random.split(key, 2)
+
+        x, e = np.split(z, axis=-1)
+
+        return _inverse(params, state, log_pz, x, condition, key=k2, **kwargs)
+
+    return init_fun, forward, inverse
+
+def Convolve(flow, conv_sampler, n_training_importance_samples=1, name='unnamed'):
     # language=rst
     """
     Convolve a normalizing flow with noise
@@ -304,6 +373,10 @@ def Convolve(flow, conv_sampler, n_training_importance_samples=16, name='unnamed
         filled_forward = partial(apply_forward, params, state, log_px, x, condition, **kwargs)
 
         n_importance_samples = kwargs.get('n_importance_samples', n_training_importance_samples)
+        n_importance_samples = 1
+        if(n_importance_samples == 1):
+            return filled_forward(key)
+
         keys = random.split(key, n_importance_samples)
         log_pxs, zs, updated_states = vmap(filled_forward)(keys)
         return logsumexp(log_pxs, axis=0) - np.log(n_importance_samples), np.mean(zs, axis=0), updated_states#[0]
@@ -328,6 +401,9 @@ def Convolve(flow, conv_sampler, n_training_importance_samples=16, name='unnamed
         filled_inverse = partial(apply_inverse, params, state, log_pz, z, condition, **kwargs)
 
         n_importance_samples = kwargs.get('n_importance_samples', n_training_importance_samples)
+        if(n_importance_samples == 1):
+            return filled_inverse(key)
+
         keys = random.split(key, n_importance_samples)
         log_pxs, xs, updated_states = vmap(filled_inverse)(keys)
         return logsumexp(log_pxs, axis=0) - np.log(n_importance_samples), np.mean(xs, axis=0), updated_states#[0]
@@ -357,27 +433,26 @@ def OneWay(transform, name='unnamed'):
 
     return init_fun, forward, inverse
 
-def LDSPrior(x_dim, name='unnamed'):
+################################################################################################################
+
+def LDSPrior(z_dim, name='unnamed'):
     # language=rst
     """
     Linear dynamical system prior.
 
-    :param x_dim: Latent state dim
+    :param z_dim: Latent state dim
     """
-    # lds = build_lds()
     priors = None
 
     def init_fun(key, input_shape, condition_shape):
-        y_dim = input_shape[-1]
-        output_shape = input_shape[:-1] + (x_dim,)
+        x_dim = input_shape[-1]
+        output_shape = input_shape[:-1] + (z_dim,)
 
         # No choice to initialize prior yet
         keys = random.split(key, 6)
-        state = (easy_niw_nat(keys[0], x_dim), easy_mniw_nat(keys[1], x_dim, x_dim), easy_mniw_nat(keys[2], y_dim, x_dim))
-
         nonlocal priors
-        priors = (easy_niw_nat(keys[3], x_dim), easy_mniw_nat(keys[4], x_dim, x_dim), easy_mniw_nat(keys[5], y_dim, x_dim))
-
+        state = (easy_niw_nat(keys[0], z_dim), easy_mniw_nat(keys[1], z_dim, z_dim), easy_mniw_nat(keys[2], x_dim, z_dim))
+        priors = (easy_niw_nat(keys[3], z_dim), easy_mniw_nat(keys[4], z_dim, z_dim), easy_mniw_nat(keys[5], x_dim, z_dim))
         params = ()
 
         return name, input_shape, params, state
@@ -387,26 +462,40 @@ def LDSPrior(x_dim, name='unnamed'):
         assert x.ndim == 2
         T = kwargs.get('T', x.shape[0])
 
-        us = np.zeros((x.shape[0], x_dim))
-        mask = np.ones(x.shape[0]).astype(bool)
-        rho = 1.0
+        rho = kwargs.get('rho', 0.2)
+        us = kwargs.get('us', np.zeros(1))
+        mask = kwargs.get('mask', np.zeros(1))
+        if(us.shape == (1,)):
+            us = np.zeros((x.shape[0], z_dim))
+        if(mask.shape == (1,)):
+            mask = np.ones(x.shape[0]).astype(bool)
 
         # Run the kalman filter
-        marginal, z, state = lds_svi(us, mask, priors, T, rho, state, x)
+        marginal, z, new_state = lds_svi(us, mask, priors, T, rho, state, x)
+
+        # Don't update the initial state
+        state = (state[0], new_state[1], new_state[2])
+
         return marginal + log_px.sum(), z, state
 
     def inverse(params, state, log_pz, z, condition, **kwargs):
         assert z.ndim == 2
         T = kwargs.get('T', z.shape[0])
 
-        us = np.zeros((z.shape[0], x_dim))
-        mask = np.ones(z.shape[0]).astype(bool)
-        rho = 1.0
 
         # Sample forward using the emission paramters
         # C = mniw_sample(*mniw_nat_to_std(*state[2]))[0]
         C = mniw_nat_to_std(*state[2])[0]
         x = np.einsum('ij,tj->ti', C, z)
+
+        rho = kwargs.get('rho', 0.2)
+        us = kwargs.get('us', np.zeros(1))
+        mask = kwargs.get('mask', np.zeros(1))
+        if(us.shape == (1,)):
+            us = np.zeros_like(z)
+        if(mask.shape == (1,)):
+            mask = np.ones(x.shape[0]).astype(bool)
+
         marginal, _, _ = lds_svi(us, mask, priors, T, rho, state, x)
         return (marginal + log_pz), x, state
 
@@ -422,6 +511,23 @@ def Identity(name='unnamed'):
     def init_fun(key, input_shape, condition_shape):
         params, state = (), ()
         return name, input_shape, params, state
+
+    def forward(params, state, log_px, x, condition, **kwargs):
+        return log_px, x, state
+
+    def inverse(params, state, log_pz, z, condition, **kwargs):
+        return log_pz, z, state
+
+    return init_fun, forward, inverse
+
+def Debug(name='unnamed'):
+    # language=rst
+    """
+    Help debug shapes
+    """
+    def init_fun(key, input_shape, condition_shape):
+        print(name, 'input_shape', input_shape)
+        return name, input_shape, (), ()
 
     def forward(params, state, log_px, x, condition, **kwargs):
         return log_px, x, state
@@ -447,6 +553,51 @@ def Reverse(name='unnamed'):
         return log_pz, z[...,::-1], state
 
     return init_fun, forward, inverse
+
+def Transpose(axis_order, name='unnamed'):
+    # language=rst
+    """
+    Transpose an input
+    """
+    order = None
+    order_inverse = None
+    batched_order = None
+    batched_order_inverse = None
+
+    def init_fun(key, input_shape, condition_shape):
+
+        nonlocal order
+        nonlocal batched_order
+        order = [ax%len(axis_order) for ax in axis_order]
+        batched_order = [0] + [o + 1 for o in order]
+        assert len(order) == len(input_shape)
+        assert len(set(order)) == len(order)
+        params, state = (), ()
+        output_shape = [input_shape[ax] for ax in order]
+
+        nonlocal order_inverse
+        nonlocal batched_order_inverse
+        order_inverse = [order.index(i) for i in range(len(order))]
+        batched_order_inverse = [0] + [o + 1 for o in order_inverse]
+
+        return name, output_shape, params, state
+
+    def forward(params, state, log_px, x, condition, **kwargs):
+        if(x.ndim == 2 or x.ndim == 4):
+            z = x.transpose(batched_order)
+        else:
+            z = x.transpose(order)
+        return log_px, z, state
+
+    def inverse(params, state, log_pz, z, condition, **kwargs):
+        if(z.ndim == 2 or z.ndim == 4):
+            x = z.transpose(batched_order_inverse)
+        else:
+            x = z.transpose(order_inverse)
+        return log_pz, x, state
+
+    return init_fun, forward, inverse
+
 
 def Reshape(shape, name='unnamed'):
     # language=rst
@@ -934,10 +1085,15 @@ def UpSample(repeats, name='unnamed'):
     def forward(params, state, log_px, x, condition, **kwargs):
         log_sigma = params
         sigma = np.exp(log_sigma)
+        is_batched = int(x.ndim == 2 or x.ndim == 4)
 
         # The pseudo-inverse is the sliced input
-        slices = [slice(0, -1, r) for r in full_repeats]
-        z = x[slices]
+        slices = [slice(0, None, r) for r in full_repeats]
+
+        if(is_batched):
+            z = x[[slice(0, None, 1)] + slices]
+        else:
+            z = x[slices]
 
         # Find the flat dimensions
         if(x.ndim <= 2):
@@ -949,7 +1105,6 @@ def UpSample(repeats, name='unnamed'):
 
         # Find the projection
         x_proj = z
-        is_batched = int(x.ndim == 2 or x.ndim == 4)
         for i, r in enumerate(repeats):
             x_proj = np.repeat(x_proj, r, axis=i + is_batched)
 
@@ -961,6 +1116,11 @@ def UpSample(repeats, name='unnamed'):
         log_hx -= log_det
         log_hx -= (dim_x - dim_z)*(log_sigma + np.log(2*np.pi))
 
+        # If we have an image, need to sum over more axes
+        if(x.ndim >= 3):
+            if(log_hx.ndim >= 2):
+                log_hx = log_hx.sum(axis=(-1, -2))
+
         # J^T J is a diagonal matrix where each diagonal element is the
         # the product of repeats
         key = kwargs.pop('key', None)
@@ -969,7 +1129,7 @@ def UpSample(repeats, name='unnamed'):
 
         # Sample z ~ N(z^+, sigma(J^T J)^{-1})
         noise = random.normal(key, z.shape)
-        z += noise*sqrt(sigma/repeat_prod)
+        z += noise*np.sqrt(sigma/repeat_prod)
 
         return log_px + log_hx, z, state
 
@@ -995,6 +1155,11 @@ def UpSample(repeats, name='unnamed'):
         # The projection difference is 0!
         log_hx = log_det
         log_hx -= (dim_x - dim_z)*(log_sigma + np.log(2*np.pi))
+
+        # If we have an image, need to sum over more axes
+        if(x.ndim >= 3):
+            if(log_hx.ndim >= 2):
+                log_hx = log_hx.sum(axis=(-1, -2))
 
         return log_pz + log_hx, x, state
 
@@ -1040,7 +1205,7 @@ def flow_data_dependent_init(x, target_param_names, name_tree, params, state, fo
         _, ans, updated_states = forward(params, state, np.zeros(x.shape[0]), x, condition, **kwargs)
         return ans, updated_states
 
-    return data_dependent_init(x, target_param_names, name_tree, params, state, filled_forward_function, flag_names, **kwargs)
+    return spp.data_dependent_init(x, target_param_names, name_tree, params, state, filled_forward_function, flag_names, **kwargs)
 
 def ActNorm(log_s_init=zeros, b_init=zeros, name='unnamed'):
     # language=rst
@@ -1175,28 +1340,6 @@ def BatchNorm(epsilon=1e-5, alpha=0.05, beta_init=zeros, gamma_init=zeros, name=
 
 ################################################################################################################
 
-def upper_triangular_indices(N):
-    values = np.arange(N)
-    padded_values = np.hstack([values, 0])
-
-    idx = onp.ogrid[:N,N:0:-1]
-    idx = sum(idx) - 1
-
-    mask = np.arange(N) >= np.arange(N)[:,None]
-    return (idx + np.cumsum(values + 1)[:,None][::-1] - N + 1)*mask
-
-def n_elts_upper_triangular(N):
-    return N*(N + 1) // 2 - 1
-
-def upper_triangular_from_values(vals, N):
-    assert n_elts_upper_triangular(N) == vals.shape[-1]
-    zero_padded_vals = np.pad(vals, (1, 0))
-    return zero_padded_vals[upper_triangular_indices(N)]
-
-tri_solve = jax.scipy.linalg.solve_triangular
-L_solve = jit(partial(tri_solve, lower=True, unit_diagonal=True))
-U_solve = jit(partial(tri_solve, lower=False, unit_diagonal=True))
-
 def AffineLDU(L_init=normal(), d_init=ones, U_init=normal(), name='unnamed', return_mat=False):
     # language=rst
     """
@@ -1211,8 +1354,8 @@ def AffineLDU(L_init=normal(), d_init=ones, U_init=normal(), name='unnamed', ret
 
         # Create the fancy indices that we'll use to turn our vectors into triangular matrices
         nonlocal triangular_indices
-        triangular_indices = np.pad(upper_triangular_indices(dim - 1), ((0, 1), (1, 0)))
-        flat_dim = n_elts_upper_triangular(dim)
+        triangular_indices = np.pad(util.upper_triangular_indices(dim - 1), ((0, 1), (1, 0)))
+        flat_dim = util.n_elts_upper_triangular(dim)
 
         k1, k2, k3 = random.split(key, 3)
         L_flat, d, U_flat = L_init(k1, (flat_dim,)), d_init(k2, (dim,)), U_init(k3, (flat_dim,))
@@ -1254,9 +1397,9 @@ def AffineLDU(L_init=normal(), d_init=ones, U_init=normal(), name='unnamed', ret
 
         L, d, U = get_LDU(params)
 
-        x = L_solve(L, z)
+        x = util.L_solve(L, z)
         x = x/d
-        x = U_solve(U, x)
+        x = util.U_solve(U, x)
 
         log_det = np.sum(np.log(np.abs(d)), axis=-1)
 
@@ -1265,6 +1408,53 @@ def AffineLDU(L_init=normal(), d_init=ones, U_init=normal(), name='unnamed', ret
     # Have the option to directly get the matrix
     if(return_mat):
         return init_fun, forward, inverse, get_LDU
+
+    return init_fun, forward, inverse
+
+def AffineSVD(n_householders, U_init=glorot_normal(), log_s_init=normal(), VT_init=glorot_normal(), name='name'):
+    # language=rst
+    """
+    Affine matrix with SVD parametrization.  Uses a product of householders to parametrize the orthogonal matrices.
+
+    :param n_householders: Number of householders to use in U and V parametrization.  When n_householders = dim(x),
+                           we can represent any orthogonal matrix with det=-1 (I think?)
+    """
+    def init_fun(key, input_shape, condition_shape):
+        keys = random.split(key, 3)
+        U = U_init(keys[0], (n_householders, input_shape[-1]))
+        log_s = log_s_init(keys[1], (input_shape[-1],))
+        VT = VT_init(keys[2], (n_householders, input_shape[-1]))
+        params = (U, log_s, VT)
+        state = ()
+        return name, input_shape, params, state
+
+    def forward(params, state, log_px, x, condition, **kwargs):
+        U, log_s, VT = params
+
+        if(x.ndim == 2):
+            householder_fun = vmap(householder_prod, in_axes=(0, None))
+        else:
+            householder_fun = householder_prod
+
+        z = householder_fun(x, VT)
+        z = z*np.exp(log_s)
+        z = householder_fun(z, U)
+        log_det = log_s.sum()
+        return log_px + log_det, z, state
+
+    def inverse(params, state, log_pz, z, condition, **kwargs):
+        U, log_s, VT = params
+
+        if(z.ndim == 2):
+            householder_fun = vmap(householder_prod_transpose, in_axes=(0, None))
+        else:
+            householder_fun = householder_prod_transpose
+
+        x = householder_fun(z, U)
+        x = x*np.exp(-log_s)
+        x = householder_fun(x, VT)
+        log_det = log_s.sum()
+        return log_pz + log_det, x, state
 
     return init_fun, forward, inverse
 
@@ -1277,265 +1467,13 @@ def Affine(*args, mode='LDU', **kwargs):
     """
     if(mode == 'LDU'):
         return AffineLDU(*args, **kwargs)
+    elif(mode == 'SVD'):
+        return AffineSVD(*args, **kwargs)
     else:
         assert 0, 'Invalid choice of affine backend'
 
-def pinv_logdet(A, **kwargs):
-    # language=rst
-    """
-    Compute the volume change of an affine transformation
-
-    :param A: Tall matrix
-    """
-    ATA = A.T@A
-    return -0.5*np.linalg.slogdet(ATA)[1]
-
-def pinv(A, **kwargs):
-    # language=rst
-    """
-    Compute pseudo inverse of a tall matrix
-
-    :param A: Tall matrix
-    """
-    ATA = A.T@A
-    return np.linalg.inv(ATA)@A.T
-
-@jit
-def upper_cho_solve(chol, x):
-    return jax.scipy.linalg.cho_solve((chol, True), x)
-
-def AffineGaussianPriorFullCov(out_dim, A_init=glorot_normal(), Sigma_chol_init=normal(), name='unnamed'):
-    """ Analytic solution to int N(z|0,I)N(x|Az,Sigma)dz.
-        Allows normalizing flow to start in different dimension.
-
-        Args:
-    """
-    triangular_indices = None
-    def init_fun(key, input_shape, condition_shape):
-        output_shape = input_shape[:-1] + (out_dim,)
-        k1, k2 = random.split(key, 2)
-
-        # Initialize the affine matrix
-        A = A_init(k1, (input_shape[-1], out_dim))
-
-        # Initialize the cholesky decomposition of the covariance matrix
-        nonlocal triangular_indices
-        dim = input_shape[-1]
-        triangular_indices = upper_triangular_indices(dim)
-        flat_dim = n_elts_upper_triangular(dim)
-        Sigma_chol_flat = Sigma_chol_init(k2, (flat_dim,))
-
-        params = (A, Sigma_chol_flat)
-        state = ()
-        return name, output_shape, params, state
-
-    def forward(params, state, log_px, x, condition, **kwargs):
-        A, Sigma_chol_flat = params
-        x_dim, z_dim = A.shape
-
-        # Need to make the diagonal positive
-        Sigma_chol = Sigma_chol_flat[triangular_indices]
-
-        diag = np.diag(Sigma_chol)
-        Sigma_chol = index_update(Sigma_chol, np.diag_indices(Sigma_chol.shape[0]), np.exp(diag))
-
-        Sigma_inv_A = jax.scipy.linalg.cho_solve((Sigma_chol, True), A)
-        ATSA = np.eye(z_dim) + A.T@Sigma_inv_A
-        ATSA_inv = np.linalg.inv(ATSA)
-
-        if(x.ndim == 1):
-            z = np.einsum('ij,j->i', ATSA_inv@Sigma_inv_A.T, x)
-            x_proj = np.einsum('ij,j->i', Sigma_inv_A, z)
-            a = upper_cho_solve(Sigma_chol, x)
-        elif(x.ndim == 2):
-            z = np.einsum('ij,bj->bi', ATSA_inv@Sigma_inv_A.T, x)
-            x_proj = np.einsum('ij,bj->bi', Sigma_inv_A, z)
-            a = vmap(partial(upper_cho_solve, Sigma_chol))(x)
-        else:
-            assert 0, 'Got an invalid shape.  x.shape: %s'%(str(x.shape))
-
-        log_hx = -0.5*np.sum(x*(a - x_proj), axis=-1)
-        log_hx -= 0.5*np.linalg.slogdet(ATSA)[1]
-        log_hx -= diag.sum()
-        log_hx -= 0.5*x_dim*np.log(2*np.pi)
-        return log_px + log_hx, z, state
-
-    def inverse(params, state, log_pz, z, condition, **kwargs):
-        # Passing back through the network, we just need to sample from N(x|Az,Sigma).
-        # Assume we have already sampled z ~ N(0,I)
-        A, Sigma_chol_flat = params
-
-        # Compute Az
-        if(z.ndim == 1):
-            x = np.einsum('ij,j->i', A, z)
-        elif(z.ndim == 2):
-            x = np.einsum('ij,bj->bi', A, z)
-        else:
-            assert 0, 'Got an invalid shape.  z.shape: %s'%(str(z.shape))
-
-        # To ensure we get the same log likelihood value as if we went backwards
-        log_px, _, state = forward(params, state, log_pz, x, condition, **kwargs)
-        return log_px, x, state
-
-    return init_fun, forward, inverse
-
-def AffineGaussianPriorDiagCov(out_dim, A_init=glorot_normal(), name='unnamed'):
-    """ Analytic solution to int N(z|0,I)N(x|Az,Sigma)dz.
-        Allows normalizing flow to start in different dimension.
-
-        Args:
-    """
-    def init_fun(key, input_shape, condition_shape):
-        output_shape = input_shape[:-1] + (out_dim,)
-        A = A_init(key, (input_shape[-1], out_dim))
-        log_diag_cov = np.zeros(input_shape[-1])
-        params = (A, log_diag_cov)
-        state = ()
-        return name, output_shape, params, state
-
-    def forward(params, state, log_px, x, condition, **kwargs):
-        A, log_diag_cov = params
-        diag_cov = np.exp(log_diag_cov)
-
-        x_dim, z_dim = A.shape
-        ATSA = np.eye(z_dim) + (A.T/diag_cov)@A
-        ATSA_inv = np.linalg.inv(ATSA)
-
-        if(x.ndim == 1):
-            z = np.einsum('ij,j->i', ATSA_inv@A.T/diag_cov, x)
-            x_proj = A@z/diag_cov
-        elif(x.ndim == 2):
-            z = np.einsum('ij,bj->bi', ATSA_inv@A.T/diag_cov, x)
-            x_proj = np.einsum('ij,bj->bi', A, z)/diag_cov
-        else:
-            assert 0, 'Got an invalid shape.  x.shape: %s'%(str(x.shape))
-
-        log_hx = -0.5*np.sum(x*(x/diag_cov - x_proj), axis=-1)
-        log_hx -= 0.5*np.linalg.slogdet(ATSA)[1]
-        log_hx -= 0.5*log_diag_cov.sum()
-        log_hx -= 0.5*x_dim*np.log(2*np.pi)
-        return log_px + log_hx, z, state
-
-    def inverse(params, state, log_pz, z, condition, **kwargs):
-        # Passing back through the network, we just need to sample from N(x|Az,Sigma).
-        # Assume we have already sampled z ~ N(0,I)
-        A, log_diag_cov = params
-
-        # Compute Az
-        if(z.ndim == 1):
-            x = np.einsum('ij,j->i', A, z)
-        elif(z.ndim == 2):
-            x = np.einsum('ij,bj->bi', A, z)
-        else:
-            assert 0, 'Got an invalid shape.  z.shape: %s'%(str(z.shape))
-
-        # To ensure we get the same log likelihood value as if we went backwards
-        log_px, _, state = forward(params, state, log_pz, x, condition, **kwargs)
-        return log_px, x, state
-
-    return init_fun, forward, inverse
-
-def TallAffine(flow, out_dim, n_training_importance_samples=1, A_init=glorot_normal(), name='unnamed'):
-    """ Affine function to go up a dimension
-
-        Args:
-    """
-    _init_fun, _forward, _inverse = flow
-
-    def init_fun(key, input_shape, condition_shape):
-        x_shape = input_shape
-        output_shape = x_shape[:-1] + (out_dim,)
-        keys = random.split(key, 2)
-        A = A_init(keys[0], (x_shape[-1], out_dim))
-        flow_name, flow_output_shape, flow_params, flow_state = _init_fun(keys[1], output_shape, condition_shape)
-        log_diag_cov = np.ones(input_shape[-1])*-2.0
-        params = (A, flow_params, log_diag_cov)
-        state = flow_state
-        return name, flow_output_shape, params, flow_state
-
-    def apply_forward(params, state, log_px, condition, z, sigma_ATA_chol, key, **kwargs):
-        A, flow_params, log_diag_cov = params
-        diag_cov = np.exp(log_diag_cov)
-        flow_state = state
-
-        k1, k2 = random.split(key, 2)
-
-        # Sample from N(z|\mu(x),\Sigma(x))
-        noise = random.normal(k1, z.shape)
-        if(z.ndim == 1):
-            z += sigma_ATA_chol@noise
-        elif(z.ndim == 2):
-            z += np.einsum('ij,bj->bi', sigma_ATA_chol, noise)
-        else:
-            assert 0, 'Can only handle 1d or 2d inputs'
-
-        return _forward(flow_params, state, log_px, z, condition, key=k2, **kwargs)
-
-    def forward(params, state, log_px, x, condition, **kwargs):
-        A, flow_params, log_diag_cov = params
-        diag_cov = np.exp(log_diag_cov)
-        flow_state = state
-
-        # Compute the regularized pseudoinverse
-        ATSA = A.T/diag_cov@A
-        ATSA_inv = np.linalg.inv(ATSA)
-
-        if(x.ndim == 1):
-            z = np.einsum('ij,j->i', ATSA_inv@A.T/diag_cov, x)
-            x_proj = np.einsum('ij,j->i', A, z)/diag_cov
-        elif(x.ndim == 2):
-            z = np.einsum('ij,bj->bi', ATSA_inv@A.T/diag_cov, x)
-            x_proj = np.einsum('ij,bj->bi', A, z)/diag_cov
-        else:
-            assert 0, 'Can only handle 1d or 2d inputs'
-
-        # Get the terms that don't depend on z
-        dim_x, dim_z = A.shape
-        log_hx = -0.5*np.sum(x*(x/diag_cov - x_proj), axis=-1)
-        log_hx -= 0.5*np.linalg.slogdet(ATSA)[1]
-        log_hx -= 0.5*log_diag_cov.sum()
-        log_hx -= 0.5*(dim_x - dim_z)*np.log(2*np.pi)
-
-        key = kwargs.pop('key', None)
-        if(key is None):
-            # Then we're just getting the mean!
-            return _forward(flow_params, flow_state, log_px + log_hx, z, condition, **kwargs)
-
-        # Otherwise, we need to importance sample
-
-        # Get the conv noise
-        sigma_ATA_chol = np.linalg.cholesky(ATSA_inv)
-
-        filled_forward = partial(apply_forward, params, state, log_px, condition, z, sigma_ATA_chol, **kwargs)
-        n_importance_samples = kwargs.get('n_importance_samples', n_training_importance_samples)
-        keys = random.split(key, n_importance_samples)
-
-        log_pxs, zs, updated_states = vmap(filled_forward)(keys)
-        return log_hx + logsumexp(log_pxs, axis=0) - np.log(n_importance_samples), np.mean(zs, axis=0), updated_states
-
-    def inverse(params, state, log_pz, z, condition, **kwargs):
-        A, flow_params, log_sigma = params
-        sigma = np.exp(log_sigma)
-        flow_state = state
-
-        log_pz, z, updated_state = _inverse(flow_params, flow_state, log_pz, z, condition, **kwargs)
-
-        if(z.ndim == 1):
-            x = np.einsum('ij,j->i', A, z)
-        elif(z.ndim == 2):
-            x = np.einsum('ij,bj->bi', A, z)
-        else:
-            assert 0, 'Got an invalid shape.  z.shape: %s'%(str(z.shape))
-
-        ATA = A.T@A
-
-        # The log determinant here is probably wrong
-        return log_pz - 0.5*np.linalg.slogdet(ATA)[1], x, updated_state
-
-    return init_fun, forward, inverse
-
 def GeneralAffine(flow, out_dim, prior=1e3, n_training_importance_samples=8, A_init=glorot_normal(), name='unnamed'):
-    """ Affine function to change dimensions
+    """ Affine function to change dimensions.  Doesn't actually work!
 
         Args:
             flow - The normalizing flow between this point and the latent dim
@@ -1714,6 +1652,11 @@ def LeakyReLU(alpha=0.01, name='unnamed'):
 
         log_dx_dz = np.where(x > 0, 0, np.log(alpha))
         log_det = log_dx_dz.sum(axis=-1)
+
+        if(log_det.ndim > 1):
+            # Then we have an image and have to sum over the height and width axes
+            log_det = log_det.sum(axis=(-2, -1))
+
         return log_px + log_det, z, state
 
     def inverse(params, state, log_pz, z, condition, **kwargs):
@@ -1721,6 +1664,10 @@ def LeakyReLU(alpha=0.01, name='unnamed'):
 
         log_dx_dz = np.where(z > 0, 0, np.log(alpha))
         log_det = log_dx_dz.sum(axis=-1)
+
+        if(log_det.ndim > 1):
+            # Then we have an image and have to sum over the height and width axes
+            log_det = log_det.sum(axis=(-2, -1))
 
         return log_pz + log_det, x, state
 
@@ -1893,7 +1840,7 @@ def MAF(hidden_layer_sizes,
     def init_fun(key, input_shape, condition_shape):
         # Ugly, but saves us from initializing when calling function
         nonlocal made_apply_fun
-        made_init_fun, made_apply_fun = GaussianMADE(input_shape[-1], hidden_layer_sizes, reverse=reverse, method=method, key=key, name=name, **kwargs)
+        made_init_fun, made_apply_fun = spp.GaussianMADE(input_shape[-1], hidden_layer_sizes, reverse=reverse, method=method, key=key, name=name, **kwargs)
         _, (mu_shape, alpha_shape), params, state = made_init_fun(key, input_shape)
         return name, input_shape, params, state
 
@@ -1993,7 +1940,7 @@ def MaskedAffineCoupling(transform_fun, axis=-1, mask_type='channel_wise', top_l
         (log_s, t), updated_state = apply_fun(transform_params, state, network_input, **kwargs)
 
         # To control the variance
-        log_s = np.tanh(scale)*log_s + 2*np.tanh(shift)
+        log_s = scale*log_s + shift
 
         # Remask the result and compute the output
         log_s, t = mask*log_s, mask*t
@@ -2012,7 +1959,7 @@ def MaskedAffineCoupling(transform_fun, axis=-1, mask_type='channel_wise', top_l
         (log_s, t), updated_state = apply_fun(transform_params, state, network_input, **kwargs)
 
         # To control the variance
-        log_s = np.tanh(scale)*log_s + 2*np.tanh(shift)
+        log_s = scale*log_s + shift
 
         # Remask the result and compute the output
         log_s, t = mask*log_s, mask*t
@@ -2088,7 +2035,7 @@ def AffineCoupling(transform_fun, axis=-1, name='unnamed'):
 
 ################################################################################################################
 
-def GLOWBlock(transform_fun, mask_type='channel_wise', name='unnamed'):
+def GLOWBlock(transform_fun, mask_type='channel_wise', top_left_zero=False, name='unnamed'):
     # language=rst
     """
     One step of GLOW https://arxiv.org/pdf/1807.03039.pdf
@@ -2098,7 +2045,7 @@ def GLOWBlock(transform_fun, mask_type='channel_wise', name='unnamed'):
     """
     return sequential_flow(ActNorm(name='%s_act_norm'%name),
                            OnebyOneConv(name='%s_one_by_one_conv'%name),
-                           MaskedAffineCoupling(transform_fun, mask_type=mask_type, name='%s_affine_coupling'%name))
+                           MaskedAffineCoupling(transform_fun, mask_type=mask_type, top_left_zero=top_left_zero, name='%s_affine_coupling'%name))
 
 ################################################################################################################
 
@@ -2109,7 +2056,11 @@ fft_double_channel_vmap = vmap(fft_channel_vmap, in_axes=(2,), out_axes=2)
 inv_height_vmap = vmap(np.linalg.inv)
 inv_height_width_vmap = vmap(inv_height_vmap)
 
-slogdet_height_width_vmap = vmap(vmap(lambda x: np.linalg.slogdet(x)[1]))
+# slogdet_height_width_vmap = vmap(vmap(lambda x: np.linalg.slogdet(x)[1]))
+def complex_slogdet(x):
+    D = np.block([[x.real, -x.imag], [x.imag, x.real]])
+    return 0.25*np.linalg.slogdet(D@D.T)[1]
+slogdet_height_width_vmap = vmap(vmap(complex_slogdet))
 
 def CircularConv(filter_size, kernel_init=glorot_normal(), name='unnamed'):
     # language=rst
@@ -2121,7 +2072,9 @@ def CircularConv(filter_size, kernel_init=glorot_normal(), name='unnamed'):
     def init_fun(key, input_shape, condition_shape):
         height, width, channel = input_shape
         kernel = kernel_init(key, filter_size + (channel, channel))
-        params = ( kernel, )
+        assert filter_size[0] <= height, 'filter_size: %s, input_shape: %s'%(filter_size, input_shape)
+        assert filter_size[1] <= width, 'filter_size: %s, input_shape: %s'%(filter_size, input_shape)
+        params = (kernel,)
         state = ()
         return name, input_shape, params, state
 

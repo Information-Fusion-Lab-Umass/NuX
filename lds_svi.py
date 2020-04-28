@@ -28,6 +28,15 @@ def easy_niw(key, n):
 
     return mu, kappa, psi, nu
 
+def easy_niw_params(key, n):
+    keys = random.split(key, 2)
+    mu = np.zeros((n,))
+    Sigma = np.eye(n)*10
+    # mu = random.normal(keys[0], (n,))
+    # Sigma = random.normal(keys[1], (n, n))
+    # Sigma = Sigma.T@Sigma + np.eye(n)
+    return mu, Sigma
+
 @partial(jit, static_argnums=(1,))
 def easy_niw_nat(key, n):
     return niw_std_to_nat(*easy_niw(key, n))
@@ -69,8 +78,22 @@ def niw_logZ_from_nat(n1, n2, n3, n4):
 def niw_expected_stats(n1, n2, n3, n4):
     ret = jit(jax.grad(niw_logZ_from_nat, argnums=(0, 1, 2, 3)))(n1, n2, n3, n4)
     Sigma_inv, mu0TSigma_invmu0, mu0TSigma_inv, logdetSigma = ret
-    Sigma_inv = 0.5*(Sigma_inv.T + Sigma_inv)
+    Sigma_inv = 0.5*(Sigma_inv.T + Sigma_inv) + np.eye(Sigma_inv.shape[0])*1e-5
     return Sigma_inv, mu0TSigma_invmu0, mu0TSigma_inv, logdetSigma
+
+@jit
+def niw_params_to_stats(mu, Sigma):
+    Sigma_inv = np.linalg.inv(Sigma)
+    mu0TSigma_invmu0 = mu.T@Sigma_inv@mu
+    mu0TSigma_inv = mu.T@Sigma_inv
+    logdetSigma = np.linalg.slogdet(Sigma)[1]
+    return Sigma_inv, mu0TSigma_invmu0, mu0TSigma_inv, logdetSigma
+
+# @jit
+def niw_stats_to_ml_params(mu, Sigma, t1, t2, t3, t4):
+    mu_star = -0.5*t3/t2
+    Sigma_star = 1/t4*(t1 + t2*np.outer(mu, mu) + 0.5*(np.outer(mu, t3) + np.outer(t3, mu)))
+    return mu_star, Sigma_star
 
 def niw_sample(mu, kappa, psi, nu):
     Sigma = scipy.stats.invwishart.rvs(scale=psi, df=int(nu))
@@ -94,6 +117,15 @@ def easy_mniw(key, n, p):
     nu = n + p + 1.0
 
     return M, V, psi, nu
+
+def easy_mniw_params(key, n, p):
+    keys = random.split(key, 2)
+    A = np.eye((n, p))
+    Sigma = np.eye(n)*10
+    # A = random.normal(keys[0], (n, p))
+    # Sigma = random.normal(keys[1], (n, n))
+    # Sigma = Sigma.T@Sigma + np.eye(n)
+    return A, Sigma
 
 @partial(jit, static_argnums=(1, 2))
 def easy_mniw_nat(key, n, p):
@@ -137,15 +169,26 @@ def mniw_logZ_from_nat(n1, n2, n3, n4):
     return mniw_logZ_from_std(M, V, psi, nu)
 
 @jit
+def mniw_params_to_stats(A, Sigma):
+    Sigma_inv = np.linalg.inv(Sigma)
+    ATSigma_invA = A.T@Sigma_inv@A
+    ATSigma_inv = A.T@Sigma_inv
+    logdetSigma = np.linalg.slogdet(Sigma)[1]
+    return Sigma_inv, ATSigma_invA, ATSigma_inv, logdetSigma
+
+@jit
+def mniw_stats_to_ml_params(A, Sigma, t1, t2, t3, t4):
+    A_star = -0.5*t3.T@np.linalg.inv(t2)
+    Sigma_star = 1/t4*(t1 + A@t2@A.T + 0.5*(A@t3+t3.T@A.T))
+    return A_star, Sigma_star
+
+@jit
 def mniw_expected_stats(n1, n2, n3, n4):
     ret = jit(jax.grad(mniw_logZ_from_nat, argnums=(0, 1, 2, 3)))(n1, n2, n3, n4)
     Sigma_inv, ATSigma_invA, ATSigma_inv, logdetSigma = ret
-    Sigma_inv = 0.5*(Sigma_inv.T + Sigma_inv)
-    ATSigma_invA = 0.5*(ATSigma_invA.T + ATSigma_invA)
+    Sigma_inv = 0.5*(Sigma_inv.T + Sigma_inv) + np.eye(Sigma_inv.shape[0])*1e-5
+    ATSigma_invA = 0.5*(ATSigma_invA.T + ATSigma_invA) #+ np.eye(ATSigma_invA.shape[0])*1e-5
     return Sigma_inv, ATSigma_invA, ATSigma_inv, logdetSigma
-
-# def mniw_nat_from_expected_stats(t1, t2, t3, t4):
-#     return n1, n2, n3, n4
 
 def mniw_sample(M, V, psi, nu):
     Sigma = scipy.stats.invwishart.rvs(scale=psi, df=int(nu))
@@ -184,6 +227,7 @@ def gaussian_std_to_nat(mu, Sigma):
 @jit
 def gaussian_nat_to_std(J, h):
     Sigma = np.linalg.inv(J)
+    # Sigma = 0.5*(Sigma.T + Sigma) + np.eye(Sigma.shape[0])*1e-5
     mu = Sigma@h
     return mu, Sigma
 
@@ -220,6 +264,7 @@ def regression_posterior_std_to_nat(E_CR, y):
     R_inv_y = R_inv@y
 
     J = CTR_invC
+    J = 0.5*(J.T + J) + np.eye(J.shape[0])*1e-5
     h = CTR_inv@y
 
     logZ = 0.5*np.dot(y, R_inv_y)
@@ -241,6 +286,7 @@ def gaussian_integrate_x(J11, J12, J22, h1, h2, logZ):
     logZy += np.log(np.diag(J22_chol)).sum()
     logZy -= 0.5*hy.shape[0]*np.log(2*np.pi)
 
+    Jy = 0.5*(Jy.T + Jy) + np.eye(Jy.shape[0])*1e-5
     return Jy, hy, logZy
 
 @jit
@@ -329,6 +375,7 @@ def qx_expected_stats_body_vi(params, forward_messages, backward_messages, next_
 
     # Compute E[x_{t}].  These the smoothed means
     Js, hs, logZs = Jf + Jb, hf + hb, logZf + logZb
+    Js = 0.5*(Js.T + Js) + np.eye(Js.shape[0])*1e-5
     Ext, Sigmas = gaussian_nat_to_std(Js, hs)
 
     # Compute the covariance matrix between x_{t} and x_{t+1}
@@ -338,8 +385,10 @@ def qx_expected_stats_body_vi(params, forward_messages, backward_messages, next_
                       [J12.T                       , J22 + Jf]])
     h_hat = np.hstack([hb_next + hyt*mask_val + h1, h2 + hf])
 
+    J_hat = 0.5*(J_hat.T + J_hat) + np.eye(J_hat.shape[0])*1e-5
     mu_hat, Sigma_hat = gaussian_nat_to_std(J_hat, h_hat)
     expectations = np.outer(mu_hat, mu_hat) + Sigma_hat
+    expectations = 0.5*(expectations.T + expectations) + np.eye(expectations.shape[0])*1e-5
 
     x_dim = h1.shape[0]
     Extxt = expectations[x_dim:, x_dim:] # Bottom right
@@ -381,28 +430,7 @@ def qx_expected_stats_and_emission_grad_vi(params, us, ys, mask):
     return Ext, Extxt, Extxtp1, dy, logpy
 
 @jit
-def lds(us, masks, params, ys):
-    qmu0Sigma0_nat_params, qASigma_nat_params, qCR_nat_params = params
-
-    # Compute the expected sufficient stats of q(mu0, Sigma0), q(A, Sigma) and q(C, R)
-    E_mu0Sigma0 = niw_expected_stats(qmu0Sigma0_nat_params)
-    E_ASigma = mniw_expected_stats(qASigma_nat_params)
-    E_CR = mniw_expected_stats(qCR_nat_params)
-    vi_params = (E_mu0Sigma0, E_ASigma, E_CR)
-
-    # Compute the expected sufficient stats of q(x)
-    Ext, Extxt, Extxtp1, dy, logpy = qx_expected_stats_and_emission_grad_vi(vi_params, us, ys, mask)
-    return logpy, Ext
-
-@jit
-def lds_qx_stats(us, mask, params, ys):
-    qmu0Sigma0_nat_params, qASigma_nat_params, qCR_nat_params = params
-
-    # Compute the expected sufficient stats of q(mu0, Sigma0), q(A, Sigma) and q(C, R)
-    E_mu0Sigma0 = niw_expected_stats(*qmu0Sigma0_nat_params)
-    E_ASigma = mniw_expected_stats(*qASigma_nat_params)
-    E_CR = mniw_expected_stats(*qCR_nat_params)
-    vi_params = (E_mu0Sigma0, E_ASigma, E_CR)
+def lds_qx_stats(us, mask, vi_params, ys):
 
     # Compute the expected sufficient stats of q(x)
     Ext, Extxt, Extxtp1, dy, logpy = qx_expected_stats_and_emission_grad_vi(vi_params, us, ys, mask)
@@ -444,7 +472,15 @@ def lds_qx_stats(us, mask, params, ys):
 
 @partial(custom_jvp, nondiff_argnums=(0, 1, 2, 3, 4, 5))
 def lds_svi(us, mask, priors, T, rho, theta, y_batch):
-    Ext, logpy, qx_stats, dy = lds_qx_stats(us, mask, theta, y_batch)
+    qmu0Sigma0_nat_params, qASigma_nat_params, qCR_nat_params = theta
+
+    # Compute the expected sufficient stats of q(mu0, Sigma0), q(A, Sigma) and q(C, R)
+    E_mu0Sigma0 = niw_expected_stats(*qmu0Sigma0_nat_params)
+    E_ASigma = mniw_expected_stats(*qASigma_nat_params)
+    E_CR = mniw_expected_stats(*qCR_nat_params)
+    vi_params = (E_mu0Sigma0, E_ASigma, E_CR)
+
+    Ext, logpy, qx_stats, dy = lds_qx_stats(us, mask, vi_params, y_batch)
 
     # SVI update
     stat_scale = T/y_batch.shape[0]
@@ -460,7 +496,15 @@ def lds_svi(us, mask, priors, T, rho, theta, y_batch):
 def lds_svi_jvp(us, mask, priors, T, rho, theta, primals, tangents):
     y_batch, = primals
     y_batch_dot, = tangents
-    Ext, logpy, qx_stats, dy = lds_qx_stats(us, mask, theta, y_batch)
+
+    qmu0Sigma0_nat_params, qASigma_nat_params, qCR_nat_params = theta
+
+    # Compute the expected sufficient stats of q(mu0, Sigma0), q(A, Sigma) and q(C, R)
+    E_mu0Sigma0 = niw_expected_stats(*qmu0Sigma0_nat_params)
+    E_ASigma = mniw_expected_stats(*qASigma_nat_params)
+    E_CR = mniw_expected_stats(*qCR_nat_params)
+    vi_params = (E_mu0Sigma0, E_ASigma, E_CR)
+    Ext, logpy, qx_stats, dy = lds_qx_stats(us, mask, vi_params, y_batch)
 
     # SVI update
     stat_scale = T/y_batch.shape[0]
@@ -480,7 +524,3 @@ def lds_svi_jvp(us, mask, priors, T, rho, theta, primals, tangents):
 
     tangents_out = (dy_batch, dExt, dupdated_theta)
     return primals_out, tangents_out
-
-"""
-FOR EM, NEED TO FIND MAPPING FROM EXPECTED SUFFICIENT STATS TO NATURAL PARAMETERS
-"""
