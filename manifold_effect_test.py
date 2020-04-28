@@ -28,15 +28,15 @@ def create_manifold_comparison_network(train_data, noise_scale, latent_dim, base
     flow = create_network_head(train_data, noise_scale)
 
     top_flow = sequential_flow(flow,
-                               MAF([512]*3),
+                               MAF([1024]*5),
                                Reverse(),
-                               MAF([512]*3),
+                               MAF([1024]*5),
                                Reverse(),
-                               MAF([512]*3),
+                               MAF([1024]*5),
                                Reverse(),
-                               MAF([512]*3),
+                               MAF([1024]*5),
                                Reverse(),
-                               MAF([512]*3))
+                               MAF([1024]*5))
 
     if(latent_dim == None or latent_dim == 'baseline'):
         baseline = True
@@ -80,7 +80,7 @@ def experiment(x_train, x_test, noise_scale, data_name, key, latent_dim, baselin
 
     # Train
     batch_size = 1024
-    n_iters = 100
+    n_iters = 50000
     test_interval = 10
     train_nll = []
     test_nll = []
