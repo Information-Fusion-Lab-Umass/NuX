@@ -17,11 +17,11 @@ import platform
 
 import numpy as np
 import pandas as pd
+import scipy.stats
 
 import matplotlib.pyplot as plt
-from tqdm import tqdm_notebook, tqdm
+from tqdm import tqdm_notebook
 from functools import partial
-from debug import *
 
 def download_url(data_folder, filename, url):
     # language=rst
@@ -78,7 +78,7 @@ def download_mnist(data_folder, base_url):
 
     return train_images, train_labels, test_images, test_labels
 
-def get_mnist_data(quantize_level_bits=2, data_folder='data/mnist/', kind='digits'):
+def get_mnist_data(quantize_level_bits=2, data_folder='/tmp/mnist/', kind='digits'):
     # language=rst
     """
     Retrive an mnist dataset.  Either get the digits or fashion datasets.
@@ -180,7 +180,7 @@ def load_cifar10(batches_data_folder):
     test_labels = test_labels.astype(np.int32).T
     return train_images, train_labels, test_images, test_labels
 
-def get_cifar10_data(quantize_level_bits=2, data_folder='data/cifar10/'):
+def get_cifar10_data(quantize_level_bits=2, data_folder='/tmp/cifar10/'):
     # language=rst
     """
     Load the cifar 10 dataset.
@@ -206,24 +206,35 @@ def get_cifar10_data(quantize_level_bits=2, data_folder='data/cifar10/'):
 
 ############################################################################################################################################################
 
-def get_celeb_dataset(quantize_level_bits=8, strides=(5, 5), crop=(12, 4), n_images=20000, data_folder='data/img_align_celeba'):
+def get_celeb_dataset(quantize_level_bits=8, strides=(5, 5), crop=(12, 4), n_images=20000, data_folder='.'):
     # language=rst
     """
     Load the celeb A dataset.
 
     :param data_folder: Where to download the data to
     """
-    celeb_dir = data_folder
+    celeb_dir = os.path.join(data_folder, 'img_align_celeba')
 
     if(os.path.exists(celeb_dir) == False):
         assert 0, 'Need to manually download the celeb-A dataset.  Download the zip file from here: %s'%('https://drive.google.com/open?id=0B7EVK8r0v71pZjFTYXZWM3FlRnM')
 
-    all_files = glob.glob('data/img_align_celeba/*.jpg')[:n_images]
+    def file_iter():
+        for root, dirs, files in os.walk(celeb_dir):
+            for file in files:
+                if(file.endswith('.jpg')):
+                    path = os.path.join(root, file)
+                    yield path
+
+    all_files = []
+    for path in file_iter():
+        all_files.append(path)
+        if(len(all_files) == n_images):
+            break
 
     quantize_factor = 256/(2**quantize_level_bits)
 
     images = []
-    for path in tqdm(all_files):
+    for path in tqdm_notebook(all_files):
         im = plt.imread(path, format='jpg')
         im = im[::strides[0],::strides[1]][crop[0]:,crop[1]:]
         images.append(im//quantize_factor)
@@ -236,7 +247,7 @@ def get_celeb_dataset(quantize_level_bits=8, strides=(5, 5), crop=(12, 4), n_ima
 
 ############################################################################################################################################################
 
-def get_BSDS300_data(quantize_level_bits=8, strides=(1, 1), crop=(0, 0), data_folder='data/BSDS300/'):
+def get_BSDS300_data(quantize_level_bits=8, strides=(1, 1), crop=(0, 0), data_folder='/tmp/BSDS300/'):
     # language=rst
     """
     Load the BSDS300 dataset.
@@ -315,9 +326,17 @@ def decorrelate_data(data, threshold=0.98):
         col_correlation = np.sum(data.corr() > threshold, axis=1)
     return data
 
+def remove_outliers_in_df(df, max_z_score=2):
+    z_scores = scipy.stats.zscore(df)
+    return df[np.all(np.abs(z_scores) < max_z_score, axis=1)]
+
+def whiten_data(x):
+    U, _, VT = np.linalg.svd(x, full_matrices=False)
+    return np.dot(U, VT)
+
 ############################################################################################################################################################
 
-def get_gas_data(train_test_split=True, decorrelate=True, normalize=False, return_dequantize_scale=True, co_only=True, data_folder='data/gas/', **kwargs):
+def get_gas_data(train_test_split=True, decorrelate=True, normalize=False, return_dequantize_scale=True, remove_outliers=True, whiten=True, co_only=True, data_folder='/tmp/gas/', **kwargs):
     # language=rst
     """
     Load the gas dataset.  Adapted from NSF repo https://github.com/bayesiains/nsf/tree/master/data
@@ -360,13 +379,24 @@ def get_gas_data(train_test_split=True, decorrelate=True, normalize=False, retur
         co_data = (co_data - co_data.mean())/co_data.std()
         methane_data = (methane_data - methane_data.mean())/methane_data.std()
 
+    # Column 4 is really weird
+    co_data.drop(columns=[4], inplace=True)
+
     # The data only contains 2 decimals, so do uniform dequantization
-    co_dequantization_scale = np.ones(co_data.shape[1])*0.01
-    methane_dequantization_scale = np.ones(methane_data.shape[1])*0.01
+    co_dequantization_scale = np.ones(co_data.shape[1])*0.01*0.0
+    methane_dequantization_scale = np.ones(methane_data.shape[1])*0.01*0.0
+
+    # Remove outliers
+    if(remove_outliers):
+        remove_outliers_in_df(co_data)
 
     # Switch from pandas to numpy
     co_data = co_data.to_numpy(dtype=np.float32)
     methane_data = methane_data.to_numpy(dtype=np.float32)
+
+    # Whiten the data
+    if(whiten):
+        co_data = whiten_data(co_data)
 
     # Train test split
     if(train_test_split):
@@ -388,7 +418,7 @@ def get_gas_data(train_test_split=True, decorrelate=True, normalize=False, retur
 
 ############################################################################################################################################################
 
-def get_miniboone_data(train_test_split=True, decorrelate=False, normalize=False, return_dequantize_scale=True, data_folder='data/miniboone', **kwargs):
+def get_miniboone_data(train_test_split=True, decorrelate=False, normalize=False, return_dequantize_scale=True, remove_outliers=True, whiten=True, data_folder='/tmp/miniboone', **kwargs):
     # language=rst
     """
     Load the miniboone dataset.  No dequantization is needed here, they use a lot of decimals.
@@ -418,6 +448,10 @@ def get_miniboone_data(train_test_split=True, decorrelate=False, normalize=False
         threshold = kwargs.get('threshold', 0.99)
         data = decorrelate_data(data, threshold=threshold)
 
+    # Remove outliers
+    if(remove_outliers):
+        remove_outliers_in_df(data)
+
     # Normalize the data.  If we're going to use dequantization, don't do this.  Instead
     # seed an actnorm layer with the mean and std.
     if(normalize == True):
@@ -425,6 +459,10 @@ def get_miniboone_data(train_test_split=True, decorrelate=False, normalize=False
 
     # Switch from pandas to numpy
     data = data.to_numpy(dtype=np.float32)
+
+    # Whiten the data
+    if(whiten):
+        data = whiten_data(data)
 
     # Train test split
     if(train_test_split):
@@ -440,7 +478,7 @@ def get_miniboone_data(train_test_split=True, decorrelate=False, normalize=False
 
 ############################################################################################################################################################
 
-def get_power_data(train_test_split=True, decorrelate=False, normalize=False, return_dequantize_scale=True, data_folder='data/power/', **kwargs):
+def get_power_data(train_test_split=True, decorrelate=False, normalize=False, return_dequantize_scale=True, remove_outliers=True, whiten=True, data_folder='/tmp/power/', **kwargs):
     # language=rst
     """
     Load the power dataset.
@@ -476,8 +514,12 @@ def get_power_data(train_test_split=True, decorrelate=False, normalize=False, re
         threshold = kwargs.get('threshold', 0.99)
         data = decorrelate_data(data, threshold=threshold)
 
+    # Remove outliers
+    if(remove_outliers):
+        remove_outliers_in_df(data)
+
     # We have different dequantization scales
-    dequantize_scale = np.array([0.001, 0.001, 0.01, 0.1, 1.0, 1.0, 1.0, 0.0])
+    dequantize_scale = np.array([0.001, 0.001, 0.01, 0.1, 1.0, 1.0, 1.0, 0.0])*0.0
 
     # Normalize the data.  If we're going to use dequantization, don't do this.  Instead
     # seed an actnorm layer with the mean and std.
@@ -486,6 +528,10 @@ def get_power_data(train_test_split=True, decorrelate=False, normalize=False, re
 
     # Switch from pandas to numpy
     data = data.to_numpy(dtype=np.float32)
+
+    # Whiten the data
+    if(whiten):
+        data = whiten_data(data)
 
     # Train test split
     if(train_test_split):
@@ -498,7 +544,7 @@ def get_power_data(train_test_split=True, decorrelate=False, normalize=False, re
 
 ############################################################################################################################################################
 
-def get_hepmass_data(train_test_split=True, decorrelate=False, normalize=False, return_dequantize_scale=True, retrieve_files=['1000_train', '1000_test'], data_folder='data/hepmass/'):
+def get_hepmass_data(train_test_split=True, decorrelate=False, normalize=False, return_dequantize_scale=True, remove_outliers=True, whiten=True, retrieve_files=['1000_train', '1000_test'], data_folder='/tmp/hepmass/'):
     # language=rst
     """
     Load the HEPMASS dataset.
@@ -550,6 +596,10 @@ def get_hepmass_data(train_test_split=True, decorrelate=False, normalize=False, 
         train_data.drop(columns='# label', inplace=True)
         test_data.drop(columns='# label', inplace=True)
 
+        # Remove outliers
+        if(remove_outliers):
+            remove_outliers_in_df(train_data)
+
         # We don't have to dequantize
         dequantize_scale = np.zeros(train_data.shape[1])
 
@@ -562,6 +612,11 @@ def get_hepmass_data(train_test_split=True, decorrelate=False, normalize=False, 
         train_data = train_data.to_numpy(dtype=np.float32)
         test_data = test_data.to_numpy(dtype=np.float32)
 
+        # Whiten the data
+        if(whiten):
+            whitened_data = whiten_data(np.concatenate([train_data, test_data], axis=0))
+            train_data, test_data = np.split(whitened_data, np.array([train_data.shape[0]]), axis=0)
+
         if(return_dequantize_scale):
             return (train_data, test_data), dequantize_scale
         return train_data, test_data
@@ -571,7 +626,7 @@ def get_hepmass_data(train_test_split=True, decorrelate=False, normalize=False, 
 ############################################################################################################################################################
 
 def uci_loader(datasets=['hepmass', 'gas', 'miniboone', 'power'], data_root='data/'):
-    kwargs = dict(train_test_split=True, decorrelate=True, normalize=False, return_dequantize_scale=True)
+    kwargs = dict(train_test_split=True, decorrelate=False, normalize=False, return_dequantize_scale=True, remove_outliers=False, whiten=True)
 
     for d in datasets:
         if(d == 'hepmass'):
