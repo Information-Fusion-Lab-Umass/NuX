@@ -41,7 +41,9 @@ RUN apt-get update && \
 RUN python -m pip install --upgrade pip && \
     pip uninstall numpy -y && \
     pip install --user numpy scipy pandas bokeh cython networkx graphviz \
-    pygraphviz PyQt5 matplotlib opt_einsum autograd pymc3 recordclass seaborn torch umap-learn tqdm
+    pygraphviz PyQt5 matplotlib opt_einsum autograd pymc3 recordclass seaborn torch umap-learn tqdm \
+    tensorflow-datasets tensorflow-gpu
+
 
 # Set the base directory
 WORKDIR /app

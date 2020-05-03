@@ -1,22 +1,23 @@
 import numpy as onp
 import jax
-from jax import random, jit, vmap, jacobian, grad, value_and_grad
+from jax import random, jit, vmap, jacobian, grad, value_and_grad, pmap
 import jax.nn
 import jax.numpy as np
 from functools import partial, reduce
 from jax.experimental import stax
 from jax.nn.initializers import glorot_normal, normal, ones, zeros
 from jax.ops import index, index_add, index_update
-# from staxplusplus import *
 import staxplusplus as spp
-from jax.flatten_util import ravel_pytree
-from jax.tree_util import tree_multimap
-from jax.tree_util import tree_flatten
 from jax.scipy.special import logsumexp
 from util import is_testing, TRAIN, TEST, householder_prod, householder_prod_transpose
 import util
 from lds_svi import easy_niw_nat, easy_mniw_nat, mniw_params_to_stats, niw_nat_to_std, mniw_nat_to_std, lds_svi, mniw_sample, easy_niw_params, easy_mniw_params, niw_sample, niw_params_to_stats
 from non_dim_preserving import *
+from jax.flatten_util import ravel_pytree
+from jax.tree_util import tree_multimap, tree_flatten
+ravel_pytree = jit(ravel_pytree)
+from tqdm.notebook import tnrange
+from tqdm import tqdm
 
 ################################################################################################################
 
@@ -938,7 +939,6 @@ def CheckerboardCombine(num, name='unnamed'):
 def CheckerboardSqueeze(num=2, name='unnamed'):
     # language=rst
     """
-    Implements Figure 3 here Figure 3 here https://arxiv.org/pdf/1605.08803.pdf.
 
     :param num: Number of components to split into
     """
@@ -1058,6 +1058,69 @@ def CheckerboardUnSqueeze(num=2, name='unnamed'):
         return log_pz, x, state
 
     return init_fun, forward, inverse
+
+def Squeeze(name='unnamed'):
+    # language=rst
+    """
+    Inverse of CheckerboardSqueeze.
+
+    :param num: Number of components to split into
+    """
+    def init_fun(key, input_shape, condition_shape):
+        H, W, C = input_shape
+        assert H%2 == 0
+        assert W%2 == 0
+        output_shape = (H//2, W//2, C*4)
+        params, state = (), ()
+        return name, output_shape, params, state
+
+    def forward(params, state, log_px, x, condition, **kwargs):
+        if(x.ndim == 4):
+            # Handle batching this way
+            return vmap(partial(forward, params, state, log_px, **kwargs), in_axes=(0, None))(x, condition)
+
+        # Turn to (C, H, W)
+        z = x.transpose((2, 0, 1))
+
+        C, H, W = z.shape
+        z = z.reshape((C, H//2, 2, W//2, 2))
+        z = z.transpose((0, 2, 4, 1, 3))
+        z = z.reshape((C*4, H//2, W//2))
+
+        # Turn back to (H, W, C)
+        z = z.transpose((1, 2, 0))
+        return log_px, z, state
+
+    def inverse(params, state, log_pz, z, condition, **kwargs):
+        if(z.ndim == 4):
+            # Handle batching this way
+            return vmap(partial(inverse, params, state, log_pz, **kwargs), in_axes=(0, None))(z, condition)
+
+        # Turn to (C, H, W)
+        x = z.transpose((2, 0, 1))
+
+        C, H, W = x.shape
+        x = x.reshape((C//4, 2, 2, H, W))
+        x = x.transpose((0, 3, 1, 4, 2))
+        x = x.reshape((C//4, H*2, W*2))
+
+        # Turn back to (H, W, C)
+        x = x.transpose((1, 2, 0))
+        return log_pz, x, state
+
+    return init_fun, forward, inverse
+
+def UnSqueeze(name='unnamed'):
+    _, forward, inverse = Squeeze(name=name)
+
+    def init_fun(key, input_shape, condition_shape):
+        H, W, C = input_shape
+        assert C%4 == 0
+        output_shape = (H*2, W*2, C//4)
+        params, state = (), ()
+        return name, output_shape, params, state
+
+    return init_fun, inverse, forward
 
 ################################################################################################################
 
@@ -1206,6 +1269,68 @@ def flow_data_dependent_init(x, target_param_names, name_tree, params, state, fo
         return ans, updated_states
 
     return spp.data_dependent_init(x, target_param_names, name_tree, params, state, filled_forward_function, flag_names, **kwargs)
+
+def multistep_flow_data_dependent_init(x,
+                                       target_param_names,
+                                       flow_model,
+                                       condition,
+                                       flag_names,
+                                       key,
+                                       n_seed_examples=1000,
+                                       batch_size=4,
+                                       notebook=True,
+                                       **kwargs):
+    # language=rst
+    """
+    Data dependent initialization for a normalizing flow that is split up into multiple steps
+
+    :param x: The data seed
+    :param target_param_names: A list of the names of parameters to seed
+    :param name_tree: A pytree (nested structure) of names.  This is the first output of an init_fun call
+    :param params: The parameter pytree
+    :param state: The state pytree
+    :param forward: Forward function
+    :param flag_names: The names of the flag that will turn on seeding.
+    """
+    (names, output_shape, params, state), forward, inverse = flow_model
+
+    seed_steps = int(np.ceil(n_seed_examples/batch_size))
+
+    # Get the inital parameters
+    flat_params, unflatten = ravel_pytree(params)
+    unflatten = jit(unflatten)
+
+    # JIT the forward function.  Need to fill the kwargs before jitting otherwise this will fail.
+    if(isinstance(flag_names, list) == False and isinstance(flag_names, tuple) == False):
+        flag_names = (flag_names,)
+    flag_names = dict([(name, True) for name in flag_names])
+    jitted_forward = jit(partial(forward, **flag_names))
+
+    # Define a single gpu slice of the dependent init
+    @jit
+    def single_gpu_init(params, key, x_batch):
+        new_params = flow_data_dependent_init(x_batch, target_param_names, names, params, state, jitted_forward, (), None, key=key)
+        new_flat_params, _ = ravel_pytree(new_params)
+        return new_flat_params
+
+    # Run the data dependent initialization
+    pbar = tnrange(seed_steps) if notebook else tqdm(range(seed_steps))
+    for i in pbar:
+        key, *keys = random.split(key, 3)
+
+        # Get the next batch of data for each gpu
+        batch_idx = random.randint(keys[0], (batch_size,), minval=0, maxval=x.shape[0])
+        x_batch = x[batch_idx,:]
+
+        # Compute the seeded parameters
+        new_params = flow_data_dependent_init(x_batch, target_param_names, names, params, state, jitted_forward, (), None, key=key)
+        new_flat_params, _ = ravel_pytree(new_params)
+
+        # Compute a running mean of the parameters
+        flat_params = i/(i + 1)*flat_params + new_flat_params/(i + 1)
+        params = unflatten(flat_params)
+
+    return params
 
 def ActNorm(log_s_init=zeros, b_init=zeros, name='unnamed'):
     # language=rst

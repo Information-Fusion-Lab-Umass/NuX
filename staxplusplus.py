@@ -1,3 +1,5 @@
+import itertools
+import functools
 import numpy as onp
 import jax
 from jax import random, jit
@@ -225,60 +227,85 @@ def stax_conv_wrapper(fun):
 
     return ret
 
-Conv = stax_conv_wrapper(stax.Conv)
 ConvTranspose = stax_conv_wrapper(stax.ConvTranspose)
 MaxPool = stax_conv_wrapper(stax.MaxPool)
 SumPool = stax_conv_wrapper(stax.SumPool)
 AvgPool = stax_conv_wrapper(stax.AvgPool)
 
-def WeightNormConv(out_channel, filter_shape, strides=None, padding='VALID', W_init=normal(1e-6), b_init=normal(1e-6), name='unnamed'):
+def GeneralConv(dimension_numbers, out_chan, filter_shape,
+                strides=None, padding='VALID',
+                bias=True, weightnorm=True,
+                W_init=None, b_init=normal(1e-6), name='unnamed'):
     # language=rst
     """
-    Convolution with weight norm applied
+    Like jax.stax.GeneralConv, but has the option to use a bias and weightnorm
 
     :param out_channel - Number of output channels
     :param filter_shape - Size of filter
     :param strides - Strides for each axis
     :param padding - Padding for each axis
     """
-    _init_fun, _apply_fun = None, None
+    lhs_spec, rhs_spec, out_spec = dimension_numbers
+    one = (1,) * len(filter_shape)
+    strides = strides or one
+    W_init = W_init or glorot_normal(rhs_spec.index('I'), rhs_spec.index('O'))
     def init_fun(key, input_shape):
-        nonlocal _init_fun, _apply_fun
-        _init_fun, _apply_fun = Conv(out_channel, filter_shape, strides=strides, padding=padding, W_init=W_init, b_init=b_init)
-        conv_name, output_shape, conv_params, conv_state = _init_fun(key, input_shape)
-        v, b = conv_params
+        # JAX conv is weird with batch dims
+        assert len(input_shape) == 3
+        input_shape = (1,) + input_shape
 
-        # Weight norm is defined over each scalar element of the output
-        g = np.zeros_like(b)
-        return (name, conv_name), output_shape, (g, conv_params), ((), conv_state)
+        filter_shape_iter = iter(filter_shape)
+
+        kernel_shape = [out_chan if c == 'O' else input_shape[lhs_spec.index('C')] if c == 'I' else next(filter_shape_iter) for c in rhs_spec]
+        output_shape = jax.lax.conv_general_shape_tuple(input_shape, kernel_shape, strides, padding, dimension_numbers)
+        output_shape = output_shape[1:]
+
+        bias_shape = [out_chan if c == 'C' else 1 for c in out_spec]
+        bias_shape = tuple(itertools.dropwhile(lambda x: x == 1, bias_shape))
+
+        k1, k2, k3 = random.split(key, 3)
+
+        W = W_init(k1, kernel_shape)
+        if(bias):
+            b = b_init(k2, bias_shape)
+        else:
+            b = 0.0 # Just use a dummy
+
+        if(weightnorm):
+            # Weight norm is defined over each scalar element of the output
+            g = np.ones(bias_shape)
+        else:
+            g = 0.0 # Just use a dummy
+
+        params = (W, b, g)
+        state = ()
+
+        return name, output_shape, params, state
 
     def apply_fun(params, state, inputs, **kwargs):
-        g, (v, b) = params
-        _, conv_state = state
+        W, b, g = params
 
-        weightnorm_seed = kwargs.get('weightnorm_seed', False)
-        if(weightnorm_seed == True):
-            # Data dependent initialization
-            t, _ = _apply_fun((v, b), state, inputs, **kwargs)
-            mean = np.mean(t, axis=0)
-            std = np.std(t, axis=0)
-            g = 1/std
-            b = -mean/std
-            new_params = (g, (v, b))
+        if(weightnorm):
+            # Apply weight normalization
+            W = g*W/np.linalg.norm(W)
 
-        # Apply weight normalization
-        W = g*v/np.linalg.norm(v)
-        normalized_params = (W, b)
+        batched = True
+        if(inputs.ndim == 3):
+            batched = False
+            inputs = inputs[None]
 
-        # Convolve using the weight norm kernel
-        ans, updated_conv_state = _apply_fun(normalized_params, conv_state, inputs, **kwargs)
+        out = jax.lax.conv_general_dilated(inputs, W, strides, padding, one, one, dimension_numbers=dimension_numbers)
 
-        if(weightnorm_seed == False):
-            return ans, ((), updated_conv_state)
-        else:
-            return ans, new_params
+        if(batched == False):
+            out = out[0]
+
+        if(bias):
+            out += params[-1]
+
+        return out, state
 
     return init_fun, apply_fun
+Conv = functools.partial(GeneralConv, ('NHWC', 'HWIO', 'NHWC'))
 
 def data_dependent_init(x, target_param_names, name_tree, params, state, apply_fun, flag_names, **kwargs):
     # language=rst
@@ -317,12 +344,14 @@ def data_dependent_init(x, target_param_names, name_tree, params, state, apply_f
     if(len(target_param_names) == 0):
         return params
 
-    if(isinstance(flag_names, list) == False and isinstance(flag_names, tuple) == False):
-        flag_names = (flag_names,)
+    # Can be None if it is already filled in with partial
+    if(flag_names is not None):
+        if(isinstance(flag_names, list) == False and isinstance(flag_names, tuple) == False):
+            flag_names = (flag_names,)
 
-    # Pass the seed name to the apply function
-    for name in flag_names:
-        kwargs[name] = True
+        # Pass the seed name to the apply function
+        for name in flag_names:
+            kwargs[name] = True
 
     # Run the network.  The state should include the seeded parameters
     _, states_with_seed = apply_fun(params, state, x, **kwargs)

@@ -19,8 +19,9 @@ import numpy as np
 import pandas as pd
 
 import matplotlib.pyplot as plt
-from tqdm import tqdm_notebook
+from tqdm import tqdm_notebook, tqdm
 from functools import partial
+from debug import *
 
 def download_url(data_folder, filename, url):
     # language=rst
@@ -77,7 +78,7 @@ def download_mnist(data_folder, base_url):
 
     return train_images, train_labels, test_images, test_labels
 
-def get_mnist_data(quantize_level_bits=2, data_folder='/tmp/mnist/', kind='digits'):
+def get_mnist_data(quantize_level_bits=2, data_folder='data/mnist/', kind='digits'):
     # language=rst
     """
     Retrive an mnist dataset.  Either get the digits or fashion datasets.
@@ -179,7 +180,7 @@ def load_cifar10(batches_data_folder):
     test_labels = test_labels.astype(np.int32).T
     return train_images, train_labels, test_images, test_labels
 
-def get_cifar10_data(quantize_level_bits=2, data_folder='/tmp/cifar10/'):
+def get_cifar10_data(quantize_level_bits=2, data_folder='data/cifar10/'):
     # language=rst
     """
     Load the cifar 10 dataset.
@@ -205,35 +206,24 @@ def get_cifar10_data(quantize_level_bits=2, data_folder='/tmp/cifar10/'):
 
 ############################################################################################################################################################
 
-def get_celeb_dataset(quantize_level_bits=8, strides=(5, 5), crop=(12, 4), n_images=20000, data_folder='.'):
+def get_celeb_dataset(quantize_level_bits=8, strides=(5, 5), crop=(12, 4), n_images=20000, data_folder='data/img_align_celeba'):
     # language=rst
     """
     Load the celeb A dataset.
 
     :param data_folder: Where to download the data to
     """
-    celeb_dir = os.path.join(data_folder, 'img_align_celeba')
+    celeb_dir = data_folder
 
     if(os.path.exists(celeb_dir) == False):
         assert 0, 'Need to manually download the celeb-A dataset.  Download the zip file from here: %s'%('https://drive.google.com/open?id=0B7EVK8r0v71pZjFTYXZWM3FlRnM')
 
-    def file_iter():
-        for root, dirs, files in os.walk(celeb_dir):
-            for file in files:
-                if(file.endswith('.jpg')):
-                    path = os.path.join(root, file)
-                    yield path
-
-    all_files = []
-    for path in file_iter():
-        all_files.append(path)
-        if(len(all_files) == n_images):
-            break
+    all_files = glob.glob('data/img_align_celeba/*.jpg')[:n_images]
 
     quantize_factor = 256/(2**quantize_level_bits)
 
     images = []
-    for path in tqdm_notebook(all_files):
+    for path in tqdm(all_files):
         im = plt.imread(path, format='jpg')
         im = im[::strides[0],::strides[1]][crop[0]:,crop[1]:]
         images.append(im//quantize_factor)
@@ -246,7 +236,7 @@ def get_celeb_dataset(quantize_level_bits=8, strides=(5, 5), crop=(12, 4), n_ima
 
 ############################################################################################################################################################
 
-def get_BSDS300_data(quantize_level_bits=8, strides=(1, 1), crop=(0, 0), data_folder='/tmp/BSDS300/'):
+def get_BSDS300_data(quantize_level_bits=8, strides=(1, 1), crop=(0, 0), data_folder='data/BSDS300/'):
     # language=rst
     """
     Load the BSDS300 dataset.
@@ -301,6 +291,7 @@ def get_BSDS300_data(quantize_level_bits=8, strides=(1, 1), crop=(0, 0), data_fo
 
 def make_train_test_split(x, percentage):
     n_train = int(x.shape[0]*percentage)
+    np.random.shuffle(x)
     return x[n_train:], x[:n_train]
 
 def decorrelate_data(data, threshold=0.98):
@@ -326,7 +317,7 @@ def decorrelate_data(data, threshold=0.98):
 
 ############################################################################################################################################################
 
-def get_gas_data(train_test_split=True, decorrelate=True, normalize=False, return_dequantize_scale=True, co_only=True, data_folder='/tmp/gas/', **kwargs):
+def get_gas_data(train_test_split=True, decorrelate=True, normalize=False, return_dequantize_scale=True, co_only=True, data_folder='data/gas/', **kwargs):
     # language=rst
     """
     Load the gas dataset.  Adapted from NSF repo https://github.com/bayesiains/nsf/tree/master/data
@@ -370,7 +361,7 @@ def get_gas_data(train_test_split=True, decorrelate=True, normalize=False, retur
         methane_data = (methane_data - methane_data.mean())/methane_data.std()
 
     # The data only contains 2 decimals, so do uniform dequantization
-    co_dequantization_scale = np.ones(methane_data.shape[1])*0.01
+    co_dequantization_scale = np.ones(co_data.shape[1])*0.01
     methane_dequantization_scale = np.ones(methane_data.shape[1])*0.01
 
     # Switch from pandas to numpy
@@ -397,7 +388,7 @@ def get_gas_data(train_test_split=True, decorrelate=True, normalize=False, retur
 
 ############################################################################################################################################################
 
-def get_miniboone_data(train_test_split=True, decorrelate=False, normalize=False, return_dequantize_scale=True, data_folder='/tmp/miniboone', **kwargs):
+def get_miniboone_data(train_test_split=True, decorrelate=False, normalize=False, return_dequantize_scale=True, data_folder='data/miniboone', **kwargs):
     # language=rst
     """
     Load the miniboone dataset.  No dequantization is needed here, they use a lot of decimals.
@@ -415,6 +406,9 @@ def get_miniboone_data(train_test_split=True, decorrelate=False, normalize=False
 
     # Load the dataset
     data = pd.read_csv(full_filename, delim_whitespace=True, header=None, skiprows=1)
+
+    # Remove some invalid entries
+    data.drop(data[data[0] < -100].index, inplace=True)
 
     # Turn everything to numeric values
     data = data.apply(partial(pd.to_numeric, errors='coerce')).dropna(axis=0)
@@ -446,7 +440,7 @@ def get_miniboone_data(train_test_split=True, decorrelate=False, normalize=False
 
 ############################################################################################################################################################
 
-def get_power_data(train_test_split=True, decorrelate=False, normalize=False, return_dequantize_scale=True, data_folder='/tmp/power/', **kwargs):
+def get_power_data(train_test_split=True, decorrelate=False, normalize=False, return_dequantize_scale=True, data_folder='data/power/', **kwargs):
     # language=rst
     """
     Load the power dataset.
@@ -504,7 +498,7 @@ def get_power_data(train_test_split=True, decorrelate=False, normalize=False, re
 
 ############################################################################################################################################################
 
-def get_hepmass_data(train_test_split=True, decorrelate=False, normalize=False, return_dequantize_scale=True, retrieve_files=['1000_train', '1000_test'], data_folder='/tmp/hepmass/'):
+def get_hepmass_data(train_test_split=True, decorrelate=False, normalize=False, return_dequantize_scale=True, retrieve_files=['1000_train', '1000_test'], data_folder='data/hepmass/'):
     # language=rst
     """
     Load the HEPMASS dataset.
@@ -577,7 +571,7 @@ def get_hepmass_data(train_test_split=True, decorrelate=False, normalize=False, 
 ############################################################################################################################################################
 
 def uci_loader(datasets=['hepmass', 'gas', 'miniboone', 'power'], data_root='data/'):
-    kwargs = dict(train_test_split=True, decorrelate=False, normalize=False, return_dequantize_scale=True)
+    kwargs = dict(train_test_split=True, decorrelate=True, normalize=False, return_dequantize_scale=True)
 
     for d in datasets:
         if(d == 'hepmass'):
