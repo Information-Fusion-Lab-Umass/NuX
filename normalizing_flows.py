@@ -12,6 +12,7 @@ from jax.scipy.special import logsumexp
 from util import is_testing, TRAIN, TEST, householder_prod, householder_prod_transpose
 import util
 from lds_svi import easy_niw_nat, easy_mniw_nat, mniw_params_to_stats, niw_nat_to_std, mniw_nat_to_std, lds_svi, mniw_sample, easy_niw_params, easy_mniw_params, niw_sample, niw_params_to_stats
+from lds_max_likelihood import kalman_filter
 from non_dim_preserving import *
 from jax.flatten_util import ravel_pytree
 from jax.tree_util import tree_multimap, tree_flatten
@@ -436,6 +437,56 @@ def OneWay(transform, name='unnamed'):
 
 ################################################################################################################
 
+def LDSPriorMLE(z_dim, name='unnamed'):
+    # language=rst
+    """
+    Linear dynamical system prior.
+
+    :param z_dim: Latent state dim
+    """
+
+    def init_fun(key, input_shape, condition_shape):
+        x_dim = input_shape[-1]
+        output_shape = input_shape[:-1] + (z_dim,)
+
+        # No choice to initialize prior yet
+        keys = random.split(key, 6)
+
+        mu0, Q0 = np.zeros(z_dim), np.ones(z_dim)
+        A, B, Q = np.eye(z_dim), np.eye(z_dim), np.ones(z_dim)
+        C, D, R = np.eye(x_dim, z_dim), np.eye(x_dim, z_dim), np.ones(x_dim)
+
+        params = ((mu0, Q0), (A, B, Q), (C, D, R))
+        state = ()
+
+        return name, input_shape, params, state
+
+    def forward(params, state, log_px, x, condition, **kwargs):
+        # Must work with time series
+        assert x.ndim == 2
+
+        us = kwargs.get('us', np.zeros(1))
+        mask = kwargs.get('mask', np.zeros(1))
+        if(us.shape == (1,)):
+            us = np.zeros((x.shape[0], z_dim))
+        if(mask.shape == (1,)):
+            mask = np.ones(x.shape[0]).astype(bool)
+
+        # Run the kalman filter
+        z, Qs, marginal = kalman_filter(us, mask, params, x)
+
+        return marginal + log_px.sum(), z, state
+
+    def inverse(params, state, log_pz, z, condition, **kwargs):
+        assert z.ndim == 2
+        (mu0, Q0), (A, B, Q), (C, D, R) = params
+        x = np.einsum('ij,tj->ti', C, z)
+        return log_pz, x, state
+
+    return init_fun, forward, inverse
+
+################################################################################################################
+
 def LDSPrior(z_dim, name='unnamed'):
     # language=rst
     """
@@ -482,7 +533,6 @@ def LDSPrior(z_dim, name='unnamed'):
     def inverse(params, state, log_pz, z, condition, **kwargs):
         assert z.ndim == 2
         T = kwargs.get('T', z.shape[0])
-
 
         # Sample forward using the emission paramters
         # C = mniw_sample(*mniw_nat_to_std(*state[2]))[0]
@@ -1121,112 +1171,6 @@ def UnSqueeze(name='unnamed'):
         return name, output_shape, params, state
 
     return init_fun, inverse, forward
-
-################################################################################################################
-
-def UpSample(repeats, name='unnamed'):
-    # language=rst
-    """
-    Up sample by just repeating consecutive values over specified axes
-
-    :param repeats - The number of times to repeat.  Pass in (2, 1, 2), for example, to repeat twice over
-                     the 0th axis, no repeats over the 1st axis, and twice over the 2nd axis
-    """
-    full_repeats = None
-    def init_fun(key, input_shape, condition_shape):
-        nonlocal full_repeats
-        full_repeats = [repeats[i] if i < len(repeats) else 1 for i in range(len(input_shape))]
-        output_shape = []
-        for s, r in zip(input_shape, full_repeats):
-            assert s%r == 0
-            output_shape.append(s//r)
-        output_shape = tuple(output_shape)
-        log_sigma = -1.0
-        params, state = (log_sigma), ()
-        return name, output_shape, params, state
-
-    def forward(params, state, log_px, x, condition, **kwargs):
-        log_sigma = params
-        sigma = np.exp(log_sigma)
-        is_batched = int(x.ndim == 2 or x.ndim == 4)
-
-        # The pseudo-inverse is the sliced input
-        slices = [slice(0, None, r) for r in full_repeats]
-
-        if(is_batched):
-            z = x[[slice(0, None, 1)] + slices]
-        else:
-            z = x[slices]
-
-        # Find the flat dimensions
-        if(x.ndim <= 2):
-            dim_z = z.shape[-1]
-            dim_x = x.shape[-1]
-        elif(x.ndim <= 4):
-            dim_z = np.prod(z.shape[-3:])
-            dim_x = np.prod(x.shape[-3:])
-
-        # Find the projection
-        x_proj = z
-        for i, r in enumerate(repeats):
-            x_proj = np.repeat(x_proj, r, axis=i + is_batched)
-
-        # Compute -0.5|J^T J|
-        repeat_prod = np.prod(repeats)
-        log_det = -0.5*np.log(repeat_prod)*dim_x
-
-        log_hx = -0.5/sigma*np.sum(x*(x - x_proj), axis=-1)
-        log_hx -= log_det
-        log_hx -= (dim_x - dim_z)*(log_sigma + np.log(2*np.pi))
-
-        # If we have an image, need to sum over more axes
-        if(x.ndim >= 3):
-            if(log_hx.ndim >= 2):
-                log_hx = log_hx.sum(axis=(-1, -2))
-
-        # J^T J is a diagonal matrix where each diagonal element is the
-        # the product of repeats
-        key = kwargs.pop('key', None)
-        if(key is None):
-            assert 0, 'Need a key for this'
-
-        # Sample z ~ N(z^+, sigma(J^T J)^{-1})
-        noise = random.normal(key, z.shape)
-        z += noise*np.sqrt(sigma/repeat_prod)
-
-        return log_px + log_hx, z, state
-
-    def inverse(params, state, log_pz, z, condition, **kwargs):
-        log_sigma = params
-        x = z
-        is_batched = int(x.ndim == 2 or x.ndim == 4)
-        for i, r in enumerate(repeats):
-            x = np.repeat(x, r, axis=i + is_batched)
-
-        # Find the flat dimensions
-        if(x.ndim <= 2):
-            dim_z = z.shape[-1]
-            dim_x = x.shape[-1]
-        elif(x.ndim <= 4):
-            dim_z = np.prod(z.shape[-3:])
-            dim_x = np.prod(x.shape[-3:])
-
-        # Compute -0.5|J^T J|
-        repeat_prod = np.prod(repeats)
-        log_det = -0.5*np.log(repeat_prod)*dim_x
-
-        # The projection difference is 0!
-        log_hx = log_det
-        log_hx -= (dim_x - dim_z)*(log_sigma + np.log(2*np.pi))
-
-        # If we have an image, need to sum over more axes
-        if(x.ndim >= 3):
-            if(log_hx.ndim >= 2):
-                log_hx = log_hx.sum(axis=(-1, -2))
-
-        return log_pz + log_hx, x, state
-
-    return init_fun, forward, inverse
 
 ################################################################################################################
 
