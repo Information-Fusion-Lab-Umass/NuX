@@ -28,15 +28,20 @@ def create_manifold_comparison_network(train_data, noise_scale, latent_dim, base
     flow = create_network_head(train_data, noise_scale)
 
     top_flow = sequential_flow(flow,
-                               MAF([1024]*5),
+                               MAF([1024]*3),
+                               BatchNorm(),
                                Reverse(),
-                               MAF([1024]*5),
+                               MAF([1024]*3),
+                               BatchNorm(),
                                Reverse(),
-                               MAF([1024]*5),
+                               MAF([1024]*3),
+                               BatchNorm(),
                                Reverse(),
-                               MAF([1024]*5),
+                               MAF([1024]*3),
+                               BatchNorm(),
                                Reverse(),
-                               MAF([1024]*5))
+                               MAF([1024]*3),
+                               BatchNorm())
 
     if(latent_dim == None or latent_dim == 'baseline'):
         baseline = True
@@ -74,13 +79,13 @@ def experiment(x_train, x_test, noise_scale, data_name, key, latent_dim, baselin
     valgrad = jit(valgrad)
 
     # Create the optimizer
-    opt_init, opt_update, get_params = optimizers.adam(0.0005)
+    opt_init, opt_update, get_params = optimizers.adam(0.0001)
     opt_update = jit(opt_update)
     opt_state = opt_init(params)
 
     # Train
     batch_size = 1024
-    n_iters = 50000
+    n_iters = 200000
     test_interval = 10
     train_nll = []
     test_nll = []
@@ -140,9 +145,9 @@ def run_experiment(dataset_names=['hepmass', 'gas', 'miniboone', 'power'], data_
             if(os.path.exists(save_root) == False):
                 os.makedirs(save_root)
 
-            # Save using pickle
-            with open(save_path, 'wb') as f:
-                pickle.dump(val, f)
+        # Save using pickle
+        with open(save_path, 'wb') as f:
+            pickle.dump(val, f)
 
 def retrieve_results(results_folder='./manifold_results/', dataset_names=['hepmass', 'gas', 'miniboone', 'power']):
     """
@@ -173,13 +178,13 @@ def evaluate_results(results, save_folder='./manifold_results/'):
         suffix_to_plot = 1000
 
         # Plot the smoothed train results
-        smoothed_test_nll = pd.Series(train_nll).ewm(alpha=0.01).mean()
+        smoothed_test_nll = pd.Series(train_nll).ewm(alpha=0.001).mean()
         axes[0,names.index(name)].plot(smoothed_test_nll[-(suffix_to_plot*10):], label='%s'%run_str)
         axes[0,names.index(name)].set_title('%s train set negative log likelihoods'%(name))
         axes[0,names.index(name)].legend()
 
         # Plot the smoothed test results
-        smoothed_test_nll = pd.Series(test_nll).ewm(alpha=0.01).mean()
+        smoothed_test_nll = pd.Series(test_nll).ewm(alpha=0.001).mean()
         axes[1,names.index(name)].plot(smoothed_test_nll[-suffix_to_plot:], label='%s'%run_str)
         axes[1,names.index(name)].set_title('%s test set negative log likelihoods'%(name))
         axes[1,names.index(name)].legend()
