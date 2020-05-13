@@ -234,7 +234,7 @@ AvgPool = stax_conv_wrapper(stax.AvgPool)
 
 def GeneralConv(dimension_numbers, out_chan, filter_shape,
                 strides=None, padding='VALID',
-                bias=True, weightnorm=True,
+                bias=True, weightnorm=False,
                 W_init=None, b_init=normal(1e-6), name='unnamed'):
     # language=rst
     """
@@ -361,6 +361,30 @@ def data_dependent_init(x, target_param_names, name_tree, params, state, apply_f
         seeded_param = get_param(name, name_tree, states_with_seed)
         params = modify_param(name, name_tree, params, seeded_param)
     return params
+
+################################################################################################################
+
+def InstanceNorm(name='unnamed'):
+    def init_fun(key, input_shape):
+        params, state = (), ()
+        return name, input_shape, params, state
+
+    def apply_fun(params, state, inputs, **kwargs):
+        x = inputs
+
+        # Make sure that we have the expected shape
+        H, W, C = x.shape[-3], x.shape[-2], x.shape[-1]
+        mean = np.mean(x, axis=(-3, -2))
+        std = np.std(x, axis=(-3, -2)) + 1e-5
+
+        if(x.ndim == 4):
+            x = (x - mean[:,None,None,:])/std[:,None,None,:]
+        else:
+            x = (x - mean[None,None,:])/std[None,None,:]
+
+        return x, state
+
+    return init_fun, apply_fun
 
 ################################################################################################################
 

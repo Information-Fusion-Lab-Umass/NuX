@@ -571,19 +571,54 @@ def Identity(name='unnamed'):
 
     return init_fun, forward, inverse
 
-def Debug(name='unnamed'):
+def Debug(message,
+          print_init_shape=True,
+          print_forward_shape=False,
+          print_inverse_shape=False,
+          compare_vals=False,
+          name='unnamed'):
     # language=rst
     """
     Help debug shapes
+
+    :param print_init_shape: Print the shapes
+    :param print_forward_shape: Print the shapes
+    :param print_inverse_shape: Print the shapes
+    :param compare_vals: Print the difference between the value of the forward pass and the reconstructed
     """
+
+    saved_val = None
+
     def init_fun(key, input_shape, condition_shape):
-        print(name, 'input_shape', input_shape)
+        if(print_init_shape):
+            print(message, 'input_shape', input_shape)
         return name, input_shape, (), ()
 
     def forward(params, state, log_px, x, condition, **kwargs):
+        if(print_forward_shape):
+            if(isinstance(x, tuple) or isinstance(x, list)):
+                print(message, 'x shapes', [_x.shape for _x in x], 'log_px shapes', [_x.shape for _x in log_px])
+            else:
+                print(message, 'x.shape', x.shape, 'log_px.shape', log_px.shape)
+
+        if(compare_vals):
+            nonlocal saved_val
+            saved_val = x
+
         return log_px, x, state
 
     def inverse(params, state, log_pz, z, condition, **kwargs):
+        if(print_inverse_shape):
+            if(isinstance(z, tuple) or isinstance(z, list)):
+                print(message, 'z shapes', [_z.shape for _z in z], 'log_pz shapes', [_z.shape for _z in log_pz])
+            else:
+                print(message, 'z.shape', z.shape, 'log_pz.shape', log_pz.shape)
+        if(compare_vals):
+            if(isinstance(z, tuple) or isinstance(z, list)):
+                print(message, 'np.linalg.norm(z - saved_val)', [np.linalg.norm(_z - _x) for _x, _z in zip(saved_val, z)])
+            else:
+                print(message, 'np.linalg.norm(z - saved_val)', np.linalg.norm(z - saved_val))
+
         return log_pz, z, state
 
     return init_fun, forward, inverse
@@ -649,7 +684,6 @@ def Transpose(axis_order, name='unnamed'):
 
     return init_fun, forward, inverse
 
-
 def Reshape(shape, name='unnamed'):
     # language=rst
     """
@@ -664,6 +698,38 @@ def Reshape(shape, name='unnamed'):
     def init_fun(key, input_shape, condition_shape):
         nonlocal original_shape
         original_shape = input_shape
+        assert np.prod(input_shape) == np.prod(shape), 'input_shape %s shape: %s'%(str(input_shape), str(shape))
+        params, state = (), ()
+        return name, shape, params, state
+
+    def forward(params, state, log_px, x, condition, **kwargs):
+        if(x.ndim > len(original_shape)):
+            z = x.reshape((-1,) + shape)
+        else:
+            z = x.reshape(shape)
+
+        return log_px, z, state
+
+    def inverse(params, state, log_pz, z, condition, **kwargs):
+        if(z.ndim > len(shape)):
+            x = z.reshape((-1,) + original_shape)
+        else:
+            x = z.reshape(original_shape)
+
+        return log_pz, x, state
+
+    return init_fun, forward, inverse
+
+def Flatten(name='unnamed'):
+    # Need to keep track of the original shape in order to invert
+    original_shape = None
+    shape = None
+
+    def init_fun(key, input_shape, condition_shape):
+        nonlocal shape, original_shape
+        original_shape = input_shape
+        shape = (onp.prod(input_shape),)
+        assert np.prod(input_shape) == np.prod(shape), 'input_shape %s shape: %s'%(str(input_shape), str(shape))
         params, state = (), ()
         return name, shape, params, state
 
@@ -687,10 +753,76 @@ def Reshape(shape, name='unnamed'):
 
 ################################################################################################################
 
+def Split(split_idx, axis=-1, name='unnamed'):
+    # language=rst
+    """
+    Split a vector
+    """
+    def init_fun(key, input_shape, condition_shape):
+        assert len(split_idx) == 1 # For the moment
+        ax = axis % len(input_shape)
+        out_shape1, out_shape2 = list(input_shape), list(input_shape)
+        out_shape1[ax] = split_idx[0]
+        out_shape2[ax] = input_shape[ax] - split_idx[0]
+        params, state = (), ()
+        return name, (tuple(out_shape1), tuple(out_shape2)), params, state
+
+    def forward(params, state, log_px, x, condition, **kwargs):
+        z_components = np.split(x, split_idx, axis)
+
+        # Only send the total density through one component.  The density will be recombined later
+        log_pxs = [log_px if i == 0 else np.zeros_like(log_px) for i, z_i in enumerate(z_components)]
+        zs = z_components
+
+        return log_pxs, zs, state
+
+    def inverse(params, state, log_pz, z, condition, **kwargs):
+        log_pz = sum(log_pz)
+        x = np.concatenate(z, axis)
+        return log_pz, x, state
+
+    return init_fun, forward, inverse
+
+def Concat(axis=-1, name='unnamed'):
+    """
+    Going to unify this and FanInConcat later
+    """
+    split_idx = None
+
+    def init_fun(key, input_shape, condition_shape):
+        assert len(input_shape) == 2
+        ax = axis % len(input_shape[0])
+        out_shape = list(input_shape[0])
+
+        nonlocal split_idx
+        split_idx = [input_shape[0][ax]]
+
+        out_shape[ax] = input_shape[0][ax] + input_shape[1][ax]
+        params, state = (), ()
+        return name, tuple(out_shape), params, state
+
+    def forward(params, state, log_px, x, condition, **kwargs):
+        log_px = sum(log_px)
+        z = np.concatenate(x, axis)
+        return log_px, z, state
+
+    def inverse(params, state, log_pz, z, condition, **kwargs):
+        x_components = np.split(z, split_idx, axis)
+
+        # Only send the total density through one component.  The density will be recombined later
+        log_pxs = [log_pz if i == 0 else np.zeros_like(log_pz) for i, z_i in enumerate(x_components)]
+        xs = x_components
+
+        return log_pxs, xs, state
+
+    return init_fun, forward, inverse
+
+################################################################################################################
+
 def FactorOut(num, axis=-1, name='unnamed'):
     # language=rst
     """
-    Factor p(z_{1..N}) = p(z_1)p(z_2|z_1)...p(z_N|z_{1..N-1})
+    Factor p(z_{1..N}) = p(z_1)p(z_2|z_1)...p(z_N|z_{1..N-1}) using an even split
 
     :param num: Number of components to split into
     :param axis: Axis to split
@@ -698,9 +830,8 @@ def FactorOut(num, axis=-1, name='unnamed'):
     def init_fun(key, input_shape, condition_shape):
         ax = axis % len(input_shape)
 
-        # For the moment, ensure we split evenly
+        # Split evenly
         assert input_shape[ax]%num == 0
-
         split_shape = list(input_shape)
         split_shape[ax] = input_shape[ax]//num
         split_shape = tuple(split_shape)
@@ -736,7 +867,7 @@ def FanInConcat(num, axis=-1, name='unnamed'):
         # Make sure that each of the inputs are the same size
         assert num == len(input_shape)
         for shape in input_shape:
-            assert shape == input_shape[0]
+            assert shape == input_shape[0], input_shape
         ax = axis % len(input_shape[0])
         concat_size = sum(shape[ax] for shape in input_shape)
         out_shape = input_shape[0][:ax] + (concat_size,) + input_shape[0][ax+1:]
@@ -1127,7 +1258,7 @@ def Squeeze(name='unnamed'):
     def forward(params, state, log_px, x, condition, **kwargs):
         if(x.ndim == 4):
             # Handle batching this way
-            return vmap(partial(forward, params, state, log_px, **kwargs), in_axes=(0, None))(x, condition)
+            return vmap(partial(forward, params, state, **kwargs), in_axes=(0, 0, None))(log_px, x, condition)
 
         # Turn to (C, H, W)
         z = x.transpose((2, 0, 1))
@@ -1144,7 +1275,7 @@ def Squeeze(name='unnamed'):
     def inverse(params, state, log_pz, z, condition, **kwargs):
         if(z.ndim == 4):
             # Handle batching this way
-            return vmap(partial(inverse, params, state, log_pz, **kwargs), in_axes=(0, None))(z, condition)
+            return vmap(partial(inverse, params, state, **kwargs), in_axes=(0, 0, None))(log_pz, z, condition)
 
         # Turn to (C, H, W)
         x = z.transpose((2, 0, 1))
@@ -1335,6 +1466,98 @@ def ActNorm(log_s_init=zeros, b_init=zeros, name='unnamed'):
 
     return init_fun, forward, inverse
 
+def ConditionedActNorm(log_s_init=zeros, b_init=zeros, Ws_init=glorot_normal(), Wb_init=glorot_normal(), name='unnamed'):
+    # language=rst
+    """
+    Similar to AdaIN from StyleGAN paper.  Basically a shifted and scaled act norm
+    depending on condition.  Assumes that condition is 1d.
+
+    :param axis: Batch axis
+    """
+
+    def init_fun(key, input_shape, condition_shape):
+        k1, k2, k3, k4 = random.split(key, 4)
+        log_s = log_s_init(k1, (input_shape[-1],))
+        b = b_init(k2, (input_shape[-1],))
+
+        # Going to use an affine transformation to learn the style.  The style should be the
+        # same shape as each feature map.
+        assert len(condition_shape) == 1
+        Ws = Ws_init(k3, (input_shape[-1],) + condition_shape[0])
+        Wb = Wb_init(k4, (input_shape[-1],) + condition_shape[0])
+
+        # Initially, make them almost do nothing
+        U, s, VT = np.linalg.svd(Ws, full_matrices=False)
+        Ws = np.dot(U/4.0, VT)
+
+        U, s, VT = np.linalg.svd(Wb, full_matrices=False)
+        Wb = np.dot(U/4.0, VT)
+
+        params = (log_s, b, Ws, Wb)
+        state = ()
+        return name, input_shape, params, state
+
+    def forward(params, state, log_px, x, condition, **kwargs):
+        log_s, b, Ws, Wb = params
+
+        # Check to see if we're seeding this function
+        actnorm_seed = kwargs.get('actnorm_seed', False)
+        if(actnorm_seed == True):
+            # The initial parameters should normalize the input
+            # We want it to be normalized over the channel dimension!
+            axes = tuple(np.arange(len(x.shape) - 1))
+            mean = np.mean(x, axis=axes)
+            std = np.std(x, axis=axes) + 1e-5
+            log_s = np.log(std)
+            b = mean
+            updated_state = (log_s, b, Ws, Wb)
+        else:
+            updated_state = ()
+
+        z = (x - b)*np.exp(-log_s)
+
+        # Add in the style
+        ys = np.dot(condition[0], Ws.T)
+        yb = np.dot(condition[0], Wb.T)
+        is_batched = z.ndim == 2 or z.ndim == 4
+        if(is_batched):
+            z = vmap(lambda ys, z, yb: ys*z + yb)(ys, z, yb)
+        else:
+            z = ys*z + yb
+
+        log_det = -log_s.sum() + np.log(np.abs(ys)).sum(axis=-1)
+
+        # Need to multiply by the height/width!
+        if(z.ndim == 4 or z.ndim == 3):
+            height, width, channel = z.shape[-3], z.shape[-2], z.shape[-1]
+            log_det *= height*width
+
+        return log_px + log_det, z, updated_state
+
+    def inverse(params, state, log_pz, z, condition, **kwargs):
+        log_s, b, Ws, Wb = params
+
+        # Remove the style
+        ys = np.dot(condition[0], Ws.T)
+        yb = np.dot(condition[0], Wb.T)
+        is_batched = z.ndim == 2 or z.ndim == 4
+        if(is_batched):
+            z = vmap(lambda z, yb, ys: (z - yb)/ys)(z, yb, ys)
+        else:
+            z = (z - yb)/ys
+
+        x = np.exp(log_s)*z + b
+        log_det = -log_s.sum() + np.log(np.abs(ys)).sum(axis=-1)
+
+        # Need to multiply by the height/width!
+        if(z.ndim == 4 or z.ndim == 3):
+            height, width, channel = z.shape[-3], z.shape[-2], z.shape[-1]
+            log_det *= height*width
+
+        return log_pz + log_det, x, state
+
+    return init_fun, forward, inverse
+
 def BatchNorm(epsilon=1e-5, alpha=0.05, beta_init=zeros, gamma_init=zeros, name='unnamed'):
     # language=rst
     """
@@ -1409,7 +1632,7 @@ def BatchNorm(epsilon=1e-5, alpha=0.05, beta_init=zeros, gamma_init=zeros, name=
 
 ################################################################################################################
 
-def AffineLDU(L_init=normal(), d_init=ones, U_init=normal(), name='unnamed', return_mat=False):
+def AffineLDU(L_init=normal(), d_init=normal(), U_init=normal(), name='unnamed', return_mat=False):
     # language=rst
     """
     LDU parametrized square dense matrix
@@ -1656,7 +1879,7 @@ def GeneralAffine(flow, out_dim, prior=1e3, n_training_importance_samples=8, A_i
 
 ################################################################################################################
 
-def OnebyOneConv(name='unnamed'):
+def OnebyOneConvLDU(name='unnamed'):
     # language=rst
     """
     Invertible 1x1 convolution.  Implemented as matrix multiplication over the channel dimension
@@ -1702,6 +1925,174 @@ def OnebyOneConv(name='unnamed'):
         return log_pz + log_det.sum(axis=(-2, -1)), x, state
 
     return init_fun, forward, inverse
+
+def OnebyOneConv(W_init=glorot_normal(), name='unnamed'):
+    # language=rst
+    """
+    Invertible 1x1 convolution.  Implemented as matrix multiplication over the channel dimension.
+    THIS IS VERY UNSTABLE FOR SOME REASON
+    """
+    def init_fun(key, input_shape, condition_shape):
+        height, width, channel = input_shape
+
+        W = W_init(key, (channel, channel))
+        # U, s, VT = np.linalg.svd(W, full_matrices=False)
+        # W = np.dot(U, VT)
+
+        params = (W,)
+        state = ()
+        return name, input_shape, params, state
+
+    def forward(params, state, log_px, x, condition, **kwargs):
+        W, = params
+        log_det = np.linalg.slogdet(W)[1]
+        height, width, channel = x.shape[-3], x.shape[-2], x.shape[-1]
+        assert channel == W.shape[0]
+
+        if(x.ndim == 4):
+            z = np.einsum('ij,bhwj->bhwi', W, x)
+        else:
+            z = np.einsum('ij,hwj->hwi', W, x)
+
+        log_det *= height*width
+
+        return log_px + log_det, z, state
+
+    def inverse(params, state, log_pz, z, condition, **kwargs):
+        W, = params
+        W_inv = np.linalg.inv(W)
+        log_det = np.linalg.slogdet(W)[1]
+        height, width, channel = z.shape[-3], z.shape[-2], z.shape[-1]
+        assert channel == W.shape[0]
+
+        if(z.ndim == 4):
+            # x = vmap(vmap(vmap(partial(np.linalg.solve, W))))(z)
+            x = np.einsum('ij,bhwj->bhwi', W_inv, z)
+        else:
+            # x = vmap(vmap(partial(np.linalg.solve, W)))(z)
+            x = np.einsum('ij,hwj->hwi', W_inv, z)
+
+        log_det *= height*width
+
+        return log_pz + log_det, x, state
+
+    return init_fun, forward, inverse
+
+def OnebyOneConvLAX(W_init=glorot_normal(), name='unnamed'):
+    # language=rst
+    """
+    Invertible 1x1 convolution.
+    """
+    filter_shape = (1, 1)
+    padding = 'SAME'
+    strides = (1, 1)
+    one = (1,) * len(filter_shape)
+    dimension_numbers = ('NHWC', 'HWIO', 'NHWC')
+
+    def init_fun(key, input_shape, condition_shape):
+        height, width, channel = input_shape
+
+        W = W_init(key, (channel, channel))
+        U, s, VT = np.linalg.svd(W, full_matrices=False)
+        W = np.dot(U, VT)
+
+        # JAX conv is weird with batch dims
+        assert len(input_shape) == 3
+        input_shape = (1,) + input_shape
+        filter_shape_iter = iter(filter_shape)
+        lhs_spec, rhs_spec, out_spec = dimension_numbers
+        kernel_shape = [channel if c == 'O' else input_shape[lhs_spec.index('C')] if c == 'I' else next(filter_shape_iter) for c in rhs_spec]
+        output_shape = jax.lax.conv_general_shape_tuple(input_shape, kernel_shape, strides, padding, dimension_numbers)
+        output_shape = output_shape[1:]
+
+        assert output_shape == (height, width, channel)
+
+        params = (W,)
+        state = ()
+        return name, output_shape, params, state
+
+    def forward(params, state, log_px, x, condition, **kwargs):
+        height, width, channel = x.shape[-3], x.shape[-2], x.shape[-1]
+
+        W, = params
+        log_det = np.linalg.slogdet(W)[1]*height*width
+        assert channel == W.shape[0]
+
+        batched = True
+        if(x.ndim == 3):
+            batched = False
+            x = x[None]
+
+        z = jax.lax.conv_general_dilated(x, W[None,None,...], strides, padding, (1, 1), (1, 1), dimension_numbers=dimension_numbers)
+
+        if(batched == False):
+            z = z[0]
+
+        return log_px + log_det, z, state
+
+    def inverse(params, state, log_pz, z, condition, **kwargs):
+        height, width, channel = z.shape[-3], z.shape[-2], z.shape[-1]
+
+        W, = params
+        W_inv = np.linalg.inv(W)
+        log_det = np.linalg.slogdet(W)[1]*height*width
+        assert channel == W.shape[0]
+
+        batched = True
+        if(z.ndim == 3):
+            batched = False
+            z = z[None]
+
+        x = jax.lax.conv_general_dilated(z, W_inv[None,None,...], strides, padding, (1, 1), (1, 1), dimension_numbers=dimension_numbers)
+
+        if(batched == False):
+            x = x[0]
+
+        return log_pz + log_det, x, state
+
+    return init_fun, forward, inverse
+
+################################################################################################################
+
+def GLOWBlock(transform_fun,
+              conditioned_actnorm=False,
+              masked=True,
+              mask_type='checkerboard',
+              top_left_zero=False,
+              use_ldu=False,
+              name='unnamed'):
+    # language=rst
+    """
+    One step of GLOW https://arxiv.org/pdf/1807.03039.pdf
+
+    :param transform: A transformation that will act on half of the input vector. Must return 2 vectors!!!
+    :param mask_type: What kind of masking to use.  For images, can use checkerboard
+    """
+    if(name == 'unnamed'):
+        an_name = 'unnamed'
+        conv_name = 'unnamed'
+        coupling_name = 'unnamed'
+    else:
+        an_name = '%s_act_norm'%name
+        conv_name = '%s_one_by_one_conv'%name
+        coupling_name = '%s_affine_coupling'%name
+
+    if(conditioned_actnorm):
+        actnorm = ConditionedActNorm(name=an_name)
+    else:
+        actnorm = ActNorm(name=an_name)
+
+    if(use_ldu):
+        conv = OnebyOneConvLDU(name=conv_name)
+    else:
+        conv = OnebyOneConvLAX(name=conv_name)
+
+    if(masked):
+        coupling = MaskedAffineCoupling(transform_fun, mask_type=mask_type, top_left_zero=top_left_zero, name=coupling_name)
+    else:
+        coupling = AffineCoupling(transform_fun, name=coupling_name)
+
+    return sequential_flow(actnorm, conv, coupling)
 
 ################################################################################################################
 
@@ -1989,6 +2380,7 @@ def MaskedAffineCoupling(transform_fun, axis=-1, mask_type='channel_wise', top_l
             assert 0, 'Invalid mask type'
 
         # Ugly, but saves us from initializing when calling function
+        condition_shape = () # :(
         nonlocal apply_fun
         transform_input_shape = input_shape if len(condition_shape) == 0 else (input_shape,) + condition_shape
         _init_fun, apply_fun = transform_fun(out_shape=input_shape)
@@ -2005,6 +2397,7 @@ def MaskedAffineCoupling(transform_fun, axis=-1, mask_type='channel_wise', top_l
 
         # Apply the nonlinearity to the masked input
         masked_input = (1.0 - mask)*x
+        condition = () # :(
         network_input = masked_input if len(condition) == 0 else (masked_input, *condition)
         (log_s, t), updated_state = apply_fun(transform_params, state, network_input, **kwargs)
 
@@ -2024,6 +2417,7 @@ def MaskedAffineCoupling(transform_fun, axis=-1, mask_type='channel_wise', top_l
 
         # Apply the nonlinearity to the masked input
         masked_input = (1.0 - mask)*z
+        condition = () # :(
         network_input = masked_input if len(condition) == 0 else (masked_input, *condition)
         (log_s, t), updated_state = apply_fun(transform_params, state, network_input, **kwargs)
 
@@ -2045,8 +2439,7 @@ def MaskedAffineCoupling(transform_fun, axis=-1, mask_type='channel_wise', top_l
 def AffineCoupling(transform_fun, axis=-1, name='unnamed'):
     # language=rst
     """
-    Apply an arbitrary transform to half of the input vector.  Probably slower than masked version, but is
-    more memory efficient.
+    Apply an arbitrary transform to half of the input vector.  NOT PRECISE FOR SOME REASON!!!!
 
     :param transform: A transformation that will act on half of the input vector. Must return 2 vectors!!!
     :param axis: Axis to split on
@@ -2065,6 +2458,7 @@ def AffineCoupling(transform_fun, axis=-1, name='unnamed'):
 
         # Find the split shape
         split_input_shape = input_shape[:ax] + (half_split_dim,) + input_shape[ax + 1:]
+        condition_shape = () # :(
         transform_input_shape = split_input_shape if len(condition_shape) == 0 else (split_input_shape,) + condition_shape
 
         # Ugly, but saves us from initializing when calling function
@@ -2077,9 +2471,9 @@ def AffineCoupling(transform_fun, axis=-1, name='unnamed'):
     def forward(params, state, log_px, x, condition, **kwargs):
 
         xa, xb = np.split(x, 2, axis=axis)
+        condition = () # :(
         network_input = xb if len(condition) == 0 else (xb, *condition)
         (log_s, t), updated_state = apply_fun(params, state, xb, **kwargs)
-
         za = xa*np.exp(log_s) + t
         z = np.concatenate([za, xb], axis=axis)
 
@@ -2090,9 +2484,9 @@ def AffineCoupling(transform_fun, axis=-1, name='unnamed'):
     def inverse(params, state, log_pz, z, condition, **kwargs):
 
         za, zb = np.split(z, 2, axis=axis)
+        condition = () # :(
         network_input = zb if len(condition) == 0 else (zb, *condition)
         (log_s, t), updated_state = apply_fun(params, state, zb, **kwargs)
-
         xa = (za - t)*np.exp(-log_s)
         x = np.concatenate([xa, zb], axis=axis)
 
@@ -2101,20 +2495,6 @@ def AffineCoupling(transform_fun, axis=-1, name='unnamed'):
         return log_pz + log_det, x, updated_state
 
     return init_fun, forward, inverse
-
-################################################################################################################
-
-def GLOWBlock(transform_fun, mask_type='channel_wise', top_left_zero=False, name='unnamed'):
-    # language=rst
-    """
-    One step of GLOW https://arxiv.org/pdf/1807.03039.pdf
-
-    :param transform: A transformation that will act on half of the input vector. Must return 2 vectors!!!
-    :param mask_type: What kind of masking to use.  For images, can use checkerboard
-    """
-    return sequential_flow(ActNorm(name='%s_act_norm'%name),
-                           OnebyOneConv(name='%s_one_by_one_conv'%name),
-                           MaskedAffineCoupling(transform_fun, mask_type=mask_type, top_left_zero=top_left_zero, name='%s_affine_coupling'%name))
 
 ################################################################################################################
 

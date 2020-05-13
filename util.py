@@ -139,6 +139,13 @@ def CTC_solve(kernel, pad, stride, max_iters, b, initial_guess):
 
 ################################################################################################################
 
+def conv_transpose_output_shape(H, W, filter_shape, stride, pad):
+    out_shape0 = (H - 1)*stride[0] - filter_shape[0] + pad[0][0] + pad[0][1] + 2
+    out_shape1 = (W - 1)*stride[1] - filter_shape[1] + pad[1][0] + pad[1][1] + 2
+    return out_shape0, out_shape1
+
+################################################################################################################
+
 @partial(jit, static_argnums=(1, 2))
 def dilate(x, n_cols, n_rows):
 

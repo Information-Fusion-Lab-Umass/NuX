@@ -206,30 +206,19 @@ def get_cifar10_data(quantize_level_bits=2, data_folder='/tmp/cifar10/'):
 
 ############################################################################################################################################################
 
-def get_celeb_dataset(quantize_level_bits=8, strides=(5, 5), crop=(12, 4), n_images=20000, data_folder='.'):
+def get_celeb_dataset(quantize_level_bits=8, strides=(5, 5), crop=(12, 4), n_images=20000, data_folder='data/img_align_celeba/'):
     # language=rst
     """
     Load the celeb A dataset.
 
     :param data_folder: Where to download the data to
     """
-    celeb_dir = os.path.join(data_folder, 'img_align_celeba')
+    celeb_dir = data_folder
 
     if(os.path.exists(celeb_dir) == False):
         assert 0, 'Need to manually download the celeb-A dataset.  Download the zip file from here: %s'%('https://drive.google.com/open?id=0B7EVK8r0v71pZjFTYXZWM3FlRnM')
 
-    def file_iter():
-        for root, dirs, files in os.walk(celeb_dir):
-            for file in files:
-                if(file.endswith('.jpg')):
-                    path = os.path.join(root, file)
-                    yield path
-
-    all_files = []
-    for path in file_iter():
-        all_files.append(path)
-        if(len(all_files) == n_images):
-            break
+    all_files = glob.glob('%s*.jpg'%celeb_dir)[:n_images]
 
     quantize_factor = 256/(2**quantize_level_bits)
 
