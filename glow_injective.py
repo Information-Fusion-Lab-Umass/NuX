@@ -21,21 +21,21 @@ n_gpus = xla_bridge.device_count()
 
 parser = argparse.ArgumentParser(description='Training Noisy Injective Flows')
 
-parser.add_argument('--name', action='store', type=str, nargs = 1,
+parser.add_argument('--name', action='store', type=str,
                    help='Name of model', default = '0')
-parser.add_argument('--batchsize', action='store', type=int, nargs = 1,
+parser.add_argument('--batchsize', action='store', type=int,
                    help='Batch Size, default = 64', default = 64)
-parser.add_argument('--dataset', action='store', type=str, nargs = 1,
+parser.add_argument('--dataset', action='store', type=str,
                    help='Dataset to load, default = CelebA', default = 'CelebA')
-parser.add_argument('--numimage', action='store', type=int, nargs = 1,
+parser.add_argument('--numimage', action='store', type=int,
                    help='Number of images to load from selected dataset, default = 50000', default = 50000)
-parser.add_argument('--quantize', action='store', type=int, nargs = 1,
+parser.add_argument('--quantize', action='store', type=int,
                    help='Sets the value of quantize_level_bits, default = 5', default = 5)
-parser.add_argument('--startingit', action ='store', type=int, nargs=1,
+parser.add_argument('--startingit', action ='store', type=int,
                    help = 'Sets the training iteration to start on. There must be a stored file for this to occure', default = 0)
 
 
-parser.add_argument('--printevery', action = 'store', type=int, nargs = 1,
+parser.add_argument('--printevery', action = 'store', type=int,
                    help='Sets the number of iterations between each test', default = 2)
 
 args = parser.parse_args()
@@ -44,7 +44,7 @@ batch_size = args.batchsize
 dataset = args.dataset 
 n_images = args.numimage
 quantize_level_bits = args.quantize
-start_it = args.startingit[0]
+start_it = args.startingit
 experiment_name = args.name
 
 print_every = args.printevery
@@ -55,33 +55,6 @@ if(dataset == 'CelebA'):
 elif(dataset == 'CIFAR'):
     x_train, train_labels, test_images, test_labels = get_cifar10_data(quantize_level_bits=quantize_level_bits)
 
-def ResidualBlock(n_filters, norm_type='instance', use_wn=False):
-    if(norm_type == 'batch_norm'):
-        norm = spp.BatchNorm()
-    elif(norm_type == 'instance'):
-        norm = spp.InstanceNorm()
-    else:
-        assert 0
-        
-    one_by_one = lambda bias, **kwargs: spp.Conv(n_filters, filter_shape=(1, 1), padding=((0, 0), (0, 0)), bias=bias, **kwargs)
-    three_by_three = lambda bias, **kwargs: spp.Conv(n_filters, filter_shape=(3, 3), padding=((1, 1), (1, 1)), bias=bias, **kwargs)
-        
-    network = spp.sequential(three_by_three(bias=True),
-                             norm,
-                             spp.Relu(), 
-                             one_by_one(bias=True),
-                             norm,
-                             spp.Relu(),
-                             three_by_three(bias=True))
-    return spp.Residual(network)
-def ResNet(out_shape, norm_type='instance', n_filters=64, n_blocks=2):
-    _, _, channels = out_shape
-    return spp.sequential(spp.Conv(n_filters, filter_shape=(1, 1), padding=((0, 0), (0, 0)), bias=True),
-                          spp.Relu(),
-                          *[ResidualBlock(n_filters, norm_type=norm_type) for i in range(n_blocks)],
-                          spp.Conv(2*channels, filter_shape=(3, 3), padding=((1, 1), (1, 1)), bias=True, W_init=jaxinit.zeros, b_init=jaxinit.zeros),
-                          spp.Split(2, axis=-1), 
-                          spp.parallel(spp.Tanh(), spp.Identity()))  # log_s, t
 def GLOWNet(out_shape, n_filters=512):
     _, _, channels = out_shape
     return spp.sequential(spp.Conv(n_filters, filter_shape=(3, 3), padding=((1, 1), (1, 1)), bias=True, weightnorm=False),
@@ -100,7 +73,7 @@ def FlatTransform(out_shape, n_hidden_layers=4, layer_size=1024):
                           spp.Split(2, axis=-1), 
                           spp.parallel(spp.Tanh(), spp.Identity())) # log_s, t
 def GLOW(name_iter, norm_type='instance', conditioned_actnorm=False):
-    layers = [GLOWBlock(GLOWNet, masked=False, name=next(name_iter))]*1
+    layers = [GLOWBlock(GLOWNet, masked=False, name=next(name_iter))]*1 #32
     return sequential_flow(Squeeze(), Debug(''), *layers, UnSqueeze())
 def RealNDP(z_dim=50):
     debug_kwargs = dict(print_init_shape=True, print_forward_shape=False, print_inverse_shape=False, compare_vals=False)
@@ -119,7 +92,7 @@ def RealNDP(z_dim=50):
     #flow = multi_scale(flow)
     #flow = multi_scale(flow)
     if(z_dim is not None):
-        prior_layers = [AffineCoupling(FlatTransform), ActNorm(name=next(an_names)), Reverse()]*2
+        prior_layers = [AffineCoupling(FlatTransform), ActNorm(name=next(an_names)), Reverse()]*2 #10
         prior_flow = sequential_flow(*prior_layers, AffineGaussianPriorFullCov(z_dim))
         prior_flow = TallAffineDiagCov(prior_flow, z_dim)
 #         prior_flow = AffineGaussianPriorFullCov(z_dim)
@@ -143,7 +116,7 @@ for flow in [nf, nif]:
     z_dim = output_shape[-1]
     flow_model = ((names, output_shape, params, state), forward, inverse) 
     actnorm_names = [name for name in tree_flatten(names)[0] if 'act_norm' in name]
-    if(True):
+    if(start_it != 0):
         params = multistep_flow_data_dependent_init(x_train,
                                            actnorm_names,
                                            flow_model,
@@ -171,7 +144,12 @@ def spmd_update(forward, opt_update, get_params, i, opt_state, state, x_batch, k
     return val, state, opt_state
 
 # Create the optimizer
-opt_init, opt_update, get_params = optimizers.adam(1e-4)
+
+def lr_schedule(i, lr_decay=1.0, max_lr=1e-4):
+    warmup_steps = 2000
+    return np.where(i < warmup_steps, max_lr*i/warmup_steps, max_lr*(lr_decay**(i - warmup_steps)))
+
+opt_init, opt_update, get_params = optimizers.adam(lr_schedule)
 opt_update = jit(opt_update)
 opt_state_nf = opt_init(nf_model.params)
 opt_state_nif = opt_init(nif_model.params)
@@ -188,6 +166,9 @@ if(start_it != 0):
     state_nf = load_pytree(tree_structure(nf_model.state), 'Experiments/' + str(experiment_name) + '/' + str(start_it) + '/' + 'state_nf_leaves.p')
     state_nif = load_pytree(tree_structure(nif_model.state), 'Experiments/' + str(experiment_name) + '/' + str(start_it) + '/' + 'state_nf_leaves.p')
 
+    nf_model.state, nif_model.state = state_nf.state_nif
+    nf_model.params, nif_model.params = get_params(opt_state_nf), get_params(opt_state_nif)
+
     start_it += 1
 
 
@@ -200,8 +181,8 @@ losses_nf, losses_nif = [], []
 
 # Need to copy the optimizer state and network state before it gets passed to pmap
 replicate_array = lambda x: onp.broadcast_to(x, (n_gpus,) + x.shape)
-replicated_opt_state_nf, replicated_state_nf = tree_map(replicate_array, opt_state_nf), tree_map(replicate_array, nf_model.state)
-replicated_opt_state_nif, replicated_state_nif = tree_map(replicate_array, opt_state_nif), tree_map(replicate_array, nif_model.state)
+replicated_opt_state_nf, replicated_state_nf = tree_map(replicate_array, opt_state_nf), tree_map(replicate_array, state_nf)
+replicated_opt_state_nif, replicated_state_nif = tree_map(replicate_array, opt_state_nif), tree_map(replicate_array, state_nif)
 
 
 def savePytree(pytree, dir_save):
@@ -224,7 +205,6 @@ for i in np.arange(start_it, 100000):
     replicated_val_nf, replicated_state_nf, replicated_opt_state_nf = filled_spmd_update_nf(replicated_i, replicated_opt_state_nf, replicated_state_nf, x_batch, train_keys)
     replicated_val_nif, replicated_state_nif, replicated_opt_state_nif = filled_spmd_update_nif(replicated_i, replicated_opt_state_nif, replicated_state_nif, x_batch, train_keys)
     
-    
     # Convert to bits/dimension
     val_nf, val_nif = replicated_val_nf[0], replicated_val_nif[0]
     val_nf, val_nif = val_nf/np.prod(x_train.shape[1:])/np.log(2), val_nif/np.prod(x_train.shape[1:])/np.log(2)
@@ -239,6 +219,7 @@ for i in np.arange(start_it, 100000):
         # Get the trained parameters and the state
         opt_state_nf, opt_state_nif = tree_map(lambda x:x[0], replicated_opt_state_nf), tree_map(lambda x:x[0], replicated_opt_state_nif)
         state_nf, state_nif = tree_map(lambda x:x[0], replicated_state_nf), tree_map(lambda x:x[0], replicated_state_nif)
+
         opt_state_nf_leaves, opt_state_nif_leaves = tree_leaves(opt_state_nf), tree_leaves(opt_state_nif)
         state_nf_leaves, state_nif_leaves = tree_leaves(state_nf), tree_leaves(state_nif)
 
@@ -248,85 +229,6 @@ for i in np.arange(start_it, 100000):
         savePytree(opt_state_nif_leaves, 'Experiments/' + str(experiment_name) + '/' + str(i) + '/' + 'opt_state_nif_leaves.p')
         savePytree(state_nf_leaves, 'Experiments/' + str(experiment_name) + '/' + str(i) + '/' + 'state_nf_leaves.p')
         savePytree(state_nif_leaves, 'Experiments/' + str(experiment_name) + '/' + str(i) + '/' + 'state_nif_leaves.p')
-
-
-
-
-
-
-        '''
-
-        #Tests
-        
-        # Create new models
-        nf_model = Model(nf_model.names, nf_model.output_shape, get_params(opt_state_nf), state_nf, nf_model.forward, nf_model.inverse)
-        nif_model = Model(nif_model.names, nif_model.output_shape, get_params(opt_state_nif), state_nif, nif_model.forward, nif_model.inverse)
-        
-        # Pull noise samples
-        n_samples = 18
-        n_samples_per_batch = 2
-        eval_key = random.PRNGKey(0)
-        temperatures = np.linspace(0.5, 3.0, n_samples)
-        
-        # Create the axes
-        n_cols = n_samples
-        n_rows = 2
-
-        # Make the subplots
-        fig, axes = plt.subplots(n_rows, n_cols); axes = axes.ravel()
-        axes_iter = iter(axes)
-        fig.set_size_inches(2*n_cols, 2*n_rows)
-
-        # Generate the samples from the noisy injective flow
-        zs = random.normal(eval_key, (n_samples, z_dim))
-        zs *= temperatures[:,None]
-        temp_iter = iter(temperatures)
-        
-        for j in range(n_samples//n_samples_per_batch):
-            z = zs[j*n_samples_per_batch:(j + 1)*n_samples_per_batch]
-            _, fz, _ = nif_model.inverse(nif_model.params, nif_model.state, np.zeros(n_samples_per_batch), z, (), key=eval_key, test=TEST)
-            fz /= (2.0**quantize_level_bits) # Put the image (mostly) between 0 and 1
-            fz *= (1.0 - 2*0.05)
-            fz += 0.05
-
-            for k in range(n_samples_per_batch):
-                ax = next(axes_iter)
-                ax.imshow(fz[k])
-                ax.set_title('T = %5.3f'%(next(temp_iter)))
-                ax.set_axis_off()
-                
-        # Generate the samples from the normalizing flow
-        zs = random.normal(eval_key, (n_samples,) + x_train.shape[1:])
-        zs *= temperatures[:,None,None,None]
-        temp_iter = iter(temperatures)
-                
-        for j in range(n_samples//n_samples_per_batch):
-            z = zs[j*n_samples_per_batch:(j + 1)*n_samples_per_batch]
-            _, fz, _ = nf_model.inverse(nf_model.params, nf_model.state, np.zeros(n_samples_per_batch), z, (), key=eval_key, test=TEST)
-            fz /= (2.0**quantize_level_bits) # Put the image (mostly) between 0 and 1
-            fz *= (1.0 - 2*0.05)
-            fz += 0.05
-
-            for k in range(n_samples_per_batch):
-                ax = next(axes_iter)
-                ax.imshow(fz[k])
-                ax.set_axis_off()
-                
-        plt.subplots_adjust(wspace=0, hspace=0, left=0, right=1, bottom=0, top=1)        
-        plt.show()
-
-
-fig, ax = plt.subplots(1, 1)
-fig.set_size_inches(10, 10)
-ax.plot(pd.DataFrame(losses_nf).ewm(alpha=0.001).mean()[500:], label='Normalizing Flow')
-ax.plot(pd.DataFrame(losses_nif).ewm(alpha=0.001).mean()[500:], label='Noisy Injective Flow')
-ax.set_title('Bits/Dimension During Training')
-ax.set_xlabel('Iterations')
-ax.set_ylabel('Bits/Dim')
-ax.legend()
-
-'''
-
 
 
 
