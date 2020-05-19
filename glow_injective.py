@@ -116,7 +116,7 @@ for flow in [nf, nif]:
     z_dim = output_shape[-1]
     flow_model = ((names, output_shape, params, state), forward, inverse) 
     actnorm_names = [name for name in tree_flatten(names)[0] if 'act_norm' in name]
-    if(start_it != 0):
+    if(start_it == 0):
         params = multistep_flow_data_dependent_init(x_train,
                                            actnorm_names,
                                            flow_model,
@@ -126,6 +126,7 @@ for flow in [nf, nif]:
                                            n_seed_examples=8,
                                            batch_size=8,
                                            notebook=False)
+
 
     models.append(Model(names, output_shape, params, state, forward, inverse))
 nf_model, nif_model = models
@@ -149,6 +150,7 @@ def lr_schedule(i, lr_decay=1.0, max_lr=1e-4):
     warmup_steps = 2000
     return np.where(i < warmup_steps, max_lr*i/warmup_steps, max_lr*(lr_decay**(i - warmup_steps)))
 
+
 opt_init, opt_update, get_params = optimizers.adam(lr_schedule)
 opt_update = jit(opt_update)
 opt_state_nf = opt_init(nf_model.params)
@@ -166,12 +168,20 @@ if(start_it != 0):
     state_nf = load_pytree(tree_structure(nf_model.state), 'Experiments/' + str(experiment_name) + '/' + str(start_it) + '/' + 'state_nf_leaves.p')
     state_nif = load_pytree(tree_structure(nif_model.state), 'Experiments/' + str(experiment_name) + '/' + str(start_it) + '/' + 'state_nf_leaves.p')
 
-    nf_model.state, nif_model.state = state_nf, state_nif
-    nf_model.params, nif_model.params = get_params(opt_state_nf), get_params(opt_state_nif)
+    nf_model._replace(state = state_nf)
+    nif_model._replace(state = state_nif)
+    nf_model._replace(params = opt_state_nf)
+    nif_model._replace(params = opt_state_nif)
+    with open('Experiments/' + str(experiment_name) + '/misc.p','rb') as f: misc = pickle.load(f)
+    key = misc['key']
+
 
     start_it += 1
 else:
-	state_nf, state_nif = nf_model.state, nif_model.state
+    state_nf, state_nif = nf_model.state, nif_model.state
+    misc = dict()
+
+    print('this')
 
 
 
@@ -183,7 +193,8 @@ losses_nf, losses_nif = [], []
 
 # Need to copy the optimizer state and network state before it gets passed to pmap
 replicate_array = lambda x: onp.broadcast_to(x, (n_gpus,) + x.shape)
-replicated_opt_state_nf, replicated_state_nf = tree_map(replicate_array, opt_state_nf), tree_map(replicate_array, state_nf)
+replicated_state_nf = tree_map(replicate_array, state_nf)
+replicated_opt_state_nf = tree_map(replicate_array, opt_state_nf)
 replicated_opt_state_nif, replicated_state_nif = tree_map(replicate_array, opt_state_nif), tree_map(replicate_array, state_nif)
 
 
@@ -213,7 +224,8 @@ for i in np.arange(start_it, 100000):
 
     losses_nf.append(val_nf)
     losses_nif.append(val_nif)
-    print(f'Negative Log Likelihood: NF: {val_nf:.3f}, NIF: {val_nif:.3f}') 
+    print(f'Negative Log Likelihood: NF: {val_nf:.3f}, NIF: {val_nif:.3f}')
+    print(i) 
     
     if(i%print_every == 0):
 
@@ -231,6 +243,12 @@ for i in np.arange(start_it, 100000):
         savePytree(opt_state_nif_leaves, 'Experiments/' + str(experiment_name) + '/' + str(i) + '/' + 'opt_state_nif_leaves.p')
         savePytree(state_nf_leaves, 'Experiments/' + str(experiment_name) + '/' + str(i) + '/' + 'state_nf_leaves.p')
         savePytree(state_nif_leaves, 'Experiments/' + str(experiment_name) + '/' + str(i) + '/' + 'state_nif_leaves.p')
+
+        np.savetxt('Experiments/' + str(experiment_name) + '/' + 'losses_nf.txt', losses_nf, delimiter=",")
+        np.savetxt('Experiments/' + str(experiment_name) + '/' + 'losses_nif.txt', losses_nif, delimiter=",")
+        misc['key'] = key
+
+        with open('Experiments/' + str(experiment_name) + '/misc.p','wb') as f: pickle.dump(misc, f)
 
 
 
