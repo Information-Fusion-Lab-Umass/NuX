@@ -166,10 +166,12 @@ if(start_it != 0):
     state_nf = load_pytree(tree_structure(nf_model.state), 'Experiments/' + str(experiment_name) + '/' + str(start_it) + '/' + 'state_nf_leaves.p')
     state_nif = load_pytree(tree_structure(nif_model.state), 'Experiments/' + str(experiment_name) + '/' + str(start_it) + '/' + 'state_nf_leaves.p')
 
-    nf_model.state, nif_model.state = state_nf.state_nif
+    nf_model.state, nif_model.state = state_nf, state_nif
     nf_model.params, nif_model.params = get_params(opt_state_nf), get_params(opt_state_nif)
 
     start_it += 1
+else:
+	state_nf, state_nif = nf_model.state, nif_model.state
 
 
 
