@@ -15,13 +15,16 @@ from six.moves import cPickle as pickle
 from imageio import imread
 import platform
 
-import numpy as np
+import numpy as onp
 import pandas as pd
 import scipy.stats
 
 import matplotlib.pyplot as plt
 from tqdm import tqdm_notebook
 from functools import partial
+
+from jax import random, vmap, jit, value_and_grad
+import jax.numpy as np
 
 def download_url(data_folder, filename, url):
     # language=rst
@@ -54,7 +57,7 @@ def parse_mnist_struct(filename, struct_format='>II'):
     struct_size = struct.calcsize(struct_format)
     with gzip.open(filename, 'rb') as file:
         header = struct.unpack(struct_format, file.read(struct_size))
-        return header, np.array(array.array("B", file.read()), dtype=np.uint8)
+        return header, onp.array(array.array("B", file.read()), dtype=onp.uint8)
 
 def download_mnist(data_folder, base_url):
     # language=rst
@@ -99,11 +102,11 @@ def get_mnist_data(quantize_level_bits=2, data_folder='/tmp/mnist/', kind='digit
     test_images = test_images[...,None]
 
     # Turn the labels to one hot vectors
-    train_labels = train_labels == np.arange(10)[:,None]
-    test_labels = test_labels == np.arange(10)[:,None]
+    train_labels = train_labels == onp.arange(10)[:,None]
+    test_labels = test_labels == onp.arange(10)[:,None]
 
-    train_labels = train_labels.astype(np.int32).T
-    test_labels = test_labels.astype(np.int32).T
+    train_labels = train_labels.astype(onp.int32).T
+    test_labels = test_labels.astype(onp.int32).T
 
     # Quantize
     factor = 256/(2**quantize_level_bits)
@@ -149,10 +152,10 @@ def load_cifar_batch(filename):
         images, labels = datadict['data'], datadict['labels']
 
         # Reshape the images so that the channel dim is at the end
-        images = images.reshape((-1, 3, 32, 32)).transpose(0, 2, 3, 1).astype(np.float32)
+        images = images.reshape((-1, 3, 32, 32)).transpose(0, 2, 3, 1).astype(onp.float32)
 
         # Turn the labels into onehot vectors
-        labels = np.array(labels)
+        labels = onp.array(labels)
         return images, labels
 
 def load_cifar10(batches_data_folder):
@@ -169,15 +172,15 @@ def load_cifar10(batches_data_folder):
         images, labels = load_cifar_batch(filename)
         xs.append(images)
         ys.append(labels)
-    train_images = np.concatenate(xs)
-    train_labels = np.concatenate(ys) == np.arange(10)[:,None]
+    train_images = onp.concatenate(xs)
+    train_labels = onp.concatenate(ys) == onp.arange(10)[:,None]
 
     # Load the test data
     test_images, test_labels = load_cifar_batch(os.path.join(batches_data_folder, 'test_batch'))
-    test_labels = test_labels == np.arange(10)[:,None]
+    test_labels = test_labels == onp.arange(10)[:,None]
 
-    train_labels = train_labels.astype(np.int32).T
-    test_labels = test_labels.astype(np.int32).T
+    train_labels = train_labels.astype(onp.int32).T
+    test_labels = test_labels.astype(onp.int32).T
     return train_images, train_labels, test_images, test_labels
 
 def get_cifar10_data(quantize_level_bits=2, data_folder='/tmp/cifar10/'):
@@ -218,7 +221,8 @@ def get_celeb_dataset(quantize_level_bits=8, strides=(5, 5), crop=(12, 4), n_ima
     if(os.path.exists(celeb_dir) == False):
         assert 0, 'Need to manually download the celeb-A dataset.  Download the zip file from here: %s'%('https://drive.google.com/open?id=0B7EVK8r0v71pZjFTYXZWM3FlRnM')
 
-    all_files = glob.glob('%s*.jpg'%celeb_dir)[:n_images]
+    all_files = glob.glob('%s*.jpg'%celeb_dir)
+    all_files = all_files[:n_images]
 
     quantize_factor = 256/(2**quantize_level_bits)
 
@@ -228,11 +232,42 @@ def get_celeb_dataset(quantize_level_bits=8, strides=(5, 5), crop=(12, 4), n_ima
         im = im[::strides[0],::strides[1]][crop[0]:,crop[1]:]
         images.append(im//quantize_factor)
 
-    np_images = np.array(images, dtype=np.int32)
+    np_images = onp.array(images, dtype=onp.int32)
 
     return np_images
 
-    n_images, train_labels, test_images, test_labels
+############################################################################################################################################################
+
+def celeb_dataset_loader(key, quantize_level_bits=8, strides=(5, 5), crop=(12, 4), batch_size=64, data_folder='data/img_align_celeba/'):
+    # language=rst
+    """
+    Load the celeb A dataset.
+
+    :param data_folder: Where to download the data to
+    """
+    celeb_dir = data_folder
+
+    all_files = glob.glob('%s*.jpg'%celeb_dir)
+    total_files = len(all_files)
+    quantize_factor = 256/(2**quantize_level_bits)
+
+    all_files = onp.array(all_files)
+
+    def get_batch(key, n_gpus, batch_size):
+        batch_idx = random.randint(key, (n_gpus*batch_size,), minval=0, maxval=total_files)
+        batch_files = all_files[onp.array(batch_idx)]
+
+        images = []
+        for path in batch_files:
+            im = plt.imread(path, format='jpg')
+            im = im[::strides[0],::strides[1]][crop[0]:,crop[1]:]
+            images.append(im//quantize_factor)
+
+        np_images = np.array(images, dtype=np.int32)
+        np_images = np_images.reshape((n_gpus, batch_size) + np_images.shape[1:])
+        return np_images
+
+    return get_batch
 
 ############################################################################################################################################################
 
@@ -273,7 +308,7 @@ def get_BSDS300_data(quantize_level_bits=8, strides=(1, 1), crop=(0, 0), data_fo
         im = im[::strides[0],::strides[1]][crop[0]:,crop[1]:]
         images.append(im//quantize_factor)
 
-    train_images = np.array(images, dtype=np.int32)
+    train_images = onp.array(images, dtype=onp.int32)
 
     images = []
     for path in tqdm_notebook(test_images):
@@ -283,7 +318,7 @@ def get_BSDS300_data(quantize_level_bits=8, strides=(1, 1), crop=(0, 0), data_fo
         im = im[::strides[0],::strides[1]][crop[0]:,crop[1]:]
         images.append(im//quantize_factor)
 
-    test_images = np.array(images, dtype=np.int32)
+    test_images = onp.array(images, dtype=onp.int32)
 
     return train_images, test_images
 
@@ -291,7 +326,7 @@ def get_BSDS300_data(quantize_level_bits=8, strides=(1, 1), crop=(0, 0), data_fo
 
 def make_train_test_split(x, percentage):
     n_train = int(x.shape[0]*percentage)
-    np.random.shuffle(x)
+    onp.random.shuffle(x)
     return x[n_train:], x[:n_train]
 
 def decorrelate_data(data, threshold=0.98):
@@ -303,25 +338,25 @@ def decorrelate_data(data, threshold=0.98):
     :param threshold: Threshold where columns are considered correlated
     """
     # Find the correlation between each column
-    col_correlation = np.sum(data.corr() > threshold, axis=1)
+    col_correlation = onp.sum(data.corr() > threshold, axis=1)
 
-    while np.any(col_correlation > 1):
+    while onp.any(col_correlation > 1):
         # Remove columns that are highly correlated with more than 1 other column
-        col_to_remove = np.where(col_correlation > 1)[0][0]
+        col_to_remove = onp.where(col_correlation > 1)[0][0]
         col_name = data.columns[col_to_remove]
         data.drop(col_name, axis=1, inplace=True)
 
         # Find the correlation again
-        col_correlation = np.sum(data.corr() > threshold, axis=1)
+        col_correlation = onp.sum(data.corr() > threshold, axis=1)
     return data
 
 def remove_outliers_in_df(df, max_z_score=2):
     z_scores = scipy.stats.zscore(df)
-    return df[np.all(np.abs(z_scores) < max_z_score, axis=1)]
+    return df[onp.all(onp.abs(z_scores) < max_z_score, axis=1)]
 
 def whiten_data(x):
-    U, _, VT = np.linalg.svd(x, full_matrices=False)
-    return np.dot(U, VT)
+    U, _, VT = onp.linalg.svd(x, full_matrices=False)
+    return onp.dot(U, VT)
 
 ############################################################################################################################################################
 
@@ -372,16 +407,16 @@ def get_gas_data(train_test_split=True, decorrelate=True, normalize=False, retur
     co_data.drop(columns=[4], inplace=True)
 
     # The data only contains 2 decimals, so do uniform dequantization
-    co_dequantization_scale = np.ones(co_data.shape[1])*0.01*0.0
-    methane_dequantization_scale = np.ones(methane_data.shape[1])*0.01*0.0
+    co_dequantization_scale = onp.ones(co_data.shape[1])*0.01*0.0
+    methane_dequantization_scale = onp.ones(methane_data.shape[1])*0.01*0.0
 
     # Remove outliers
     if(remove_outliers):
         remove_outliers_in_df(co_data)
 
     # Switch from pandas to numpy
-    co_data = co_data.to_numpy(dtype=np.float32)
-    methane_data = methane_data.to_numpy(dtype=np.float32)
+    co_data = co_data.to_numpy(dtype=onp.float32)
+    methane_data = methane_data.to_numpy(dtype=onp.float32)
 
     # Whiten the data
     if(whiten):
@@ -447,7 +482,7 @@ def get_miniboone_data(train_test_split=True, decorrelate=False, normalize=False
         data = (data - data.mean())/data.std()
 
     # Switch from pandas to numpy
-    data = data.to_numpy(dtype=np.float32)
+    data = data.to_numpy(dtype=onp.float32)
 
     # Whiten the data
     if(whiten):
@@ -461,7 +496,7 @@ def get_miniboone_data(train_test_split=True, decorrelate=False, normalize=False
     # For consistency, return a dummy dequantization array
     if(return_dequantize_scale):
         n_cols = data[0].shape[1] if train_test_split else data.shape[1]
-        return data, np.zeros(n_cols)
+        return data, onp.zeros(n_cols)
 
     return data
 
@@ -490,8 +525,8 @@ def get_power_data(train_test_split=True, decorrelate=False, normalize=False, re
     data = pd.read_csv(full_filename, sep=';')
 
     # Combine the time stamp into a single time
-    time_ns = pd.to_datetime(data['Time']).astype(np.int64)
-    date_ns = pd.to_datetime(data['Date']).astype(np.int64)
+    time_ns = pd.to_datetime(data['Time']).astype(onp.int64)
+    date_ns = pd.to_datetime(data['Date']).astype(onp.int64)
     data = data.drop(columns=['Time', 'Date'])
     data['Time'] = (date_ns + time_ns - time_ns[0])/1e16
 
@@ -508,7 +543,7 @@ def get_power_data(train_test_split=True, decorrelate=False, normalize=False, re
         remove_outliers_in_df(data)
 
     # We have different dequantization scales
-    dequantize_scale = np.array([0.001, 0.001, 0.01, 0.1, 1.0, 1.0, 1.0, 0.0])*0.0
+    dequantize_scale = onp.array([0.001, 0.001, 0.01, 0.1, 1.0, 1.0, 1.0, 0.0])*0.0
 
     # Normalize the data.  If we're going to use dequantization, don't do this.  Instead
     # seed an actnorm layer with the mean and std.
@@ -516,7 +551,7 @@ def get_power_data(train_test_split=True, decorrelate=False, normalize=False, re
         data = (data - data.mean())/data.std()
 
     # Switch from pandas to numpy
-    data = data.to_numpy(dtype=np.float32)
+    data = data.to_numpy(dtype=onp.float32)
 
     # Whiten the data
     if(whiten):
@@ -590,7 +625,7 @@ def get_hepmass_data(train_test_split=True, decorrelate=False, normalize=False, 
             remove_outliers_in_df(train_data)
 
         # We don't have to dequantize
-        dequantize_scale = np.zeros(train_data.shape[1])
+        dequantize_scale = onp.zeros(train_data.shape[1])
 
         # Normalize the data
         if(normalize):
@@ -598,13 +633,13 @@ def get_hepmass_data(train_test_split=True, decorrelate=False, normalize=False, 
             test_data = (test_data - test_data.mean())/test_data.std()
 
         # Switch from pandas to numpy
-        train_data = train_data.to_numpy(dtype=np.float32)
-        test_data = test_data.to_numpy(dtype=np.float32)
+        train_data = train_data.to_numpy(dtype=onp.float32)
+        test_data = test_data.to_numpy(dtype=onp.float32)
 
         # Whiten the data
         if(whiten):
-            whitened_data = whiten_data(np.concatenate([train_data, test_data], axis=0))
-            train_data, test_data = np.split(whitened_data, np.array([train_data.shape[0]]), axis=0)
+            whitened_data = whiten_data(onp.concatenate([train_data, test_data], axis=0))
+            train_data, test_data = onp.split(whitened_data, onp.array([train_data.shape[0]]), axis=0)
 
         if(return_dequantize_scale):
             return (train_data, test_data), dequantize_scale

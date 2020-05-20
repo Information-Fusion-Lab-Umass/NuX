@@ -28,7 +28,7 @@ RUN PYTHON_VERSION=cp37 && \
     CUDA_VERSION=cuda101 && \
     PLATFORM=linux_x86_64 && \
     BASE_URL='https://storage.googleapis.com/jax-releases' && \
-    pip install --upgrade $BASE_URL/$CUDA_VERSION/jaxlib-0.1.45-$PYTHON_VERSION-none-$PLATFORM.whl && \
+    pip install --upgrade $BASE_URL/$CUDA_VERSION/jaxlib-0.1.47-$PYTHON_VERSION-none-$PLATFORM.whl && \
     pip install --upgrade jax
 
 # Install graphviz
@@ -42,7 +42,7 @@ RUN python -m pip install --upgrade pip && \
     pip uninstall numpy -y && \
     pip install --user numpy scipy pandas bokeh cython networkx graphviz \
     pygraphviz PyQt5 matplotlib opt_einsum autograd pymc3 recordclass seaborn torch umap-learn tqdm \
-    tensorflow-datasets tensorflow-gpu
+    tensorflow-datasets tensorflow-gpu==1.15.2
 
 
 # Set the base directory

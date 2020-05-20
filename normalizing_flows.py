@@ -22,6 +22,23 @@ from tqdm import tqdm
 
 ################################################################################################################
 
+def named_wrap(flow, name='unnamed'):
+    _init_fun, _forward, _inverse = flow
+
+    def init_fun(key, input_shape, condition_shape):
+        _name, output_shape, params, state = _init_fun(key, input_shape, condition_shape)
+        return name, output_shape, params, state
+
+    def forward(params, state, log_px, x, condition, **kwargs):
+        log_px, z, updated_state = _forward(params, state, log_px, x, condition, **kwargs)
+        return log_px, z, updated_state
+
+    def inverse(params, state, log_px, z, condition, **kwargs):
+        log_px, x, updated_state = _inverse(params, state, log_px, z, condition, **kwargs)
+        return log_px, x, updated_state
+
+    return init_fun, forward, inverse
+
 def sequential_flow(*layers):
     # language=rst
     """
@@ -1632,7 +1649,7 @@ def BatchNorm(epsilon=1e-5, alpha=0.05, beta_init=zeros, gamma_init=zeros, name=
 
 ################################################################################################################
 
-def AffineLDU(L_init=normal(), d_init=normal(), U_init=normal(), name='unnamed', return_mat=False):
+def AffineLDU(L_init=normal(), d_init=ones, U_init=normal(), name='unnamed', return_mat=False):
     # language=rst
     """
     LDU parametrized square dense matrix
@@ -1671,7 +1688,7 @@ def AffineLDU(L_init=normal(), d_init=normal(), U_init=normal(), name='unnamed',
     def forward(params, state, log_px, x, condition, **kwargs):
         # Go from x to x
         if(x.ndim == 2):
-            return vmap(partial(forward, params, state, **kwargs), in_axes=(0, 0, None))(log_px, x, condition)
+            return vmap(partial(forward, params, state, condition=condition, **kwargs))(log_px, x)
 
         L, d, U = get_LDU(params)
 
@@ -1685,7 +1702,7 @@ def AffineLDU(L_init=normal(), d_init=normal(), U_init=normal(), name='unnamed',
 
     def inverse(params, state, log_pz, z, condition, **kwargs):
         if(z.ndim == 2):
-            return vmap(partial(inverse, params, state, **kwargs), in_axes=(0, 0, None))(log_pz, z, condition)
+            return vmap(partial(inverse, params, state, condition=condition, **kwargs))(log_pz, z)
 
         L, d, U = get_LDU(params)
 
@@ -1750,6 +1767,35 @@ def AffineSVD(n_householders, U_init=glorot_normal(), log_s_init=normal(), VT_in
 
     return init_fun, forward, inverse
 
+def AffineDense(W_init=glorot_normal(), name='name'):
+    # language=rst
+    """
+    Basic affine transformation
+    """
+    def init_fun(key, input_shape, condition_shape):
+        W = W_init(key, (input_shape[-1], input_shape[-1]))
+        U, s, VT = np.linalg.svd(W, full_matrices=False)
+        W = np.dot(U, VT)
+        params, state = W, ()
+        return name, input_shape, params, state
+
+    def forward(params, state, log_px, x, condition, **kwargs):
+        W = params
+        W = W/np.sqrt(np.sum(W**2, axis=0) + 1e-5)
+        z = np.dot(x, W.T)
+        log_det = np.linalg.slogdet(W)[1]
+        return log_px + log_det, z, state
+
+    def inverse(params, state, log_pz, z, condition, **kwargs):
+        W = params
+        W = W/np.sqrt(np.sum(W**2, axis=0) + 1e-5)
+        W_inv = np.linalg.inv(W)
+        x = np.dot(z, W_inv.T)
+        log_det = np.linalg.slogdet(W)[1]
+        return log_pz + log_det, x, state
+
+    return init_fun, forward, inverse
+
 def Affine(*args, mode='LDU', **kwargs):
     # language=rst
     """
@@ -1761,6 +1807,8 @@ def Affine(*args, mode='LDU', **kwargs):
         return AffineLDU(*args, **kwargs)
     elif(mode == 'SVD'):
         return AffineSVD(*args, **kwargs)
+    elif(mode == 'dense'):
+        return AffineDense(*args, **kwargs)
     else:
         assert 0, 'Invalid choice of affine backend'
 
@@ -2015,6 +2063,7 @@ def OnebyOneConvLAX(W_init=glorot_normal(), name='unnamed'):
         height, width, channel = x.shape[-3], x.shape[-2], x.shape[-1]
 
         W, = params
+        W = W/np.sqrt(np.sum(W**2, axis=0) + 1e-5)
         log_det = np.linalg.slogdet(W)[1]*height*width
         assert channel == W.shape[0]
 
@@ -2034,6 +2083,7 @@ def OnebyOneConvLAX(W_init=glorot_normal(), name='unnamed'):
         height, width, channel = z.shape[-3], z.shape[-2], z.shape[-1]
 
         W, = params
+        W = W/np.sqrt(np.sum(W**2, axis=0) + 1e-5)
         W_inv = np.linalg.inv(W)
         log_det = np.linalg.slogdet(W)[1]*height*width
         assert channel == W.shape[0]
@@ -2058,6 +2108,7 @@ def GLOWBlock(transform_fun,
               conditioned_actnorm=False,
               masked=True,
               mask_type='checkerboard',
+              additive_coupling=True,
               top_left_zero=False,
               use_ldu=False,
               name='unnamed'):
@@ -2090,9 +2141,299 @@ def GLOWBlock(transform_fun,
     if(masked):
         coupling = MaskedAffineCoupling(transform_fun, mask_type=mask_type, top_left_zero=top_left_zero, name=coupling_name)
     else:
-        coupling = AffineCoupling(transform_fun, name=coupling_name)
+        if(additive_coupling):
+            coupling = AdditiveCoupling(transform_fun, name=coupling_name)
+        else:
+            coupling = AffineCoupling(transform_fun, name=coupling_name)
 
     return sequential_flow(actnorm, conv, coupling)
+
+def ResidualGLOW(filter_shape=(1, 1), dilation=(1, 1), n_channels=512, ratio=2, name='unnamed'):
+    def Coupling2D(out_shape, n_channels=n_channels):
+        return spp.DoubledLowDimInputConvBlock(n_channels=n_channels)
+        # return spp.sequential(spp.LowDimInputConvBlock(n_channels=n_channels), spp.SqueezeExcitation(ratio=ratio))
+
+    if(name == 'unnamed'):
+        an_name = 'unnamed'
+        conv_name = 'unnamed'
+        coupling_name = 'unnamed'
+    else:
+        an_name = '%s_act_norm'%name
+        conv_name = '%s_one_by_one_conv'%name
+        coupling_name = '%s_affine_coupling'%name
+
+    return sequential_flow(LocalDense(filter_shape=filter_shape, dilation=dilation),
+                           ActNorm(name=an_name),
+                           Squeeze(),
+                           AffineCoupling(Coupling2D, name=coupling_name),
+                           UnSqueeze())
+
+################################################################################################################
+
+def ConditionedResidualGLOW(filter_shape=(1, 1), dilation=(1, 1), n_channels=512, ratio=2, name='unnamed'):
+    def Coupling2D(out_shape, n_channels=n_channels):
+        return spp.sequential(spp.LowDimInputConvBlock(n_channels=n_channels), spp.SqueezeExcitation(ratio=ratio))
+
+    if(name == 'unnamed'):
+        an_name = 'unnamed'
+        conv_name = 'unnamed'
+        coupling_name = 'unnamed'
+    else:
+        an_name = '%s_act_norm'%name
+        conv_name = '%s_one_by_one_conv'%name
+        coupling_name = '%s_affine_coupling'%name
+
+    return sequential_flow(ConditionedLocalDense(filter_shape=filter_shape, dilation=dilation),
+                           ConditionedActNorm(name=an_name),
+                           Squeeze(),
+                           AdditiveCoupling(Coupling2D, name=coupling_name),
+                           UnSqueeze())
+
+################################################################################################################
+
+def ConditionedNIFCoupling(n_channels=512, ratio=4, name='unnamed'):
+    conv_init, conv_apply = spp.LowDimInputConvBlock(n_channels=n_channels, init_zeros=False)
+    se_init, se_apply = spp.SqueezeExcitation(ratio=ratio)
+    # se_init, se_apply = spp.ConditionedSqueezeExcitation(ratio=ratio)
+
+    def init_fun(key, input_shape, condition_shape):
+        H, W, C = input_shape
+        (K,), = condition_shape
+        k1, k2 = random.split(key, 2)
+
+        # Find the shape of the dilated_squeeze output
+        H_sq, W_sq, C_sq = (H//2, W//2, C*2*2)
+
+        # Initialize the parameters
+        conv_name, conv_output_shape, conv_params, conv_state = conv_init(k1, (H_sq, W_sq, C_sq//2))
+        se_name, se_output_shape, se_params, se_state = se_init(k2, conv_output_shape)
+        # se_name, se_output_shape, se_params, se_state = se_init(k2, (conv_output_shape, (K,)))
+
+        names = (conv_name, se_name)
+        params = (conv_params, se_params)
+        state = (conv_state, se_state)
+        return names, input_shape, params, state
+
+    def forward(params, state, log_px, x, condition, **kwargs):
+        cond, = condition
+        conv_params, se_params = params
+        conv_state, se_state = state
+
+        if(x.ndim == 3):
+            dil_sq = dilated_squeeze
+            dil_unsq = dilated_unsqueeze
+        else:
+            dil_sq = vmap(dilated_squeeze, in_axes=(0, None, None))
+            dil_unsq = vmap(dilated_unsqueeze, in_axes=(0, None, None))
+
+        x = dil_sq(x, (2, 2), (1, 1))
+        x1, x2 = np.split(x, 2, axis=-1)
+
+        residual, updated_conv_state = conv_apply(conv_params, conv_state, x2)
+        residual, updated_se_state = se_apply(se_params, se_state, residual)
+        # residual, updated_se_state = se_apply(se_params, se_state, (residual, cond))
+
+        z1 = x1 + residual
+        z = np.concatenate([z1, x2], axis=-1)
+
+        z = dil_unsq(z, (2, 2), (1, 1))
+        log_det = 0.0
+        updated_states = (updated_conv_state, updated_se_state)
+        return log_px + log_det, z, updated_states
+
+    def inverse(params, state, log_pz, z, condition, **kwargs):
+        cond, = condition
+        conv_params, se_params = params
+        conv_state, se_state = state
+
+        if(z.ndim == 3):
+            dil_sq = dilated_squeeze
+            dil_unsq = dilated_unsqueeze
+        else:
+            dil_sq = vmap(dilated_squeeze, in_axes=(0, None, None))
+            dil_unsq = vmap(dilated_unsqueeze, in_axes=(0, None, None))
+
+        z = dil_sq(z, (2, 2), (1, 1))
+        z1, z2 = np.split(z, 2, axis=-1)
+
+        residual, updated_conv_state = conv_apply(conv_params, conv_state, z2)
+        residual, updated_se_state = se_apply(se_params, se_state, residual)
+        # residual, updated_se_state = se_apply(se_params, se_state, (residual, cond))
+
+        x1 = z1 - residual
+        x = np.concatenate([x1, z2], axis=-1)
+
+        x = dil_unsq(x, (2, 2), (1, 1))
+        log_det = 0.0
+        updated_states = (updated_conv_state, updated_se_state)
+        return log_pz + log_det, x, updated_states
+
+    return init_fun, forward, inverse
+
+################################################################################################################
+
+@partial(jit, static_argnums=(0, 4))
+def get_knot_parameters(apply_fun, params, state, x, K, min_width=1e-3, min_height=1e-3, min_derivative=1e-3):
+    # Create the entire set of parameters
+    theta, updated_state = apply_fun(params, state, x)
+
+    # Get the individual parameters
+    tw, th, td = np.split(theta, np.array([K, 2*K]), axis=-1)
+
+    # Make the parameters fit the discription of knots
+    tw, th = jax.nn.softmax(tw), jax.nn.softmax(th)
+    tw = min_width + (1.0 - min_width*K)*tw
+    th = min_height + (1.0 - min_height*K)*th
+    td = min_derivative + jax.nn.softplus(td)
+    knot_x, knot_y = np.cumsum(tw, axis=-1), np.cumsum(th, axis=-1)
+
+    # Pad the knots so that the first element is 0
+    pad = [(0, 0)]*(len(td.shape) - 1) + [(1, 0)]
+    knot_x = np.pad(knot_x, pad)
+    knot_y = np.pad(knot_y, pad)
+
+    # Pad the derivatives so that the first and last elts are 1
+    pad = [(0, 0)]*(len(td.shape) - 1) + [(1, 1)]
+    knot_derivs = np.pad(td, pad, constant_values=1)
+
+    return knot_x, knot_y, knot_derivs, updated_state
+
+@jit
+def spline_forward(knot_x, knot_y, knot_derivs, inputs):
+    eps = 1e-5
+    mask = (inputs > eps)&(inputs < 1.0 - eps)
+
+    # Find the knot index for each data point
+    vmapper = lambda f: vmap(f)
+    searchsorted = vmapper(partial(np.searchsorted, side='right'))
+    take = vmap(np.take)
+    if(inputs.ndim == 2):
+        searchsorted = vmapper(searchsorted)
+        take = vmap(take)
+
+    indices = searchsorted(knot_x, inputs) - 1
+
+    # Find the corresponding knots and derivatives
+    x_k = take(knot_x, indices)
+    y_k = take(knot_y, indices)
+    delta_k = take(knot_derivs, indices)
+
+    # We need the next indices too
+    x_kp1 = take(knot_x, indices + 1)
+    y_kp1 = take(knot_y, indices + 1)
+    delta_kp1 = take(knot_derivs, indices + 1)
+
+    # Some more values we need
+    dy = (y_kp1 - y_k)
+    dx = (x_kp1 - x_k)
+    dx = np.where(mask, dx, 1.0) # Need this otherwise we can get nans in gradients
+    s_k = dy/dx
+    zeta = (inputs - x_k)/dx
+    z1mz = zeta*(1 - zeta)
+
+    # Return the output
+    numerator = dy*(s_k*zeta**2 + delta_k*z1mz)
+    denominator = s_k + (delta_kp1 + delta_k - 2*s_k)*z1mz
+    outputs = y_k + numerator/denominator
+
+    # Calculate the log Jacobian determinant
+    deriv_numerator = s_k**2*(delta_kp1*zeta**2 + 2*s_k*z1mz + delta_k*(1 - zeta)**2)
+    deriv_denominator = (s_k + (delta_kp1 + delta_k - 2*s_k)*z1mz)**2
+    deriv = deriv_numerator/deriv_denominator
+
+    derivs_for_logdet = np.where(mask, deriv, 1.0)
+    outputs = np.where(mask, outputs, inputs)
+
+    log_det = np.log(np.abs(derivs_for_logdet)).sum(axis=-1)
+
+    return outputs, log_det
+
+@jit
+def spline_inverse(knot_x, knot_y, knot_derivs, inputs):
+    eps = 1e-5
+    mask = (inputs > eps)&(inputs < 1.0 - eps)
+
+    # Find the knot index for each data point
+    vmapper = lambda f: vmap(f)
+    searchsorted = vmapper(partial(np.searchsorted, side='right'))
+    take = vmap(np.take)
+    if(inputs.ndim == 2):
+        searchsorted = vmapper(searchsorted)
+        take = vmap(take)
+
+    indices = searchsorted(knot_y, inputs) - 1
+
+    # Find the corresponding knots and derivatives
+    x_k = take(knot_x, indices)
+    y_k = take(knot_y, indices)
+    delta_k = take(knot_derivs, indices)
+
+    # We need the next indices too
+    x_kp1 = take(knot_x, indices + 1)
+    y_kp1 = take(knot_y, indices + 1)
+    delta_kp1 = take(knot_derivs, indices + 1)
+
+    # Some more values we need
+    dy = (y_kp1 - y_k)
+    dx = (x_kp1 - x_k)
+    dx = np.where(mask, dx, 1.0) # Need this otherwise we can get nans in gradients
+    s_k = dy/dx
+    y_diff = inputs - y_k
+    term = y_diff*(delta_kp1 + delta_k - 2*s_k)
+
+    # Solve the quadratic
+    a = dy*(s_k - delta_k) + term
+    b = dy*delta_k - term
+    c = -s_k*y_diff
+    zeta = 2*c/(-b - np.sqrt(b**2 - 4*a*c))
+    z1mz = zeta*(1 - zeta)
+    # Solve for x
+    outputs = zeta*dx + x_k
+
+    # Calculate the log Jacobian determinant
+    deriv_numerator = s_k**2*(delta_kp1*zeta**2 + 2*s_k*z1mz + delta_k*(1 - zeta)**2)
+    deriv_denominator = (s_k + (delta_kp1 + delta_k - 2*s_k)*z1mz)**2
+    deriv = deriv_numerator/deriv_denominator
+
+    derivs_for_logdet = np.where(mask, deriv, 1.0)
+    outputs = np.where(mask, outputs, inputs)
+
+    log_det = np.log(np.abs(derivs_for_logdet)).sum(axis=-1)
+
+    return outputs, log_det
+
+def NeuralSpline(K, transform, name='unnamed'):
+    apply_fun = None
+    x1_shape = None
+
+    def init_fun(key, input_shape, condition_shape):
+        nonlocal x1_shape
+        x1_shape = input_shape[-1]//2
+        x2_shape = input_shape[-1] - x1_shape
+
+        nonlocal apply_fun
+        init_fun, apply_fun = transform((x2_shape, 3*K - 1))
+        names, output_shape, params, state = init_fun(key, (x1_shape,))
+
+        return name, input_shape, params, state
+
+    def forward(params, state, log_px, x, condition, **kwargs):
+        x1, x2 = np.split(x, np.array([x1_shape]), axis=-1)
+        knot_x, knot_y, knot_derivs, updated_state = get_knot_parameters(apply_fun, params, state, x1, K)
+        z2, log_det = spline_forward(knot_x, knot_y, knot_derivs, x2)
+
+        z = np.concatenate([x1, z2], axis=-1)
+        return log_px + log_det, z, updated_state
+
+    def inverse(params, state, log_pz, z, condition, **kwargs):
+        z1, z2 = np.split(z, np.array([x1_shape]), axis=-1)
+        knot_x, knot_y, knot_derivs, updated_state = get_knot_parameters(apply_fun, params, state, z1, K)
+        x2, log_det = spline_inverse(knot_x, knot_y, knot_derivs, z2)
+
+        x = np.concatenate([z1, x2], axis=-1)
+        return log_pz + log_det, x, updated_state
+
+    return init_fun, forward, inverse
 
 ################################################################################################################
 
@@ -2498,6 +2839,344 @@ def AffineCoupling(transform_fun, axis=-1, name='unnamed'):
 
 ################################################################################################################
 
+def AdditiveCoupling(transform_fun, axis=-1, name='unnamed'):
+    # language=rst
+    """
+    Apply an arbitrary transform to half of the input vector.  NOT PRECISE FOR SOME REASON!!!!
+
+    :param transform: A transformation that will act on half of the input vector. Must return 2 vectors!!!
+    :param axis: Axis to split on
+    """
+    apply_fun = None
+    reduce_axes = None
+
+    def init_fun(key, input_shape, condition_shape):
+        ax = axis % len(input_shape)
+        assert input_shape[-1]%2 == 0
+        half_split_dim = input_shape[ax]//2
+
+        # We need to keep track of the input shape in order to know how to reduce the log det
+        nonlocal reduce_axes
+        reduce_axes = tuple(range(-1, -(len(input_shape) + 1), -1))
+
+        # Find the split shape
+        split_input_shape = input_shape[:ax] + (half_split_dim,) + input_shape[ax + 1:]
+        condition_shape = () # :(
+        transform_input_shape = split_input_shape if len(condition_shape) == 0 else (split_input_shape,) + condition_shape
+
+        # Ugly, but saves us from initializing when calling function
+        nonlocal apply_fun
+        _init_fun, apply_fun = transform_fun(out_shape=split_input_shape)
+        name, t_shape, params, state = _init_fun(key, transform_input_shape)
+
+        return name, input_shape, params, state
+
+    def forward(params, state, log_px, x, condition, **kwargs):
+
+        xa, xb = np.split(x, 2, axis=axis)
+        condition = () # :(
+        network_input = xb if len(condition) == 0 else (xb, *condition)
+        t, updated_state = apply_fun(params, state, xb, **kwargs)
+        za = xa + t
+        z = np.concatenate([za, xb], axis=axis)
+
+        log_det = 0.0
+
+        return log_px + log_det, z, updated_state
+
+    def inverse(params, state, log_pz, z, condition, **kwargs):
+
+        za, zb = np.split(z, 2, axis=axis)
+        condition = () # :(
+        network_input = zb if len(condition) == 0 else (zb, *condition)
+        t, updated_state = apply_fun(params, state, zb, **kwargs)
+        xa = za - t
+        x = np.concatenate([xa, zb], axis=axis)
+
+        log_det = 0.0
+
+        return log_pz + log_det, x, updated_state
+
+    return init_fun, forward, inverse
+
+################################################################################################################
+
+def dilated_squeeze(x, filter_shape, dilation):
+    H, W, C = x.shape
+
+    fh, fw = filter_shape
+    dh, dw = dilation
+
+    assert H%(dh*fh) == 0
+    assert W%(dw*fw) == 0
+
+    # Rearrange for dilation
+    x = x.reshape((H//dh, dh, W//dw, dw, C))
+    x = x.transpose((1, 0, 3, 2, 4)) # (dh, H//dh, dw, W//dw, C)
+
+    # Squeeze
+    x = x.reshape((H//fh, fh, W//fw, fw, C))
+    x = x.transpose((0, 2, 1, 3, 4)) # (H//fh, W//fw, fh, fw, C)
+    x = x.reshape((H//fh, W//fw, C*fh*fw))
+    return x
+
+def dilated_unsqueeze(x, filter_shape, dilation):
+
+    fh, fw = filter_shape
+    dh, dw = dilation
+
+    H_in, W_in, C_in = x.shape
+    assert C_in%(fh*fw) == 0
+
+    H, W, C = H_in*fh, W_in*fw, C_in//(fh*fw)
+
+    assert H%(dh*fh) == 0
+    assert W%(dw*fw) == 0
+
+    # Un-squeeze
+    x = x.reshape((H_in, W_in, fh, fw, C))
+    x = x.transpose((0, 2, 1, 3, 4))
+
+    # Un-dilate
+    x = x.reshape((dh, H//dh, dw, W//dw, C))
+    x = x.transpose((1, 0, 3, 2, 4))
+    x = x.reshape((H, W, C))
+
+    return x
+
+def LocalDense(filter_shape, dilation, W_init=glorot_normal(), name='unnamed'):
+    # language=rst
+    """
+    Dense matrix that gets multiplied by partitioned sections of an image.
+    Works by applying dilated_squeeze, 1x1 conv, then undilated_squeeze.
+
+    """
+    dimension_numbers = ('NHWC', 'HWIO', 'NHWC')
+
+    def init_fun(key, input_shape, condition_shape):
+        h, w, c = input_shape
+        fh, fw = filter_shape
+        dh, dw = dilation
+
+        # Find the shape of the dilated_squeeze output
+        H_sq, W_sq, C_sq = (h//fh, w//fw, c*fh*fw)
+
+        # Create the matrix we're going to use in the conv.
+        W = W_init(key, (C_sq, C_sq))
+        # U, s, VT = np.linalg.svd(W, full_matrices=False)
+        # W = np.dot(U, VT)
+        W = np.eye(C_sq)
+
+        # Ensure the convolution shapes will work
+        input_shape = (1, H_sq, W_sq, C_sq)
+        filter_shape_iter = iter((1, 1))
+        lhs_spec, rhs_spec, out_spec = dimension_numbers
+        kernel_shape = [C_sq if c == 'O' else input_shape[lhs_spec.index('C')] if c == 'I' else next(filter_shape_iter) for c in rhs_spec]
+        output_shape = jax.lax.conv_general_shape_tuple(input_shape, kernel_shape, (1, 1), 'SAME', dimension_numbers)
+        output_shape = output_shape[1:]
+        assert output_shape == (H_sq, W_sq, C_sq)
+
+        # Assemble the params
+        params, state = W, ()
+        return name, (h, w, c), params, state
+
+    def forward(params, state, log_px, x, condition, **kwargs):
+        W = params
+
+        # Normalize
+        # W = W/np.sqrt(np.sum(W**2, axis=0) + 1e-5)
+
+        # See if this is batched
+        batched = True
+        if(x.ndim == 3):
+            batched = False
+            x = x[None]
+
+        dil_sq = vmap(dilated_squeeze, in_axes=(0, None, None))
+        dil_unsq = vmap(dilated_unsqueeze, in_axes=(0, None, None))
+
+        # dilate and squeeze the input
+        x = dil_sq(x, filter_shape, dilation)
+        h, w, c = x.shape[-3], x.shape[-2], x.shape[-1]
+
+        # 1x1 convolution
+        z = jax.lax.conv_general_dilated(x, W[None,None,...], (1, 1), 'SAME', (1, 1), (1, 1), dimension_numbers=dimension_numbers)
+
+        # Undo the dilate and squeeze
+        z = dil_unsq(z, filter_shape, dilation)
+        z = z if batched else z[0]
+
+        # Compute the log determinant
+        log_det = np.linalg.slogdet(W)[1]*h*w
+
+        return log_px + log_det, z, state
+
+    def inverse(params, state, log_pz, z, condition, **kwargs):
+        W = params
+
+        # Normalize
+        # W = W/np.sqrt(np.sum(W**2, axis=0) + 1e-5)
+
+        # Invert
+        W_inv = np.linalg.inv(W)
+
+        # See if this is batched
+        batched = True
+        if(z.ndim == 3):
+            batched = False
+            z = z[None]
+        dil_sq = vmap(dilated_squeeze, in_axes=(0, None, None))
+        dil_unsq = vmap(dilated_unsqueeze, in_axes=(0, None, None))
+
+        # dilate and squeeze the input
+        z = dil_sq(z, filter_shape, dilation)
+        h, w, c = z.shape[-3], z.shape[-2], z.shape[-1]
+
+        x = jax.lax.conv_general_dilated(z, W_inv[None,None,...], (1, 1), 'SAME', (1, 1), (1, 1), dimension_numbers=dimension_numbers)
+
+        # Undo the dilate and squeeze
+        x = dil_unsq(x, filter_shape, dilation)
+        x = x if batched else x[0]
+
+        # Compute the log determinant
+        log_det = np.linalg.slogdet(W)[1]*h*w
+
+        return log_pz + log_det, x, state
+
+    return init_fun, forward, inverse
+
+################################################################################################################
+
+def ConditionedLocalDense(filter_shape, dilation, W_cond_init=glorot_normal(), W_init=glorot_normal(), name='unnamed'):
+    # language=rst
+    """
+    Dense matrix that gets multiplied by partitioned sections of an image.
+    Works by applying dilated_squeeze, 1x1 conv, then undilated_squeeze.
+
+    PURPOSE IS TO CREATE NEW FEATURE MAPS THAT ARE DEPENDENT ON SPATIAL FEATURES
+    """
+    dimension_numbers = ('NHWC', 'HWIO', 'NHWC')
+
+    def init_fun(key, input_shape, condition_shape):
+        h, w, c = input_shape
+        fh, fw = filter_shape
+        dh, dw = dilation
+        k1, k2 = random.split(key, 2)
+
+        # Find the shape of the dilated_squeeze output
+        H_sq, W_sq, C_sq = (h//fh, w//fw, c*fh*fw)
+
+        # Create the matrix we're going to use in the conv.
+        W = W_init(k1, (C_sq, C_sq))
+        U, s, VT = np.linalg.svd(W, full_matrices=False)
+        W = np.dot(U, VT)
+
+        # Will be shrinking the conditioner down to the size of the number of channels
+        (K,), = condition_shape
+        W_cond = W_cond_init(k2, (C_sq, K))
+
+        # Ensure the convolution shapes will work
+        input_shape = (1, H_sq, W_sq, C_sq)
+        filter_shape_iter = iter((1, 1))
+        lhs_spec, rhs_spec, out_spec = dimension_numbers
+        kernel_shape = [C_sq if c == 'O' else input_shape[lhs_spec.index('C')] if c == 'I' else next(filter_shape_iter) for c in rhs_spec]
+        output_shape = jax.lax.conv_general_shape_tuple(input_shape, kernel_shape, (1, 1), 'SAME', dimension_numbers)
+        output_shape = output_shape[1:]
+        assert output_shape == (H_sq, W_sq, C_sq)
+
+        # Assemble the params
+        params, state = (W, W_cond), ()
+        return name, (h, w, c), params, state
+
+    def forward(params, state, log_px, x, condition, **kwargs):
+        cond, = condition
+        if(cond.ndim == 2):
+            # Then cond is batched, so vmap over the batch axis
+            return vmap(partial(forward, params, state, **kwargs))(log_px, x, condition)
+
+        W, W_cond = params
+
+        # Condition
+        cond, = condition
+        assert cond.ndim == 1
+        s = W_cond@cond
+        # W *= jax.nn.sigmoid(s[:,None])
+
+        # Normalize
+        W = W/np.sqrt(np.sum(W**2, axis=0) + 1e-5)
+
+        # See if this is batched
+        batched = True
+        if(x.ndim == 3):
+            batched = False
+            x = x[None]
+
+        dil_sq = vmap(dilated_squeeze, in_axes=(0, None, None))
+        dil_unsq = vmap(dilated_unsqueeze, in_axes=(0, None, None))
+
+        # dilate and squeeze the input
+        x = dil_sq(x, filter_shape, dilation)
+        h, w, c = x.shape[-3], x.shape[-2], x.shape[-1]
+
+        # 1x1 convolution
+        z = jax.lax.conv_general_dilated(x, W[None,None,...], (1, 1), 'SAME', (1, 1), (1, 1), dimension_numbers=dimension_numbers)
+
+        # Undo the dilate and squeeze
+        z = dil_unsq(z, filter_shape, dilation)
+        z = z if batched else z[0]
+
+        # Compute the log determinant
+        log_det = np.linalg.slogdet(W)[1]*h*w
+
+        return log_px + log_det, z, state
+
+    def inverse(params, state, log_pz, z, condition, **kwargs):
+        cond, = condition
+        if(cond.ndim == 2):
+            # Then cond is batched, so vmap over the batch axis
+            return vmap(partial(inverse, params, state, **kwargs))(log_pz, z, condition)
+
+        W, W_cond = params
+
+        # Condition
+        cond, = condition
+        assert cond.ndim == 1
+        s = W_cond@cond
+        # W *= jax.nn.sigmoid(s[:,None])
+
+        # Normalize
+        W = W/np.sqrt(np.sum(W**2, axis=0) + 1e-5)
+
+        # Invert
+        W_inv = np.linalg.inv(W)
+
+        # See if this is batched
+        batched = True
+        if(z.ndim == 3):
+            batched = False
+            z = z[None]
+        dil_sq = vmap(dilated_squeeze, in_axes=(0, None, None))
+        dil_unsq = vmap(dilated_unsqueeze, in_axes=(0, None, None))
+
+        # dilate and squeeze the input
+        z = dil_sq(z, filter_shape, dilation)
+        h, w, c = z.shape[-3], z.shape[-2], z.shape[-1]
+
+        x = jax.lax.conv_general_dilated(z, W_inv[None,None,...], (1, 1), 'SAME', (1, 1), (1, 1), dimension_numbers=dimension_numbers)
+
+        # Undo the dilate and squeeze
+        x = dil_unsq(x, filter_shape, dilation)
+        x = x if batched else x[0]
+
+        # Compute the log determinant
+        log_det = np.linalg.slogdet(W)[1]*h*w
+
+        return log_pz + log_det, x, state
+
+    return init_fun, forward, inverse
+
+################################################################################################################
+
 fft_channel_vmap = vmap(np.fft.fftn, in_axes=(2,), out_axes=2)
 ifft_channel_vmap = vmap(np.fft.ifftn, in_axes=(2,), out_axes=2)
 fft_double_channel_vmap = vmap(fft_channel_vmap, in_axes=(2,), out_axes=2)
@@ -2605,13 +3284,8 @@ def flow_test(flow, x, key, **kwargs):
     """
     # Initialize the flow with conditioning.
     init_fun, forward, inverse = flow
-
-    input_shape = x.shape[1:]
-    # condition_shape = (input_shape,)
-    # cond = (x,)
-    condition_shape = ()
     cond = ()
-    names, output_shape, params, state = init_fun(key, input_shape, condition_shape)
+    names, output_shape, params, state = init_fun(key, x.shape[1:], ())
 
     # Make sure that the forwards and inverse functions are consistent
     log_px, z, updated_state = forward(params, state, np.zeros(x.shape[0]), x, cond, test=TEST, key=key, **kwargs)

@@ -555,6 +555,112 @@ def ConditionedTallAffineDiagCov(transform_fun,
 
     return init_fun, forward, inverse
 
+# ################################################################################################################
+
+# def UpSample(repeats, name='unnamed'):
+#     # language=rst
+#     """
+#     Up sample by just repeating consecutive values over specified axes
+
+#     :param repeats - The number of times to repeat.  Pass in (2, 1, 2), for example, to repeat twice over
+#                      the 0th axis, no repeats over the 1st axis, and twice over the 2nd axis
+#     """
+#     full_repeats = None
+#     def init_fun(key, input_shape, condition_shape):
+#         nonlocal full_repeats
+#         full_repeats = [repeats[i] if i < len(repeats) else 1 for i in range(len(input_shape))]
+#         output_shape = []
+#         for s, r in zip(input_shape, full_repeats):
+#             assert s%r == 0
+#             output_shape.append(s//r)
+#         output_shape = tuple(output_shape)
+#         log_sigma = -1.0
+#         params, state = (log_sigma), ()
+#         return name, output_shape, params, state
+
+#     def forward(params, state, log_px, x, condition, **kwargs):
+#         log_sigma = params
+#         sigma = np.exp(log_sigma)
+#         is_batched = int(x.ndim == 2 or x.ndim == 4)
+
+#         # The pseudo-inverse is the sliced input
+#         slices = [slice(0, None, r) for r in full_repeats]
+
+#         if(is_batched):
+#             z = x[[slice(0, None, 1)] + slices]
+#         else:
+#             z = x[slices]
+
+#         # Find the flat dimensions
+#         if(x.ndim <= 2):
+#             dim_z = z.shape[-1]
+#             dim_x = x.shape[-1]
+#         elif(x.ndim <= 4):
+#             dim_z = np.prod(z.shape[-3:])
+#             dim_x = np.prod(x.shape[-3:])
+
+#         # Find the projection
+#         x_proj = z
+#         for i, r in enumerate(repeats):
+#             x_proj = np.repeat(x_proj, r, axis=i + is_batched)
+
+#         # Compute -0.5|J^T J|
+#         repeat_prod = np.prod(repeats)
+#         log_det = -0.5*np.log(repeat_prod)*dim_x
+
+#         log_hx = -0.5/sigma*np.sum(x*(x - x_proj), axis=-1)
+#         log_hx -= log_det
+#         log_hx -= (dim_x - dim_z)*(log_sigma + np.log(2*np.pi))
+
+#         # If we have an image, need to sum over more axes
+#         if(x.ndim >= 3):
+#             if(log_hx.ndim >= 2):
+#                 log_hx = log_hx.sum(axis=(-1, -2))
+
+#         # J^T J is a diagonal matrix where each diagonal element is the
+#         # the product of repeats
+#         key = kwargs.pop('key', None)
+#         if(key is None):
+#             assert 0, 'Need a key for this'
+
+#         # Sample z ~ N(z^+, sigma(J^T J)^{-1})
+#         noise = random.normal(key, z.shape)
+#         z += noise*np.sqrt(sigma/repeat_prod)
+
+#         return log_px + log_hx, z, state
+
+#     def inverse(params, state, log_pz, z, condition, **kwargs):
+#         log_sigma = params
+#         x = z
+#         is_batched = int(x.ndim == 2 or x.ndim == 4)
+#         for i, r in enumerate(repeats):
+#             x = np.repeat(x, r, axis=i + is_batched)
+
+#         # Find the flat dimensions
+#         if(x.ndim <= 2):
+#             dim_z = z.shape[-1]
+#             dim_x = x.shape[-1]
+#         elif(x.ndim <= 4):
+#             dim_z = np.prod(z.shape[-3:])
+#             dim_x = np.prod(x.shape[-3:])
+
+#         # Compute -0.5|J^T J|
+#         repeat_prod = np.prod(repeats)
+#         log_det = -0.5*np.log(repeat_prod)*dim_x
+
+#         # The projection difference is 0!
+#         log_hx = log_det
+#         log_hx -= (dim_x - dim_z)*(log_sigma + np.log(2*np.pi))
+
+#         # If we have an image, need to sum over more axes
+#         if(x.ndim >= 3):
+#             if(log_hx.ndim >= 2):
+#                 log_hx = log_hx.sum(axis=(-1, -2))
+
+#         return log_pz + log_hx, x, state
+
+#     return init_fun, forward, inverse
+
 ################################################################################################################
 
 def UpSample(repeats, name='unnamed'):
@@ -574,90 +680,52 @@ def UpSample(repeats, name='unnamed'):
             assert s%r == 0
             output_shape.append(s//r)
         output_shape = tuple(output_shape)
-        log_sigma = -1.0
-        params, state = (log_sigma), ()
+        log_diag_cov = np.zeros(input_shape)
+        b = np.zeros(input_shape)
+
+        params, state = (log_diag_cov, b), ()
         return name, output_shape, params, state
 
     def forward(params, state, log_px, x, condition, **kwargs):
-        log_sigma = params
-        sigma = np.exp(log_sigma)
-        is_batched = int(x.ndim == 2 or x.ndim == 4)
+        if(x.ndim == 4):
+            return vmap(partial(forward, params, state, **kwargs), in_axes=(0, 0, None))(log_px, x, condition)
 
-        # The pseudo-inverse is the sliced input
-        slices = [slice(0, None, r) for r in full_repeats]
+        log_diag_cov, b = params
 
-        if(is_batched):
-            z = x[[slice(0, None, 1)] + slices]
-        else:
-            z = x[slices]
+        # Compute the posterior and the manifold penalty
+        z_mean, log_hx, rm_diag = upsample_posterior(x, b*0.0, log_diag_cov, full_repeats)
 
-        # Find the flat dimensions
-        if(x.ndim <= 2):
-            dim_z = z.shape[-1]
-            dim_x = x.shape[-1]
-        elif(x.ndim <= 4):
-            dim_z = np.prod(z.shape[-3:])
-            dim_x = np.prod(x.shape[-3:])
-
-        # Find the projection
-        x_proj = z
-        for i, r in enumerate(repeats):
-            x_proj = np.repeat(x_proj, r, axis=i + is_batched)
-
-        # Compute -0.5|J^T J|
-        repeat_prod = np.prod(repeats)
-        log_det = -0.5*np.log(repeat_prod)*dim_x
-
-        log_hx = -0.5/sigma*np.sum(x*(x - x_proj), axis=-1)
-        log_hx -= log_det
-        log_hx -= (dim_x - dim_z)*(log_sigma + np.log(2*np.pi))
-
-        # If we have an image, need to sum over more axes
-        if(x.ndim >= 3):
-            if(log_hx.ndim >= 2):
-                log_hx = log_hx.sum(axis=(-1, -2))
-
-        # J^T J is a diagonal matrix where each diagonal element is the
-        # the product of repeats
+        # Sample z
         key = kwargs.pop('key', None)
-        if(key is None):
-            assert 0, 'Need a key for this'
-
-        # Sample z ~ N(z^+, sigma(J^T J)^{-1})
-        noise = random.normal(key, z.shape)
-        z += noise*np.sqrt(sigma/repeat_prod)
+        if(key is not None):
+            noise = random.normal(key, z_mean.shape)
+            z = z_mean + noise/np.sqrt(rm_diag)
+        else:
+            z = z_mean
 
         return log_px + log_hx, z, state
 
     def inverse(params, state, log_pz, z, condition, **kwargs):
-        log_sigma = params
-        x = z
-        is_batched = int(x.ndim == 2 or x.ndim == 4)
-        for i, r in enumerate(repeats):
-            x = np.repeat(x, r, axis=i + is_batched)
+        if(z.ndim == 4):
+            return vmap(partial(inverse, params, state, **kwargs), in_axes=(0, 0, None))(log_pz, z, condition)
 
-        # Find the flat dimensions
-        if(x.ndim <= 2):
-            dim_z = z.shape[-1]
-            dim_x = x.shape[-1]
-        elif(x.ndim <= 4):
-            dim_z = np.prod(z.shape[-3:])
-            dim_x = np.prod(x.shape[-3:])
+        log_diag_cov, b = params
 
-        # Compute -0.5|J^T J|
-        repeat_prod = np.prod(repeats)
-        log_det = -0.5*np.log(repeat_prod)*dim_x
+        # x ~ N(x|Az + b, Sigma)
 
-        # The projection difference is 0!
-        log_hx = log_det
-        log_hx -= (dim_x - dim_z)*(log_sigma + np.log(2*np.pi))
+        x_mean = upsample(full_repeats, z) + b*0.0
 
-        # If we have an image, need to sum over more axes
-        if(x.ndim >= 3):
-            if(log_hx.ndim >= 2):
-                log_hx = log_hx.sum(axis=(-1, -2))
+        key = kwargs.pop('key', None)
+        if(key is not None):
+            noise = np.exp(0.5*log_diag_cov)*random.normal(key, x_mean.shape)
+            x = x_mean + noise
+        else:
+            noise = np.zeros_like(x_mean)
+            x = x_mean
 
-        return log_pz + log_hx, x, state
+        log_px = -0.5*np.sum(noise*np.exp(-0.5*log_diag_cov)*noise) - 0.5*np.sum(log_diag_cov) - 0.5*x.shape[-1]*np.log(2*np.pi)
+
+        return log_pz + log_px, x, state
 
     return init_fun, forward, inverse
 
@@ -758,19 +826,6 @@ def upsample(repeats, z):
 def downsample(repeats, x):
     return x[[slice(0, None, r) for r in repeats]]
 
-def pinv_diag(x, repeats, log_diag_cov):
-    # Assume that diag_cov = Sigma
-    # This returns the diagonal matrix (A^T Sigma^{-1} A)
-    hr, wr, cr = repeats
-    assert cr == 1
-    Hx, Wx, C = x.shape
-    assert Hx%hr == 0 and Wx%wr == 0
-    assert log_diag_cov.shape == x.shape
-
-    H, W = Hx//hr, Wx//wr
-
-    return np.exp(-log_diag_cov).reshape((H, hr, W, wr, C)).transpose((0, 2, 4, 1, 3)).reshape((H, W, C, hr*wr)).sum(axis=-1)
-
 def upsample_pseudo_inverse(x, repeats):
     # language=rst
     """
@@ -798,24 +853,6 @@ def upsample_idx(repeats, idx):
                 idx[i,j] = k
                 k += 1
     return idx
-
-def split_x(x, idx):
-    H, W, C = x.shape
-    # W will be cut in half
-    return x[idx > 0].reshape((H, W//2, C))
-
-def recombine(z, index):
-    # language=rst
-    """
-    Use a structured set of indices to create a matrix from a vector
-
-    :param z: Flat input that contains the elements of the output matrix
-    :param indices: An array of indices that correspond to values in z
-    """
-    return np.pad(z.ravel(), (1, 0))[index]
-
-# Applies the upsampled z indices
-recombine_vmapped = vmap(recombine, in_axes=(2, None), out_axes=2)
 
 def upsample_posterior(x, b, log_diag_cov, repeats):
     """ Posterior of N(x|Az + b, Sigma) where A is an upsample matrix"""
@@ -845,6 +882,29 @@ def upsample_posterior(x, b, log_diag_cov, repeats):
 
     # return z_mean, log_hx, rm_diag, x_proj
     return z_mean, log_hx, rm_diag
+
+def split_x(x, idx):
+    H, W, C = x.shape
+    # W will be cut in half
+    return x[idx > 0].reshape((H, W//2, C))
+
+def recombine(z, index):
+    # language=rst
+    """
+    Use a structured set of indices to create a matrix from a vector
+
+    :param z: Flat input that contains the elements of the output matrix
+    :param indices: An array of indices that correspond to values in z
+    """
+    return np.pad(z.ravel(), (1, 0))[index]
+
+# Applies the upsampled z indices
+recombine_vmapped = vmap(recombine, in_axes=(2, None), out_axes=2)
+
+def FilledCoupledUpsample(n_channels=512, name='unnamed'):
+    def Coupling2D(out_shape, n_channels=n_channels):
+        return spp.DoubledLowDimInputConvBlock(n_channels=n_channels)
+    return CoupledUpSample(Coupling2D, (2, 2))
 
 def CoupledUpSample(transform_fun, repeats, name='unnamed'):
     # language=rst
@@ -1026,6 +1086,12 @@ def CoupledUpSample(transform_fun, repeats, name='unnamed'):
         return log_pz + log_px1 + log_px2, x, updated_states
 
     return init_fun, forward, inverse
+
+def EasyUpsample(n_channels=256, ratio=2, name='unnamed'):
+    def Coupling2D(out_shape, n_channels=n_channels):
+        return spp.sequential(spp.LowDimInputConvBlock(n_channels=n_channels), spp.SqueezeExcitation(ratio=ratio))
+
+    return CoupledUpSample(Coupling2D, (2, 2), name=name)
 
 ################################################################################################################
 

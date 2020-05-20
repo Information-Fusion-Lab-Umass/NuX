@@ -386,6 +386,45 @@ def InstanceNorm(name='unnamed'):
 
     return init_fun, apply_fun
 
+def LayerNorm(name='unnamed'):
+    def init_fun(key, input_shape):
+        H, W, C = input_shape
+        g = np.ones(C)
+        b = np.zeros(C)
+        params, state = (g, b), ()
+        return name, input_shape, params, state
+
+    def apply_fun(params, state, inputs, **kwargs):
+        g, b = params
+        x = inputs
+
+        mean = np.mean(x, axis=-1, keepdims=True)
+        std = np.std(x, axis=-1, keepdims=True)
+
+        x = (x - mean)/np.sqrt(std + 1e-5)*g + b
+
+        return x, state
+
+    return init_fun, apply_fun
+
+def LayerNormSimple(name='unnamed'):
+    def init_fun(key, input_shape):
+        H, W, C = input_shape
+        params, state = (), ()
+        return name, input_shape, params, state
+
+    def apply_fun(params, state, inputs, **kwargs):
+        x = inputs
+
+        mean = np.mean(x, axis=-1, keepdims=True)
+        std = np.std(x, axis=-1, keepdims=True)
+
+        x = (x - mean)/np.sqrt(std + 1e-5)
+
+        return x, state
+
+    return init_fun, apply_fun
+
 ################################################################################################################
 
 def Reshape(shape, name='unnamed'):
@@ -527,6 +566,160 @@ def BatchNorm(axis=0, epsilon=1e-5, alpha=0.05, beta_init=zeros, gamma_init=ones
 
         updated_state = (running_mean, running_var)
         return z, updated_state
+
+    return init_fun, apply_fun
+
+################################################################################################################
+
+def LowDimInputConvBlock(n_channels=512, init_zeros=True, name='unnamed'):
+    # language=rst
+    """
+    A conv block where we assume the number of input channels and output channels are small
+    """
+    _apply_fun = None
+
+    def init_fun(key, input_shape):
+        H, W, C = input_shape
+        if(init_zeros):
+            W_init, b_init = zeros, zeros
+        else:
+            W_init, b_init = glorot_normal(), normal()
+
+        nonlocal _apply_fun
+        _init_fun, _apply_fun = sequential(Conv(n_channels, filter_shape=(3, 3), padding=((1, 1), (1, 1)), bias=True, weightnorm=False),
+                                           LayerNormSimple(),
+                                           Relu(),
+                                           Conv(n_channels, filter_shape=(1, 1), padding=((0, 0), (0, 0)), bias=True, weightnorm=False),
+                                           LayerNormSimple(),
+                                           Relu(),
+                                           Conv(C, filter_shape=(3, 3), padding=((1, 1), (1, 1)), bias=True, weightnorm=False, W_init=W_init, b_init=b_init))
+        name, output_shape, params, state = _init_fun(key, input_shape)
+        return name, output_shape, params, state
+
+    def apply_fun(params, state, inputs, **kwargs):
+        return _apply_fun(params, state, inputs, **kwargs)
+
+    return init_fun, apply_fun
+
+def DoubledLowDimInputConvBlock(n_channels=512, init_zeros=True, name='unnamed'):
+    # language=rst
+    """
+    A conv block where we assume the number of input channels and output channels are small
+    """
+    _apply_fun = None
+
+    def init_fun(key, input_shape):
+        H, W, C = input_shape
+        if(init_zeros):
+            W_init, b_init = zeros, zeros
+        else:
+            W_init, b_init = glorot_normal(), normal()
+
+        nonlocal _apply_fun
+        _init_fun, _apply_fun = sequential(Conv(n_channels, filter_shape=(3, 3), padding=((1, 1), (1, 1)), bias=True, weightnorm=False),
+                                           LayerNormSimple(),
+                                           Relu(),
+                                           Conv(n_channels, filter_shape=(1, 1), padding=((0, 0), (0, 0)), bias=True, weightnorm=False),
+                                           LayerNormSimple(),
+                                           Relu(),
+                                           Conv(2*C, filter_shape=(3, 3), padding=((1, 1), (1, 1)), bias=True, weightnorm=False, W_init=W_init, b_init=b_init),
+                                           Split(2, axis=-1),
+                                           parallel(Tanh(), Identity()))
+        name, output_shape, params, state = _init_fun(key, input_shape)
+        return name, output_shape, params, state
+
+    def apply_fun(params, state, inputs, **kwargs):
+        return _apply_fun(params, state, inputs, **kwargs)
+
+    return init_fun, apply_fun
+
+################################################################################################################
+
+def SqueezeExcitation(ratio=2, W1_init=glorot_normal(), W2_init=glorot_normal(), name='unnamed'):
+    # language=rst
+    """
+    https://arxiv.org/pdf/1709.01507.pdf
+
+    :param ratio: How to reduce the number of channels for the FC layer
+    """
+    def init_fun(key, input_shape):
+        H, W, C = input_shape
+        assert C%ratio == 0
+        k1, k2 = random.split(key, 2)
+        W1 = W1_init(k1, (C//ratio, C))
+        W2 = W2_init(k2, (C, C//ratio))
+        output_shape = input_shape
+        params = (W1, W2)
+        state = ()
+        return name, output_shape, params, state
+
+    def apply_fun(params, state, inputs, **kwargs):
+        W1, W2 = params
+
+        # Apply the SE transforms
+        x = np.mean(inputs, axis=(-2, -3))
+        x = np.dot(x, W1.T)
+        x = jax.nn.relu(x)
+        x = np.dot(x, W2.T)
+        x = jax.nn.sigmoid(x)
+
+        # Scale the input
+        if(x.ndim == 3):
+            out = inputs*x[None, None,:]
+        else:
+            out = inputs*x[:,None,None,:]
+        return out, state
+
+    return init_fun, apply_fun
+
+################################################################################################################
+
+def ConditionedSqueezeExcitation(ratio=4, W_cond_init=glorot_normal(), W1_init=glorot_normal(), W2_init=glorot_normal(), name='unnamed'):
+    # language=rst
+    """
+    Like squeeze excitation, but has an extra input to help form W
+    PURPOSE IS TO FIGURE OUT WHICH FEATURE MAPS MATTER GIVEN A CONDITIONER
+
+    :param ratio: How to reduce the number of channels for the FC layer
+    """
+    def init_fun(key, input_shape):
+        (H, W, C), (K,) = input_shape
+        k1, k2, k3 = random.split(key, 3)
+
+        # Will be shrinking the conditioner down to the size of the number of channels
+        W_cond = W_cond_init(k1, (C, K))
+
+        # Going to be concatenating the conditioner
+        C_concat = C + C
+        assert C_concat%ratio == 0
+
+        # Create the parameters for the squeeze and excite
+        W1 = W1_init(k2, (C_concat//ratio, C_concat))
+        W2 = W2_init(k3, (C, C_concat//ratio))
+
+        output_shape = (H, W, C)
+        params = (W_cond, W1, W2)
+        state = ()
+        return name, output_shape, params, state
+
+    def apply_fun(params, state, inputs, **kwargs):
+        W_cond, W1, W2 = params
+        inputs, cond = inputs
+
+        # Apply the SE transforms
+        x = np.mean(inputs, axis=(-2, -3))
+        x = np.concatenate([x, np.dot(cond, W_cond.T)], axis=-1)
+        x = np.dot(x, W1.T)
+        x = jax.nn.relu(x)
+        x = np.dot(x, W2.T)
+        x = jax.nn.sigmoid(x)
+
+        # Scale the input
+        if(x.ndim == 3):
+            out = inputs*x[None, None,:]
+        else:
+            out = inputs*x[:,None,None,:]
+        return out, state
 
     return init_fun, apply_fun
 

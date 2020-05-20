@@ -189,7 +189,6 @@ def evaluate_results(results, save_folder='./manifold_results/'):
         axes[1,names.index(name)].set_title('%s test set negative log likelihoods'%(name))
         axes[1,names.index(name)].legend()
 
-
     plt.savefig(os.path.join(save_folder, 'full_results.png'))
 
 parser = argparse.ArgumentParser()
@@ -220,5 +219,5 @@ else:
     run_experiment(dataset_names, data_root=args.data_root, save_root=args.save_root)
 
 
-# ./data ./manifold_results --hepmass --gas --miniboone --power
-# ./data ./manifold_results --plot_results
+# python manifold_effect_test.py ./data ./manifold_results --hepmass --gas --miniboone --power
+# python manifold_effect_test.py ./data ./manifold_results --plot_results
