@@ -238,7 +238,7 @@ def get_celeb_dataset(quantize_level_bits=8, strides=(5, 5), crop=(12, 4), n_ima
 
 ############################################################################################################################################################
 
-def celeb_dataset_loader(key, quantize_level_bits=8, strides=(5, 5), crop=(12, 4), batch_size=64, data_folder='data/img_align_celeba/'):
+def celeb_dataset_loader(quantize_level_bits=8, strides=(2, 2), crop=((26, -19), (12, -13)), n_images=200000, data_folder='data/img_align_celeba/'):
     # language=rst
     """
     Load the celeb A dataset.
@@ -248,26 +248,39 @@ def celeb_dataset_loader(key, quantize_level_bits=8, strides=(5, 5), crop=(12, 4
     celeb_dir = data_folder
 
     all_files = glob.glob('%s*.jpg'%celeb_dir)
+    if(n_images == -1 or n_images is None):
+        n_images = len(all_files)
+
+    # Load the file paths
+    all_files = all_files[:n_images]
     total_files = len(all_files)
     quantize_factor = 256/(2**quantize_level_bits)
-
     all_files = onp.array(all_files)
 
-    def get_batch(key, n_gpus, batch_size):
+    # Load a single file so that we can get the shape
+    im = plt.imread(all_files[0], format='jpg')
+    im = im[::strides[0],::strides[1]][crop[0][0]:crop[0][1],crop[1][0]:crop[1][1]]
+    im//quantize_factor
+    x_shape = np.array(im).shape
+
+    # The loader will be used to pull batches of data
+    def data_loader(key, n_gpus, batch_size):
         batch_idx = random.randint(key, (n_gpus*batch_size,), minval=0, maxval=total_files)
         batch_files = all_files[onp.array(batch_idx)]
 
-        images = []
-        for path in batch_files:
+        images = onp.zeros((n_gpus, batch_size) + x_shape, dtype=onp.int32)
+        for k, path in enumerate(batch_files):
             im = plt.imread(path, format='jpg')
-            im = im[::strides[0],::strides[1]][crop[0]:,crop[1]:]
-            images.append(im//quantize_factor)
+            im = im[::strides[0],::strides[1]][crop[0][0]:crop[0][1],crop[1][0]:crop[1][1]]
+            im = im//quantize_factor
 
-        np_images = np.array(images, dtype=np.int32)
-        np_images = np_images.reshape((n_gpus, batch_size) + np_images.shape[1:])
-        return np_images
+            j = k%batch_size
+            i = k//batch_size
+            images[i, j] = im
 
-    return get_batch
+        return images
+
+    return data_loader, x_shape
 
 ############################################################################################################################################################
 

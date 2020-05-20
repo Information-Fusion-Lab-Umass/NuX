@@ -18,7 +18,7 @@ import jax.nn.initializers as jaxinit
 import jax.numpy as np
 
 n_gpus = xla_bridge.device_count()
-print(n_gpus)
+print('n_gpus:', n_gpus)
 
 parser = argparse.ArgumentParser(description='Training Noisy Injective Flows')
 
@@ -43,7 +43,7 @@ parser.add_argument('--printevery', action = 'store', type=int,
 args = parser.parse_args()
 
 batch_size = args.batchsize
-dataset = args.dataset 
+dataset = args.dataset
 n_images = args.numimage
 quantize_level_bits = args.quantize
 start_it = args.startingit
@@ -52,18 +52,23 @@ model_type = args.model
 
 print_every = args.printevery
 
+print('Done Parsing Arguments')
 
 if(dataset == 'CelebA'):
-    x_train = get_celeb_dataset(quantize_level_bits=quantize_level_bits, strides=(2, 2), crop=(0, 0), n_images=n_images)
-    x_train = x_train[:,26:-19,12:-13]
+    data_loader, x_shape = celeb_dataset_loader(quantize_level_bits=quantize_level_bits, strides=(2, 2), crop=((26, -19), (12, -13)), data_folder='data/img_align_celeba/')
+    assert x_shape == (64, 64, 3)
 elif(dataset == 'CIFAR'):
     x_train, train_labels, test_images, test_labels = get_cifar10_data(quantize_level_bits=quantize_level_bits)
+    assert 0
+
+print('Done Retrieving Data')
 
 from CelebA_default_model import CelebADefault
 
 if(model_type == 'CelebADefault'):
     nf, nif = CelebADefault(False, quantize_level_bits), CelebADefault(True, quantize_level_bits)
 
+print('Done Loading Model')
 
 Model = namedtuple('model', 'names output_shape params state forward inverse')
 
@@ -71,24 +76,27 @@ models = []
 for flow in [nf, nif]:
     init_fun, forward, inverse = flow
     key = random.PRNGKey(0)
-    names, output_shape, params, state = init_fun(key, x_train.shape[1:], ())
+    names, output_shape, params, state = init_fun(key, x_shape, ())
     z_dim = output_shape[-1]
-    flow_model = ((names, output_shape, params, state), forward, inverse) 
+    flow_model = ((names, output_shape, params, state), forward, inverse)
     actnorm_names = [name for name in tree_flatten(names)[0] if 'act_norm' in name]
     if(start_it == 0):
-        params = multistep_flow_data_dependent_init(x_train,
-                                           actnorm_names,
-                                           flow_model,
-                                           (),
-                                           'actnorm_seed',
-                                           key,
-                                           n_seed_examples=15000,
-                                           batch_size=64,
-                                           notebook=False)
+        params = multistep_flow_data_dependent_init(None,
+                                                    actnorm_names,
+                                                    flow_model,
+                                                    (),
+                                                    'actnorm_seed',
+                                                    key,
+                                                    data_loader=data_loader,
+                                                    n_seed_examples=15000,
+                                                    batch_size=64,
+                                                    notebook=False)
 
 
     models.append(Model(names, output_shape, params, state, forward, inverse))
 nf_model, nif_model = models
+
+print('Done With Data Dependent Init')
 
 @partial(jit, static_argnums=(0,))
 def nll(forward, params, state, x, **kwargs):
@@ -138,7 +146,7 @@ else:
     state_nf, state_nif = nf_model.state, nif_model.state
     misc = dict()
 
-
+print('Done Loading Checkpoint')
 
 # Fill the update function with the optimizer params
 filled_spmd_update_nf = partial(spmd_update, nf_model.forward, opt_update, get_params)
@@ -152,35 +160,39 @@ replicated_state_nf = tree_map(replicate_array, state_nf)
 replicated_opt_state_nf = tree_map(replicate_array, opt_state_nf)
 replicated_opt_state_nif, replicated_state_nif = tree_map(replicate_array, opt_state_nif), tree_map(replicate_array, state_nif)
 
-
 def savePytree(pytree, dir_save):
     with open(dir_save,'wb') as f: pickle.dump(tree_leaves(pytree), f)
 
+if(os.path.exists('Experiments') == False):
+    os.mkdir('Experiments')
 
-if not os.path.exists('Experiments/' + str(experiment_name)):
+if(os.path.exists('Experiments/' + str(experiment_name)) == False):
     os.mkdir('Experiments/' + str(experiment_name))
 
+print('About to Start Experiments')
 
-for i in np.arange(start_it, 100000):
+pbar = tqdm(np.arange(start_it, 100000))
+for i in pbar:
     key, *keys = random.split(key, 3)
-    
+
     # Take the next batch of data and random keys
-    batch_idx = random.randint(keys[0], (n_gpus, batch_size), minval=0, maxval=x_train.shape[0])
-    x_batch = x_train[batch_idx,:]
+    x_batch = data_loader(keys[0], n_gpus, batch_size)
     train_keys = np.array(random.split(keys[1], n_gpus))
     replicated_i = np.ones(n_gpus)*i
-    
+
     replicated_val_nf, replicated_state_nf, replicated_opt_state_nf = filled_spmd_update_nf(replicated_i, replicated_opt_state_nf, replicated_state_nf, x_batch, train_keys)
     replicated_val_nif, replicated_state_nif, replicated_opt_state_nif = filled_spmd_update_nif(replicated_i, replicated_opt_state_nif, replicated_state_nif, x_batch, train_keys)
-    
+
     # Convert to bits/dimension
     val_nf, val_nif = replicated_val_nf[0], replicated_val_nif[0]
-    val_nf, val_nif = val_nf/np.prod(x_train.shape[1:])/np.log(2), val_nif/np.prod(x_train.shape[1:])/np.log(2)
+    val_nf, val_nif = val_nf/np.prod(x_shape)/np.log(2), val_nif/np.prod(x_shape)/np.log(2)
 
     losses_nf.append(val_nf)
     losses_nif.append(val_nif)
-    print(f'Iteration {i:d} Negative Log Likelihood: NF: {val_nf:.3f}, NIF: {val_nif:.3f}')
-    
+
+    progress_str = f'Bits/Dim: NF: {val_nf:.3f}, NIF: {val_nif:.3f}'
+    pbar.set_description(progress_str)
+
     if(i%print_every == 0):
 
         #Save Model

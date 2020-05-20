@@ -1368,6 +1368,7 @@ def multistep_flow_data_dependent_init(x,
                                        condition,
                                        flag_names,
                                        key,
+                                       data_loader=None,
                                        n_seed_examples=1000,
                                        batch_size=4,
                                        notebook=True,
@@ -1411,8 +1412,11 @@ def multistep_flow_data_dependent_init(x,
         key, *keys = random.split(key, 3)
 
         # Get the next batch of data for each gpu
-        batch_idx = random.randint(keys[0], (batch_size,), minval=0, maxval=x.shape[0])
-        x_batch = x[batch_idx,:]
+        if(data_loader is not None):
+            x_batch = data_loader(key, 1, batch_size)[0]
+        else:
+            batch_idx = random.randint(keys[0], (batch_size,), minval=0, maxval=x.shape[0])
+            x_batch = x[batch_idx,:]
 
         # Compute the seeded parameters
         new_params = flow_data_dependent_init(x_batch, target_param_names, names, params, state, jitted_forward, (), None, key=key)
