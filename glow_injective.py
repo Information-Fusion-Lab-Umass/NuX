@@ -2,7 +2,6 @@ import os
 from tqdm import tqdm
 from jax import random, vmap, jit, value_and_grad
 from jax.experimental import optimizers, stax
-import jax.numpy as np
 import staxplusplus as spp
 from normalizing_flows import *
 import matplotlib.pyplot as plt
@@ -16,6 +15,7 @@ import argparse
 from jax.lib import xla_bridge
 import pickle
 import jax.nn.initializers as jaxinit
+import jax.numpy as np
 
 n_gpus = xla_bridge.device_count()
 
@@ -28,12 +28,13 @@ parser.add_argument('--batchsize', action='store', type=int,
 parser.add_argument('--dataset', action='store', type=str,
                    help='Dataset to load, default = CelebA', default = 'CelebA')
 parser.add_argument('--numimage', action='store', type=int,
-                   help='Number of images to load from selected dataset, default = 50000', default = 50000)
+                   help='Number of images to load from selected dataset, default = 50000', default = 500)
 parser.add_argument('--quantize', action='store', type=int,
                    help='Sets the value of quantize_level_bits, default = 5', default = 5)
 parser.add_argument('--startingit', action ='store', type=int,
                    help = 'Sets the training iteration to start on. There must be a stored file for this to occure', default = 0)
-
+parser.add_argument('--model', action ='store', type=str,
+                   help = 'Sets the model to use', default = 'CelebADefault')
 
 parser.add_argument('--printevery', action = 'store', type=int,
                    help='Sets the number of iterations between each test', default = 2)
@@ -46,66 +47,23 @@ n_images = args.numimage
 quantize_level_bits = args.quantize
 start_it = args.startingit
 experiment_name = args.name
+model_type = args.model
 
 print_every = args.printevery
 
 
 if(dataset == 'CelebA'):
-    x_train = get_celeb_dataset(quantize_level_bits=quantize_level_bits, strides=(2, 2), crop=(29, 9), n_images=n_images)
+    x_train = get_celeb_dataset(quantize_level_bits=quantize_level_bits, strides=(2, 2), crop=(0, 0), n_images=n_images)
+    x_train = x_train[:,26:-19,12:-13]
 elif(dataset == 'CIFAR'):
     x_train, train_labels, test_images, test_labels = get_cifar10_data(quantize_level_bits=quantize_level_bits)
 
-def GLOWNet(out_shape, n_filters=512):
-    _, _, channels = out_shape
-    return spp.sequential(spp.Conv(n_filters, filter_shape=(3, 3), padding=((1, 1), (1, 1)), bias=True, weightnorm=False),
-#                           spp.InstanceNorm(),
-                          spp.Relu(),
-                          spp.Conv(n_filters, filter_shape=(1, 1), padding=((0, 0), (0, 0)), bias=True, weightnorm=False),
-#                           spp.InstanceNorm(),
-                          spp.Relu(),
-                          spp.Conv(2*channels, filter_shape=(3, 3), padding=((1, 1), (1, 1)), bias=True, weightnorm=False, W_init=jaxinit.zeros, b_init=jaxinit.zeros),
-                          spp.Split(2, axis=-1), 
-                          spp.parallel(spp.Tanh(), spp.Identity()))  # log_s, t
-def FlatTransform(out_shape, n_hidden_layers=4, layer_size=1024):
-    dense_layers = [spp.Dense(layer_size), spp.Relu()]*n_hidden_layers
-    return spp.sequential(*dense_layers,
-                          spp.Dense(out_shape[-1]*2),
-                          spp.Split(2, axis=-1), 
-                          spp.parallel(spp.Tanh(), spp.Identity())) # log_s, t
-def GLOW(name_iter, norm_type='instance', conditioned_actnorm=False):
-    layers = [GLOWBlock(GLOWNet, masked=False, name=next(name_iter))]*1 #32
-    return sequential_flow(Squeeze(), Debug(''), *layers, UnSqueeze())
-def RealNDP(z_dim=50):
-    debug_kwargs = dict(print_init_shape=True, print_forward_shape=False, print_inverse_shape=False, compare_vals=False)
-    
-    an_names = iter(['act_norm_%d'%i for i in range(100)])
-    name_iter = iter(['glow_%d'%i for i in range(100)])
-    def multi_scale(flow):
-        return sequential_flow(GLOW(name_iter),
-                               Squeeze(),
-                               FactorOut(2),
-                               factored_flow(flow, Identity()),
-                               FanInConcat(2),
-                               UnSqueeze())
-    flow = GLOW(name_iter)
-    #flow = multi_scale(flow)
-    #flow = multi_scale(flow)
-    #flow = multi_scale(flow)
-    if(z_dim is not None):
-        prior_layers = [AffineCoupling(FlatTransform), ActNorm(name=next(an_names)), Reverse()]*2 #10
-        prior_flow = sequential_flow(*prior_layers, AffineGaussianPriorFullCov(z_dim))
-        prior_flow = TallAffineDiagCov(prior_flow, z_dim)
-#         prior_flow = AffineGaussianPriorFullCov(z_dim)
-    else:
-        prior_flow = UnitGaussianPrior()
-    flow = sequential_flow(Dequantization(scale=2**quantize_level_bits), 
-                           Logit(), 
-                           flow,
-                           Flatten(),
-                           prior_flow)
-    return flow
+from CelebA_default_model import CelebADefault
 
-nf, nif = RealNDP(None), RealNDP(512)
+if(model_type == 'CelebADefault'):
+    nf, nif = CelebADefault(False, quantize_level_bits), CelebADefault(True, quantize_level_bits)
+
+
 Model = namedtuple('model', 'names output_shape params state forward inverse')
 
 models = []
@@ -149,7 +107,6 @@ def spmd_update(forward, opt_update, get_params, i, opt_state, state, x_batch, k
 def lr_schedule(i, lr_decay=1.0, max_lr=1e-4):
     warmup_steps = 2000
     return np.where(i < warmup_steps, max_lr*i/warmup_steps, max_lr*(lr_decay**(i - warmup_steps)))
-
 
 opt_init, opt_update, get_params = optimizers.adam(lr_schedule)
 opt_update = jit(opt_update)
@@ -244,8 +201,8 @@ for i in np.arange(start_it, 100000):
         savePytree(state_nf_leaves, 'Experiments/' + str(experiment_name) + '/' + str(i) + '/' + 'state_nf_leaves.p')
         savePytree(state_nif_leaves, 'Experiments/' + str(experiment_name) + '/' + str(i) + '/' + 'state_nif_leaves.p')
 
-        np.savetxt('Experiments/' + str(experiment_name) + '/' + 'losses_nf.txt', losses_nf, delimiter=",")
-        np.savetxt('Experiments/' + str(experiment_name) + '/' + 'losses_nif.txt', losses_nif, delimiter=",")
+        onp.savetxt('Experiments/' + str(experiment_name) + '/' + 'losses_nf.txt', losses_nf, delimiter=",")
+        onp.savetxt('Experiments/' + str(experiment_name) + '/' + 'losses_nif.txt', losses_nif, delimiter=",")
         misc['key'] = key
 
         with open('Experiments/' + str(experiment_name) + '/misc.p','wb') as f: pickle.dump(misc, f)
