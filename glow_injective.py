@@ -18,17 +18,18 @@ import jax.nn.initializers as jaxinit
 import jax.numpy as np
 
 n_gpus = xla_bridge.device_count()
+print(n_gpus)
 
 parser = argparse.ArgumentParser(description='Training Noisy Injective Flows')
 
 parser.add_argument('--name', action='store', type=str,
-                   help='Name of model', default = '0')
+                   help='Name of model', default = 'CelebADefault')
 parser.add_argument('--batchsize', action='store', type=int,
                    help='Batch Size, default = 64', default = 64)
 parser.add_argument('--dataset', action='store', type=str,
                    help='Dataset to load, default = CelebA', default = 'CelebA')
 parser.add_argument('--numimage', action='store', type=int,
-                   help='Number of images to load from selected dataset, default = 50000', default = 500)
+                   help='Number of images to load from selected dataset, default = 50000', default = 200000)
 parser.add_argument('--quantize', action='store', type=int,
                    help='Sets the value of quantize_level_bits, default = 5', default = 5)
 parser.add_argument('--startingit', action ='store', type=int,
@@ -37,7 +38,7 @@ parser.add_argument('--model', action ='store', type=str,
                    help = 'Sets the model to use', default = 'CelebADefault')
 
 parser.add_argument('--printevery', action = 'store', type=int,
-                   help='Sets the number of iterations between each test', default = 2)
+                   help='Sets the number of iterations between each test', default = 500)
 
 args = parser.parse_args()
 
@@ -81,8 +82,8 @@ for flow in [nf, nif]:
                                            (),
                                            'actnorm_seed',
                                            key,
-                                           n_seed_examples=8,
-                                           batch_size=8,
+                                           n_seed_examples=15000,
+                                           batch_size=64,
                                            notebook=False)
 
 
@@ -105,7 +106,7 @@ def spmd_update(forward, opt_update, get_params, i, opt_state, state, x_batch, k
 # Create the optimizer
 
 def lr_schedule(i, lr_decay=1.0, max_lr=1e-4):
-    warmup_steps = 2000
+    warmup_steps = 10000
     return np.where(i < warmup_steps, max_lr*i/warmup_steps, max_lr*(lr_decay**(i - warmup_steps)))
 
 opt_init, opt_update, get_params = optimizers.adam(lr_schedule)
@@ -132,13 +133,10 @@ if(start_it != 0):
     with open('Experiments/' + str(experiment_name) + '/misc.p','rb') as f: misc = pickle.load(f)
     key = misc['key']
 
-
     start_it += 1
 else:
     state_nf, state_nif = nf_model.state, nif_model.state
     misc = dict()
-
-    print('this')
 
 
 
@@ -181,8 +179,7 @@ for i in np.arange(start_it, 100000):
 
     losses_nf.append(val_nf)
     losses_nif.append(val_nif)
-    print(f'Negative Log Likelihood: NF: {val_nf:.3f}, NIF: {val_nif:.3f}')
-    print(i) 
+    print(f'Iteration {i:d} Negative Log Likelihood: NF: {val_nf:.3f}, NIF: {val_nif:.3f}')
     
     if(i%print_every == 0):
 

@@ -28,18 +28,18 @@ def GLOWNet(out_shape, n_filters=512):
                           spp.Conv(2*channels, filter_shape=(3, 3), padding=((1, 1), (1, 1)), bias=True, weightnorm=False, W_init=jaxinit.zeros, b_init=jaxinit.zeros),
                           spp.Split(2, axis=-1), 
                           spp.parallel(spp.Tanh(), spp.Identity()))  # log_s, t
-def FlatTransform(out_shape, n_hidden_layers=4, layer_size=1024):
+def FlatTransform(out_shape, n_hidden_layers=5, layer_size=1024):
     dense_layers = [spp.Dense(layer_size), spp.Relu()]*n_hidden_layers
     return spp.sequential(*dense_layers,
                           spp.Dense(out_shape[-1]*2),
                           spp.Split(2, axis=-1), 
                           spp.parallel(spp.Tanh(), spp.Identity())) # log_s, t
 def GLOW(name_iter, norm_type='instance', conditioned_actnorm=False):
-    layers = [GLOWBlock(GLOWNet, masked=False, name=next(name_iter))]*1 #32
+    layers = [GLOWBlock(GLOWNet, masked=False, name=next(name_iter))]*32 #32
     return sequential_flow(Squeeze(), Debug(''), *layers, UnSqueeze())
-def CelebADefault(injective = True, quantize_level_bits = 3):
+def CelebADefault(injective = True, quantize_level_bits = 5):
     if(injective):
-        z_dim = 50
+        z_dim = 256
     else:
         z_dim = None 
 
@@ -55,12 +55,14 @@ def CelebADefault(injective = True, quantize_level_bits = 3):
                                FanInConcat(2),
                                UnSqueeze())
     flow = GLOW(name_iter)
-    #flow = multi_scale(flow)
-    #flow = multi_scale(flow)
-    #flow = multi_scale(flow)
+    flow = multi_scale(flow)
+    flow = multi_scale(flow)
+    flow = multi_scale(flow)
+    flow = multi_scale(flow)
+    flow = multi_scale(flow)
     if(z_dim is not None):
-        prior_layers = [AffineCoupling(FlatTransform), ActNorm(name=next(an_names)), Reverse()]*2 #10
-        prior_flow = sequential_flow(*prior_layers, AffineGaussianPriorFullCov(z_dim))
+        prior_layers = [AffineCoupling(FlatTransform), ActNorm(name=next(an_names)), Reverse()]*10 #10
+        prior_flow = sequential_flow(*prior_layers, AffineGaussianPriorDiagCov(z_dim))
         prior_flow = TallAffineDiagCov(prior_flow, z_dim)
 #         prior_flow = AffineGaussianPriorFullCov(z_dim)
     else:
