@@ -146,16 +146,10 @@ if(start_it != 0):
     state_nf = load_pytree(tree_structure(nf_model.state), os.path.join(start_iter_folder, 'state_nf_leaves.p.p'))
     state_nif = load_pytree(tree_structure(nif_model.state), os.path.join(start_iter_folder, 'state_nf_leaves.p.p'))
 
-    # opt_state_nf = load_pytree(tree_structure(opt_state_nf), 'Experiments/' + str(experiment_name) + '/' + str(start_it) + '/' + 'opt_state_nf_leaves.p')
-    # opt_state_nif = load_pytree(tree_structure(opt_state_nif), 'Experiments/' + str(experiment_name) + '/' + str(start_it) + '/' + 'opt_state_nif_leaves.p')
-    # state_nf = load_pytree(tree_structure(nf_model.state), 'Experiments/' + str(experiment_name) + '/' + str(start_it) + '/' + 'state_nf_leaves.p')
-    # state_nif = load_pytree(tree_structure(nif_model.state), 'Experiments/' + str(experiment_name) + '/' + str(start_it) + '/' + 'state_nf_leaves.p')
-
     nf_model._replace(state = state_nf)
     nif_model._replace(state = state_nif)
     nf_model._replace(params = opt_state_nf)
     nif_model._replace(params = opt_state_nif)
-    # with open('Experiments/' + str(experiment_name) + '/misc.p','rb') as f:
     with open(os.path.join(start_iter_folder, 'misc.p'),'rb') as f:
         misc = pickle.load(f)
     key = misc['key']
@@ -221,20 +215,6 @@ for i in pbar:
 
         opt_state_nf_leaves, opt_state_nif_leaves = tree_leaves(opt_state_nf), tree_leaves(opt_state_nif)
         state_nf_leaves, state_nif_leaves = tree_leaves(state_nf), tree_leaves(state_nif)
-
-        # if not os.path.exists('Experiments/' + str(experiment_name) + '/' + str(i) + '/'):
-        #     os.mkdir('Experiments/' + str(experiment_name) + '/' + str(i) + '/')
-        # savePytree(opt_state_nf_leaves, 'Experiments/' + str(experiment_name) + '/' + str(i) + '/' + 'opt_state_nf_leaves.p')
-        # savePytree(opt_state_nif_leaves, 'Experiments/' + str(experiment_name) + '/' + str(i) + '/' + 'opt_state_nif_leaves.p')
-        # savePytree(state_nf_leaves, 'Experiments/' + str(experiment_name) + '/' + str(i) + '/' + 'state_nf_leaves.p')
-        # savePytree(state_nif_leaves, 'Experiments/' + str(experiment_name) + '/' + str(i) + '/' + 'state_nif_leaves.p')
-
-        # onp.savetxt('Experiments/' + str(experiment_name) + '/' + 'losses_nf.txt', losses_nf, delimiter=",")
-        # onp.savetxt('Experiments/' + str(experiment_name) + '/' + 'losses_nif.txt', losses_nif, delimiter=",")
-        # misc['key'] = key
-
-        # with open('Experiments/' + str(experiment_name) + '/misc.p','wb') as f:
-        #     pickle.dump(misc, f)
 
         iteration_folder = os.path.join(experiment_folder, str(i))
         if not os.path.exists(iteration_folder):
