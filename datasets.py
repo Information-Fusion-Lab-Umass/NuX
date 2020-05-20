@@ -183,7 +183,7 @@ def load_cifar10(batches_data_folder):
     test_labels = test_labels.astype(onp.int32).T
     return train_images, train_labels, test_images, test_labels
 
-def get_cifar10_data(quantize_level_bits=2, data_folder='/tmp/cifar10/'):
+def get_cifar10_data(quantize_level_bits=2, data_folder='data/cifar10/'):
     # language=rst
     """
     Load the cifar 10 dataset.
@@ -206,6 +206,22 @@ def get_cifar10_data(quantize_level_bits=2, data_folder='/tmp/cifar10/'):
     test_images = test_images//factor
 
     return train_images, train_labels, test_images, test_labels
+
+def cifar10_data_loader(quantize_level_bits=2, data_folder='data/cifar10/'):
+    # language=rst
+    """
+    Load the cifar 10 dataset.
+
+    :param data_folder: Where to download the data to
+    """
+    train_images, train_labels, test_images, test_labels = get_cifar10_data(quantize_level_bits=quantize_level_bits, data_folder=data_folder)
+    x_shape = train_images.shape[1:]
+
+    def data_loader(key, n_gpus, batch_size):
+        batch_idx = random.randint(key, (n_gpus, batch_size), minval=0, maxval=train_images.shape[0])
+        return train_images[batch_idx,...]
+
+    return data_loader, x_shape
 
 ############################################################################################################################################################
 
@@ -260,7 +276,6 @@ def celeb_dataset_loader(quantize_level_bits=8, strides=(2, 2), crop=((26, -19),
     # Load a single file so that we can get the shape
     im = plt.imread(all_files[0], format='jpg')
     im = im[::strides[0],::strides[1]][crop[0][0]:crop[0][1],crop[1][0]:crop[1][1]]
-    im//quantize_factor
     x_shape = np.array(im).shape
 
     # The loader will be used to pull batches of data

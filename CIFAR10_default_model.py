@@ -26,7 +26,7 @@ def GLOW(name_iter, norm_type='instance', conditioned_actnorm=False):
     layers = [GLOWBlock(GLOWNet, masked=False, name=next(name_iter), additive_coupling=False)]*32
     return sequential_flow(Squeeze(), Debug(''), *layers, UnSqueeze())
 
-def CelebADefault(injective=True, quantize_level_bits=5):
+def CIFARDefault(injective=True, quantize_level_bits=5):
     if(injective):
         z_dim = 256
     else:
@@ -44,7 +44,6 @@ def CelebADefault(injective=True, quantize_level_bits=5):
                                FanInConcat(2),
                                UnSqueeze())
     flow = GLOW(name_iter)
-    flow = multi_scale(flow)
     flow = multi_scale(flow)
     flow = multi_scale(flow)
     flow = multi_scale(flow)
