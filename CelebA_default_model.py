@@ -15,7 +15,7 @@ def GLOWNet(out_shape, n_filters=512):
                           spp.Split(2, axis=-1),
                           spp.parallel(spp.Tanh(), spp.Identity()))  # log_s, t
 
-def FlatTransform(out_shape, n_hidden_layers=5, layer_size=1024):
+def FlatTransform(out_shape, n_hidden_layers=4, layer_size=1024):
     dense_layers = [spp.Dense(layer_size), spp.Relu()]*n_hidden_layers
     return spp.sequential(*dense_layers,
                           spp.Dense(out_shape[-1]*2),
@@ -23,12 +23,12 @@ def FlatTransform(out_shape, n_hidden_layers=5, layer_size=1024):
                           spp.parallel(spp.Tanh(), spp.Identity())) # log_s, t
 
 def GLOW(name_iter, norm_type='instance', conditioned_actnorm=False):
-    layers = [GLOWBlock(GLOWNet, masked=False, name=next(name_iter), additive_coupling=False)]*32
+    layers = [GLOWBlock(GLOWNet, masked=False, name=next(name_iter), additive_coupling=False)]*16
     return sequential_flow(Squeeze(), Debug(''), *layers, UnSqueeze())
 
-def CelebADefault(injective=True, quantize_level_bits=5):
+def CelebADefault(injective=True, quantize_level_bits=3):
     if(injective):
-        z_dim = 256
+        z_dim = 128
     else:
         z_dim = None
 
@@ -47,8 +47,8 @@ def CelebADefault(injective=True, quantize_level_bits=5):
     flow = multi_scale(flow)
     flow = multi_scale(flow)
     flow = multi_scale(flow)
-    flow = multi_scale(flow)
-    flow = multi_scale(flow)
+    # flow = multi_scale(flow)
+    # flow = multi_scale(flow)
     if(z_dim is not None):
         prior_layers = [AffineCoupling(FlatTransform), ActNorm(name=next(an_names)), Reverse()]*10
         prior_flow = sequential_flow(*prior_layers, AffineGaussianPriorDiagCov(z_dim))
@@ -61,3 +61,5 @@ def CelebADefault(injective=True, quantize_level_bits=5):
                            Flatten(),
                            prior_flow)
     return flow
+
+# python glow_injective.py --name=CelebA128 --batchsize=8 --dataset=CelebA --numimage=-1 --quantize=3 --model=CelebADefault --startingit=0 --printevery=500

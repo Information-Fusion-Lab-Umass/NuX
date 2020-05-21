@@ -16,6 +16,7 @@ from jax.lib import xla_bridge
 import pickle
 import jax.nn.initializers as jaxinit
 import jax.numpy as np
+clip_grads = jit(optimizers.clip_grads)
 
 n_gpus = xla_bridge.device_count()
 print('n_gpus:', n_gpus)
@@ -102,8 +103,8 @@ for flow in [nf, nif]:
                                                     'actnorm_seed',
                                                     key,
                                                     data_loader=data_loader,
-                                                    n_seed_examples=15000,
-                                                    batch_size=64,
+                                                    n_seed_examples=1000,
+                                                    batch_size=8,
                                                     notebook=False)
 
     models.append(Model(names, output_shape, params, state, forward, inverse))
@@ -121,6 +122,7 @@ def spmd_update(forward, opt_update, get_params, i, opt_state, state, x_batch, k
     params = get_params(opt_state)
     (val, state), grads = jax.value_and_grad(partial(nll, forward), has_aux=True)(params, state, x_batch, key=key, test=TRAIN)
     g = jax.lax.psum(grads, 'batch')
+    g = clip_grads(g, 5.0)
     opt_state = opt_update(i, g, opt_state)
     return val, state, opt_state
 
@@ -142,9 +144,9 @@ def load_pytree(treedef, dir_save):
 
 if(start_it != 0):
     opt_state_nf = load_pytree(tree_structure(opt_state_nf), os.path.join(start_iter_folder, 'opt_state_nf_leaves.p'))
-    opt_state_nif = load_pytree(tree_structure(opt_state_nif), os.path.join(start_iter_folder, 'opt_state_nif_leaves.p.p'))
-    state_nf = load_pytree(tree_structure(nf_model.state), os.path.join(start_iter_folder, 'state_nf_leaves.p.p'))
-    state_nif = load_pytree(tree_structure(nif_model.state), os.path.join(start_iter_folder, 'state_nf_leaves.p.p'))
+    opt_state_nif = load_pytree(tree_structure(opt_state_nif), os.path.join(start_iter_folder, 'opt_state_nif_leaves.p'))
+    state_nf = load_pytree(tree_structure(nf_model.state), os.path.join(start_iter_folder, 'state_nf_leaves.p'))
+    state_nif = load_pytree(tree_structure(nif_model.state), os.path.join(start_iter_folder, 'state_nf_leaves.p'))
 
     nf_model._replace(state = state_nf)
     nif_model._replace(state = state_nif)
@@ -229,20 +231,5 @@ for i in pbar:
         onp.savetxt(os.path.join(experiment_folder, 'losses_nif.txt'), losses_nif, delimiter=",")
         misc['key'] = key
 
-        with open(os.path.join(experiment_folder, 'misc.p'),'wb') as f:
+        with open(os.path.join(iteration_folder, 'misc.p'), 'wb') as f:
             pickle.dump(misc, f)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
