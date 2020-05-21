@@ -16,6 +16,7 @@ from jax.lib import xla_bridge
 import pickle
 import jax.nn.initializers as jaxinit
 import jax.numpy as np
+import glob
 clip_grads = jit(optimizers.clip_grads)
 
 n_gpus = xla_bridge.device_count()
@@ -58,6 +59,21 @@ start_iter_folder = os.path.join(experiment_folder, str(start_it))
 if(start_it > 0):
     if(os.path.exists(start_iter_folder) == False):
         assert 0, 'Invalid starting iteration'
+
+# Get the most recent training iteration
+if(start_it == -1):
+    completed_iterations = []
+    for root,dirs,_ in os.walk(experiment_folder):
+        for d in dirs:
+            try:
+                completed_iterations.append(int(d))
+            except:
+                pass
+    completed_iterations = sorted(completed_iterations)
+    start_it = completed_iterations[-1]
+    start_iter_folder = os.path.join(experiment_folder, str(start_it))
+
+print('Start iteration is', start_it)
 
 print('Done Parsing Arguments')
 
