@@ -227,8 +227,8 @@ for i in pbar:
         savePytree(state_nf_leaves, os.path.join(iteration_folder, 'state_nf_leaves.p'))
         savePytree(state_nif_leaves, os.path.join(iteration_folder, 'state_nif_leaves.p'))
 
-        onp.savetxt(os.path.join(experiment_folder, 'losses_nf.txt'), losses_nf, delimiter=",")
-        onp.savetxt(os.path.join(experiment_folder, 'losses_nif.txt'), losses_nif, delimiter=",")
+        onp.savetxt(os.path.join(iteration_folder, 'losses_nf.txt'), losses_nf, delimiter=",")
+        onp.savetxt(os.path.join(iteration_folder, 'losses_nif.txt'), losses_nif, delimiter=",")
         misc['key'] = key
 
         with open(os.path.join(iteration_folder, 'misc.p'), 'wb') as f:
