@@ -26,7 +26,7 @@ def GLOW(name_iter, norm_type='instance', conditioned_actnorm=False):
     layers = [GLOWBlock(GLOWNet, masked=False, name=next(name_iter), additive_coupling=False)]*16
     return sequential_flow(Squeeze(), Debug(''), *layers, UnSqueeze())
 
-def CIFARDefault(injective=True, quantize_level_bits=5):
+def CelebA256(injective=True, quantize_level_bits=3):
     if(injective):
         z_dim = 256
     else:
@@ -46,6 +46,7 @@ def CIFARDefault(injective=True, quantize_level_bits=5):
     flow = GLOW(name_iter)
     flow = multi_scale(flow)
     flow = multi_scale(flow)
+    flow = multi_scale(flow)
     # flow = multi_scale(flow)
     # flow = multi_scale(flow)
     if(z_dim is not None):
@@ -60,3 +61,5 @@ def CIFARDefault(injective=True, quantize_level_bits=5):
                            Flatten(),
                            prior_flow)
     return flow
+
+# python glow_injective.py --name=CelebA128 --batchsize=8 --dataset=CelebA --numimage=-1 --quantize=3 --model=CelebADefault --startingit=0 --printevery=500

@@ -85,23 +85,35 @@ if(dataset == 'CelebA'):
     assert x_shape == (64, 64, 3)
 elif(dataset == 'CIFAR'):
     data_loader, x_shape = cifar10_data_loader(quantize_level_bits=quantize_level_bits, data_folder='data/cifar10/')
-elif(dataset == 'STL10'):
-    data_loader, x_shape = STL10_dataset_loader(quantize_level_bits=quantize_level_bits, data_folder='data/STL10/')
 else:
     assert 0, 'Invalid dataset type.'
 
 print('Done Retrieving Data')
 
-from CelebA_default_model import CelebADefault
-from CIFAR10_default_model import CIFARDefault
+from CelebA_512 import CelebA512
+from CelebA_256 import CelebA256
+from CelebA_128 import CelebA128
+
+from CIFAR10_512 import CIFAR512
+from CIFAR10_256 import CIFAR256
+
 from STL10_default_model import STL10Default
 
-if(model_type == 'CelebADefault'):
+if(model_type == 'CelebA512'):
     assert dataset == 'CelebA', 'Dataset mismatch'
-    nf, nif = CelebADefault(False, quantize_level_bits), CelebADefault(True, quantize_level_bits)
-elif(model_type == 'CIFARDefault'):
+    nf, nif = CelebA512(False, quantize_level_bits), CelebA512(True, quantize_level_bits)
+elif(model_type == 'CelebA256'):
+    assert dataset == 'CelebA', 'Dataset mismatch'
+    nf, nif = CelebA256(False, quantize_level_bits), CelebA256(True, quantize_level_bits)
+elif(model_type == 'CelebA128'):
+    assert dataset == 'CelebA', 'Dataset mismatch'
+    nf, nif = CelebA128(False, quantize_level_bits), CelebA128(True, quantize_level_bits)
+elif(model_type == 'CIFAR512'):
     assert dataset == 'CIFAR', 'Dataset mismatch'
-    nf, nif = CIFARDefault(False, quantize_level_bits), CIFARDefault(True, quantize_level_bits)
+    nf, nif = CIFAR512(False, quantize_level_bits), CIFAR512(True, quantize_level_bits)
+elif(model_type == 'CIFAR256'):
+    assert dataset == 'CIFAR', 'Dataset mismatch'
+    nf, nif = CIFAR256(False, quantize_level_bits), CIFAR256(True, quantize_level_bits)
 elif(model_type == 'STL10Default'):
     assert dataset == 'STL10', 'Dataset mismatch'
     nf, nif = STL10Default(False, quantize_level_bits), STL10Default(True, quantize_level_bits)
@@ -258,6 +270,3 @@ for i in pbar:
 
         with open(os.path.join(iteration_folder, 'misc.p'), 'wb') as f:
             pickle.dump(misc, f)
-
-
-# python glow_injective.py --name=CelebA128 --batchsize=8 --dataset=CelebA --numimage=-1 --quantize=3 --model=CelebADefault --startingit=-1 --printevery=500 n_gpus: 1
