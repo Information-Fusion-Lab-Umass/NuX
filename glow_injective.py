@@ -35,7 +35,7 @@ parser.add_argument('--numimage', action='store', type=int,
 parser.add_argument('--quantize', action='store', type=int,
                    help='Sets the value of quantize_level_bits, default=5', default=5)
 parser.add_argument('--startingit', action ='store', type=int,
-                   help='Sets the training iteration to start on. There must be a stored file for this to occure', default=-1)
+                   help='Sets the training iteration to start on. There must be a stored file for this to occure', default=0)
 parser.add_argument('--model', action ='store', type=str,
                    help='Sets the model to use', default='CelebADefault')
 parser.add_argument('--printevery', action='store', type=int,
@@ -85,6 +85,8 @@ if(dataset == 'CelebA'):
     assert x_shape == (64, 64, 3)
 elif(dataset == 'CIFAR'):
     data_loader, x_shape = cifar10_data_loader(quantize_level_bits=quantize_level_bits, data_folder='data/cifar10/')
+elif(dataset == 'STL10'):
+    data_loader, x_shape = STL10_dataset_loader(quantize_level_bits=quantize_level_bits, data_folder='data/STL10/')
 else:
     assert 0, 'Invalid dataset type.'
 
@@ -96,6 +98,8 @@ from CelebA_128 import CelebA128
 
 from CIFAR10_512 import CIFAR512
 from CIFAR10_256 import CIFAR256
+
+from STL10_default_model import STL10Default
 
 if(model_type == 'CelebA512'):
     assert dataset == 'CelebA', 'Dataset mismatch'
@@ -112,6 +116,9 @@ elif(model_type == 'CIFAR512'):
 elif(model_type == 'CIFAR256'):
     assert dataset == 'CIFAR', 'Dataset mismatch'
     nf, nif = CIFAR256(False, quantize_level_bits), CIFAR256(True, quantize_level_bits)
+elif(model_type == 'STL10Default'):
+    assert dataset == 'STL10', 'Dataset mismatch'
+    nf, nif = STL10Default(False, quantize_level_bits), STL10Default(True, quantize_level_bits)
 else:
     assert 0, 'Invalid model type.'
 
@@ -180,10 +187,10 @@ if(start_it != 0):
     state_nf = load_pytree(tree_structure(nf_model.state), os.path.join(start_iter_folder, 'state_nf_leaves.p'))
     state_nif = load_pytree(tree_structure(nif_model.state), os.path.join(start_iter_folder, 'state_nf_leaves.p'))
 
-    nf_model._replace(state = state_nf)
-    nif_model._replace(state = state_nif)
-    nf_model._replace(params = opt_state_nf)
-    nif_model._replace(params = opt_state_nif)
+    nf_model = nf_model._replace(state=state_nf)
+    nif_model = nif_model._replace(state=state_nif)
+    nf_model = nf_model._replace(params=opt_state_nf)
+    nif_model = nif_model._replace(params=opt_state_nif)
     with open(os.path.join(start_iter_folder, 'misc.p'),'rb') as f:
         misc = pickle.load(f)
     key = misc['key']
