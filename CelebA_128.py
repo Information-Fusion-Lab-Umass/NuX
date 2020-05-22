@@ -26,7 +26,7 @@ def GLOW(name_iter, norm_type='instance', conditioned_actnorm=False):
     layers = [GLOWBlock(GLOWNet, masked=False, name=next(name_iter), additive_coupling=False)]*16
     return sequential_flow(Squeeze(), Debug(''), *layers, UnSqueeze())
 
-def CelebADefault(injective=True, quantize_level_bits=3):
+def CelebA128(injective=True, quantize_level_bits=3):
     if(injective):
         z_dim = 128
     else:

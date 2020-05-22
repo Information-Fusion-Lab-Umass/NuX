@@ -26,7 +26,7 @@ def GLOW(name_iter, norm_type='instance', conditioned_actnorm=False):
     layers = [GLOWBlock(GLOWNet, masked=False, name=next(name_iter), additive_coupling=False)]*16
     return sequential_flow(Squeeze(), Debug(''), *layers, UnSqueeze())
 
-def CIFARDefault(injective=True, quantize_level_bits=5):
+def CIFAR512(injective=True, quantize_level_bits=5):
     if(injective):
         z_dim = 512
     else:

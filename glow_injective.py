@@ -90,15 +90,28 @@ else:
 
 print('Done Retrieving Data')
 
-from CelebA_default_model import CelebADefault
-from CIFAR10_default_model import CIFARDefault
+from CelebA_512 import CelebA512
+from CelebA_256 import CelebA256
+from CelebA_128 import CelebA128
 
-if(model_type == 'CelebADefault'):
+from CIFAR10_512 import CIFAR512
+from CIFAR10_256 import CIFAR256
+
+if(model_type == 'CelebA512'):
     assert dataset == 'CelebA', 'Dataset mismatch'
-    nf, nif = CelebADefault(False, quantize_level_bits), CelebADefault(True, quantize_level_bits)
-elif(model_type == 'CIFARDefault'):
+    nf, nif = CelebA512(False, quantize_level_bits), CelebA512(True, quantize_level_bits)
+elif(model_type == 'CelebA256'):
+    assert dataset == 'CelebA', 'Dataset mismatch'
+    nf, nif = CelebA256(False, quantize_level_bits), CelebA256(True, quantize_level_bits)
+elif(model_type == 'CelebA128'):
+    assert dataset == 'CelebA', 'Dataset mismatch'
+    nf, nif = CelebA128(False, quantize_level_bits), CelebA128(True, quantize_level_bits)
+elif(model_type == 'CIFAR512'):
     assert dataset == 'CIFAR', 'Dataset mismatch'
-    nf, nif = CIFARDefault(False, quantize_level_bits), CIFARDefault(True, quantize_level_bits)
+    nf, nif = CIFAR512(False, quantize_level_bits), CIFAR512(True, quantize_level_bits)
+elif(model_type == 'CIFAR256'):
+    assert dataset == 'CIFAR', 'Dataset mismatch'
+    nf, nif = CIFAR256(False, quantize_level_bits), CIFAR256(True, quantize_level_bits)
 else:
     assert 0, 'Invalid model type.'
 
