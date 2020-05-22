@@ -70,7 +70,10 @@ if(start_it == -1):
             except:
                 pass
     completed_iterations = sorted(completed_iterations)
-    start_it = completed_iterations[-1]
+    if(len(completed_iterations) == 0):
+        start_it = 0
+    else:
+        start_it = completed_iterations[-1]
     start_iter_folder = os.path.join(experiment_folder, str(start_it))
 
 print('Start iteration is', start_it)
