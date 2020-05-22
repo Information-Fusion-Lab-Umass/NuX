@@ -705,3 +705,38 @@ def uci_loader(datasets=['hepmass', 'gas', 'miniboone', 'power'], data_root='dat
             yield power_train_data, power_test_data, power_noise_scale, 'power'
             del power_train_data
             del power_test_data
+
+############################################################################################################################################################
+
+def STL10_dataset_loader(quantize_level_bits=8, strides=(1, 1), crop=(0, 0), data_folder='data/STL10/'):
+    # language=rst
+    """
+    Load the STL10 dataset.
+
+    :param data_folder: Where to download the data to
+    """
+    filename = 'STL10-images'
+    full_filename = os.path.join(data_folder, filename)
+    if(os.path.exists(full_filename) == False):
+        bsds300_url =  'http://ai.stanford.edu/~acoates/stl10/stl10_binary.tar.gz'
+        download_filename = download_url(data_folder, filename, bsds300_url)
+        assert full_filename == download_filename
+
+        # Extract the batches
+        with tarfile.open(download_filename) as tar_file:
+            tar_file.extractall(data_folder)
+
+    quantize_factor = 256/(2**quantize_level_bits)
+
+    data_file = os.path.join(data_folder, 'stl10_binary/unlabeled_X.bin')
+    data = onp.fromfile(data_file, dtype=np.uint8)
+    data = data.reshape((-1, 3, 96, 96)).transpose((0, 3, 2, 1))
+    data = data[:,::strides[0],::strides[1]][crop[0]:,crop[1]:]
+
+    x_shape = data.shape[1:]
+
+    def data_loader(key, n_gpus, batch_size):
+        batch_idx = random.randint(key, (n_gpus, batch_size), minval=0, maxval=data.shape[0])
+        return data[batch_idx,...]//quantize_factor
+
+    return data_loader, x_shape

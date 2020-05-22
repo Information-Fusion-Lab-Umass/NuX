@@ -557,112 +557,6 @@ def ConditionedTallAffineDiagCov(transform_fun,
 
 # ################################################################################################################
 
-# def UpSample(repeats, name='unnamed'):
-#     # language=rst
-#     """
-#     Up sample by just repeating consecutive values over specified axes
-
-#     :param repeats - The number of times to repeat.  Pass in (2, 1, 2), for example, to repeat twice over
-#                      the 0th axis, no repeats over the 1st axis, and twice over the 2nd axis
-#     """
-#     full_repeats = None
-#     def init_fun(key, input_shape, condition_shape):
-#         nonlocal full_repeats
-#         full_repeats = [repeats[i] if i < len(repeats) else 1 for i in range(len(input_shape))]
-#         output_shape = []
-#         for s, r in zip(input_shape, full_repeats):
-#             assert s%r == 0
-#             output_shape.append(s//r)
-#         output_shape = tuple(output_shape)
-#         log_sigma = -1.0
-#         params, state = (log_sigma), ()
-#         return name, output_shape, params, state
-
-#     def forward(params, state, log_px, x, condition, **kwargs):
-#         log_sigma = params
-#         sigma = np.exp(log_sigma)
-#         is_batched = int(x.ndim == 2 or x.ndim == 4)
-
-#         # The pseudo-inverse is the sliced input
-#         slices = [slice(0, None, r) for r in full_repeats]
-
-#         if(is_batched):
-#             z = x[[slice(0, None, 1)] + slices]
-#         else:
-#             z = x[slices]
-
-#         # Find the flat dimensions
-#         if(x.ndim <= 2):
-#             dim_z = z.shape[-1]
-#             dim_x = x.shape[-1]
-#         elif(x.ndim <= 4):
-#             dim_z = np.prod(z.shape[-3:])
-#             dim_x = np.prod(x.shape[-3:])
-
-#         # Find the projection
-#         x_proj = z
-#         for i, r in enumerate(repeats):
-#             x_proj = np.repeat(x_proj, r, axis=i + is_batched)
-
-#         # Compute -0.5|J^T J|
-#         repeat_prod = np.prod(repeats)
-#         log_det = -0.5*np.log(repeat_prod)*dim_x
-
-#         log_hx = -0.5/sigma*np.sum(x*(x - x_proj), axis=-1)
-#         log_hx -= log_det
-#         log_hx -= (dim_x - dim_z)*(log_sigma + np.log(2*np.pi))
-
-#         # If we have an image, need to sum over more axes
-#         if(x.ndim >= 3):
-#             if(log_hx.ndim >= 2):
-#                 log_hx = log_hx.sum(axis=(-1, -2))
-
-#         # J^T J is a diagonal matrix where each diagonal element is the
-#         # the product of repeats
-#         key = kwargs.pop('key', None)
-#         if(key is None):
-#             assert 0, 'Need a key for this'
-
-#         # Sample z ~ N(z^+, sigma(J^T J)^{-1})
-#         noise = random.normal(key, z.shape)
-#         z += noise*np.sqrt(sigma/repeat_prod)
-
-#         return log_px + log_hx, z, state
-
-#     def inverse(params, state, log_pz, z, condition, **kwargs):
-#         log_sigma = params
-#         x = z
-#         is_batched = int(x.ndim == 2 or x.ndim == 4)
-#         for i, r in enumerate(repeats):
-#             x = np.repeat(x, r, axis=i + is_batched)
-
-#         # Find the flat dimensions
-#         if(x.ndim <= 2):
-#             dim_z = z.shape[-1]
-#             dim_x = x.shape[-1]
-#         elif(x.ndim <= 4):
-#             dim_z = np.prod(z.shape[-3:])
-#             dim_x = np.prod(x.shape[-3:])
-
-#         # Compute -0.5|J^T J|
-#         repeat_prod = np.prod(repeats)
-#         log_det = -0.5*np.log(repeat_prod)*dim_x
-
-#         # The projection difference is 0!
-#         log_hx = log_det
-#         log_hx -= (dim_x - dim_z)*(log_sigma + np.log(2*np.pi))
-
-#         # If we have an image, need to sum over more axes
-#         if(x.ndim >= 3):
-#             if(log_hx.ndim >= 2):
-#                 log_hx = log_hx.sum(axis=(-1, -2))
-
-#         return log_pz + log_hx, x, state
-
-#     return init_fun, forward, inverse
-
-################################################################################################################
-
 def UpSample(repeats, name='unnamed'):
     # language=rst
     """
@@ -680,7 +574,7 @@ def UpSample(repeats, name='unnamed'):
             assert s%r == 0
             output_shape.append(s//r)
         output_shape = tuple(output_shape)
-        log_diag_cov = np.zeros(input_shape)
+        log_diag_cov = np.ones(input_shape)*5
         b = np.zeros(input_shape)
 
         params, state = (log_diag_cov, b), ()
@@ -691,9 +585,10 @@ def UpSample(repeats, name='unnamed'):
             return vmap(partial(forward, params, state, **kwargs), in_axes=(0, 0, None))(log_px, x, condition)
 
         log_diag_cov, b = params
+        log_diag_cov = -jax.nn.softplus(log_diag_cov) - 3.0 # Limit the amount of noise
 
         # Compute the posterior and the manifold penalty
-        z_mean, log_hx, rm_diag = upsample_posterior(x, b*0.0, log_diag_cov, full_repeats)
+        z_mean, log_hx, rm_diag = upsample_posterior(x, b, log_diag_cov, full_repeats)
 
         # Sample z
         key = kwargs.pop('key', None)
@@ -710,10 +605,11 @@ def UpSample(repeats, name='unnamed'):
             return vmap(partial(inverse, params, state, **kwargs), in_axes=(0, 0, None))(log_pz, z, condition)
 
         log_diag_cov, b = params
+        log_diag_cov = -jax.nn.softplus(log_diag_cov) - 3.0 # Limit the amount of noise
 
         # x ~ N(x|Az + b, Sigma)
 
-        x_mean = upsample(full_repeats, z) + b*0.0
+        x_mean = upsample(full_repeats, z) + b
 
         key = kwargs.pop('key', None)
         if(key is not None):
@@ -990,6 +886,7 @@ def CoupledUpSample(transform_fun, repeats, name='unnamed'):
 
         # Compute the bias and covariance conditioned on x2.  \sigma(x2), b(x2)
         (log_diag_cov1, b1), updated_t_state1 = apply_fun(t_params1, t_state1, x2, key=k1, **kwargs)
+        log_diag_cov1 = -jax.nn.softplus(log_diag_cov1)
 
         # Compute the posterior and the manifold penalty
         z1_mean, log_hx1, rm1_diag = posterior_fun(x1, b1, log_diag_cov1, full_repeats)
@@ -1005,6 +902,7 @@ def CoupledUpSample(transform_fun, repeats, name='unnamed'):
 
         # Compute the bias and covariance conditioned on z1.  \sigma(z1), b(z1)
         (log_diag_cov2, b2), updated_t_state2 = apply_fun(t_params2, t_state2, upsample(full_repeats, z1), key=k3, **kwargs)
+        log_diag_cov2 = -jax.nn.softplus(log_diag_cov2)
 
         # Compute the posterior and the manifold penalty
         z2_mean, log_hx2, rm2_diag = posterior_fun(x2, b2, log_diag_cov2, full_repeats)
@@ -1045,6 +943,7 @@ def CoupledUpSample(transform_fun, repeats, name='unnamed'):
 
         # Compute the bias and covariance conditioned on z1.  \sigma(z1), b(z1)
         (log_diag_cov2, b2), updated_t_state2 = apply_fun(t_params2, t_state2, upsample(full_repeats, z1), key=k2, **kwargs)
+        log_diag_cov2 = -jax.nn.softplus(log_diag_cov2)
 
         # Compute the mean of x2
         x2_mean = upsample(full_repeats, z2) + b2
@@ -1061,6 +960,7 @@ def CoupledUpSample(transform_fun, repeats, name='unnamed'):
 
         # Compute the bias and covariance conditioned on x2.  \sigma(x2), b(x2)
         (log_diag_cov1, b1), updated_t_state1 = apply_fun(t_params1, t_state1, x2, key=k4, **kwargs)
+        log_diag_cov1 = -jax.nn.softplus(log_diag_cov1)
 
         # Compute the mean of x2
         x1_mean = upsample(full_repeats, z1) + b1
@@ -1092,199 +992,6 @@ def EasyUpsample(n_channels=256, ratio=2, name='unnamed'):
         return spp.sequential(spp.LowDimInputConvBlock(n_channels=n_channels), spp.SqueezeExcitation(ratio=ratio))
 
     return CoupledUpSample(Coupling2D, (2, 2), name=name)
-
-################################################################################################################
-
-# def CoupledUpSample(transform_fun, prior_flow, repeats, name='unnamed'):
-#     # language=rst
-#     """
-#     Up sample by just repeating consecutive values over specified axes
-
-#     :param repeats - The number of times to repeat.  Pass in (2, 1, 2), for example, to repeat twice over
-#                      the 0th axis, no repeats over the 1st axis, and twice over the 2nd axis
-#     """
-#     full_repeats = None
-#     apply_fun = None
-#     z_masks, z_shapes = None, None
-#     z_indices, upsampled_z_indices = None, None
-#     prior_init_fun, prior_forward, prior_inverse = prior_flow
-
-#     def init_fun(key, input_shape, condition_shape):
-#         keys = random.split(key, 3)
-#         x_shape = input_shape
-#         nonlocal full_repeats
-#         full_repeats = [repeats[i] if i < len(repeats) else 1 for i in range(len(x_shape))]
-#         z_shape = []
-#         for s, r in zip(x_shape, full_repeats):
-#             assert s%r == 0
-#             z_shape.append(s//r)
-#         z_shape = tuple(z_shape)
-#         Hz, Wz, Cz = z_shape
-#         Hx, Wx, Cx = x_shape
-
-#         # Generate the masks needed to go from z to x
-#         nonlocal z_masks, z_indices, z_shapes
-#         z_masks, z_indices, z_shapes = checkerboard_masks(2, z_shape[:-1])
-#         z_shapes = [(h, w, z_shape[-1]) for (h, w) in z_shapes]
-
-#         # Used to go from x1 to z1
-#         slices = [slice(0, None, r) for r in full_repeats]
-
-#         # Lets us go from an upsampled, split z, to a sparse x
-#         nonlocal upsampled_z_indices
-#         upsampled_z_indices = [upsample_idx(full_repeats, idx) for idx in z_indices]
-
-#         # Figure out how to split x and z
-#         z1_shape = (Hz, Wz//2, Cz)
-#         x2_shape = (Hx, Wx//2, Cx)
-
-#         # Initialize the flow
-#         prior_name, prior_output_shape, prior_params, prior_state = prior_init_fun(keys[0], z_shape, condition_shape)
-
-#         # Initialize each of the flows.  apply_fun can be shared
-#         nonlocal apply_fun
-#         init_fun1, apply_fun = transform_fun(out_shape=x2_shape)
-#         init_fun2, _ = transform_fun(out_shape=x2_shape)
-
-#         # Initialize the transform function.
-#         # Should output bias and log diagonal covariance
-#         t_name1, (log_diag_cov_shape1, b_shape1), t_params1, t_state1 = init_fun1(keys[1], x2_shape)
-#         t_name2, (log_diag_cov_shape2, b_shape2), t_params2, t_state2 = init_fun2(keys[2], x2_shape) # For simplicity, will be passing in an upsampled z1 to this
-
-#         names = (name, prior_name, t_name1, t_name2)
-#         params = ((), prior_params, t_params1, t_params2)
-#         state = ((), prior_state, t_state1, t_state2)
-#         return names, prior_output_shape, params, state
-
-#     def forward(params, state, log_px, x, condition, **kwargs):
-#         if(x.ndim == 4):
-#             return vmap(partial(forward, params, state, **kwargs), in_axes=(0, 0, None))(log_px, x, condition)
-
-#         _, prior_params, t_params1, t_params2 = params
-#         _, prior_state, t_state1, t_state2 = state
-
-#         # Get multiple keys if we're sampling
-#         key = kwargs.pop('key', None)
-#         if(key is not None):
-#             # Re-fill key for the rest of the flow
-#             k1, k2, k3, k4, k5 = random.split(key, 5)
-#         else:
-#             k1, k2, k3, k4, k5 = (None,)*5
-
-#         # Determine if we are batching or not
-#         is_batched = x.ndim == 4
-#         posterior_fun = vmap(upsample_posterior, in_axes=(0, 0, 0, None)) if is_batched else upsample_posterior
-#         combine = vmap(recombine_vmapped, in_axes=(0, None)) if is_batched else recombine_vmapped
-
-#         # Split x
-#         x1, x2 = split_x(x, upsampled_z_indices[0]), split_x(x, upsampled_z_indices[1])
-
-#         """ Posterior of N(x_1|Az_1 + b(x_2), Sigma(x_2)) """
-
-#         # Compute the bias and covariance conditioned on x2.  \sigma(x2), b(x2)
-#         (log_diag_cov1, b1), updated_t_state1 = apply_fun(t_params1, t_state1, x2, key=k1, **kwargs)
-
-#         # Compute the posterior and the manifold penalty
-#         z1_mean, rm1_diag, log_hx1 = posterior_fun(x1, b1, log_diag_cov1, full_repeats)
-
-#         # Sample z1
-#         if(key is not None):
-#             noise = random.normal(k2, z1_mean.shape)
-#             z1 = z1_mean + noise/np.sqrt(rm1_diag)
-#         else:
-#             z1 = z1_mean
-
-#         """ Posterior of N(x_2|Az_2 + b(z_1), Sigma(z_1)) """
-
-#         # Compute the bias and covariance conditioned on z1.  \sigma(z1), b(z1)
-#         (log_diag_cov2, b2), updated_t_state2 = apply_fun(t_params2, t_state2, upsample(full_repeats, z1), key=k3, **kwargs)
-
-#         # Compute the posterior and the manifold penalty
-#         z2_mean, rm2_diag, log_hx2 = posterior_fun(x2, b2, log_diag_cov2, full_repeats)
-
-#         # Sample z2
-#         if(key is not None):
-#             noise = random.normal(k4, z2_mean.shape)
-#             z2 = z2_mean + noise/np.sqrt(rm2_diag)
-#         else:
-#             z2 = z2_mean
-
-#         """ Combine z """
-#         z = combine(z1, z_indices[0]) + combine(z2, z_indices[1])
-
-#         # Compute the prior
-#         log_pz, z, updated_prior_state = prior_forward(prior_params, prior_state, log_px, z, condition, key=k5, **kwargs)
-
-#         # Return the full estimate of the integral and the updated
-#         updated_states = ((), updated_prior_state, updated_t_state1, updated_t_state2)
-#         return log_pz + log_hx1 + log_hx2, z, updated_states
-
-#     def inverse(params, state, log_pz, z, condition, **kwargs):
-#         if(z.ndim == 4):
-#             return vmap(partial(inverse, params, state, **kwargs), in_axes=(0, 0, None))(log_pz, z, condition)
-
-#         _, prior_params, t_params1, t_params2 = params
-#         _, prior_state, t_state1, t_state2 = state
-
-#         # Get multiple keys if we're sampling
-#         key = kwargs.pop('key', None)
-#         if(key is not None):
-#             # Re-fill key for the rest of the flow
-#             k1, k2, k3, k4, k5 = random.split(key, 5)
-#         else:
-#             k1, k2, k3, k4, k5 = (None,)*5
-
-#         # Run the input through the prior
-#         log_pz, z, updated_prior_state = prior_inverse(prior_params, prior_state, log_pz, z, condition, key=k1, **kwargs)
-
-#         # Split z
-#         z1, z2 = z[z_masks[0]].reshape(z_shapes[0]), z[z_masks[1]].reshape(z_shapes[1])
-
-#         """ N(x_2|Az_2 + b(z_1), Sigma(z_1)) """
-
-#         # Compute the bias and covariance conditioned on z1.  \sigma(z1), b(z1)
-#         (log_diag_cov2, b2), updated_t_state2 = apply_fun(t_params2, t_state2, upsample(full_repeats, z1), key=k2, **kwargs)
-
-#         # Compute the mean of x2
-#         x2_mean = upsample(full_repeats, z2) + b2
-
-#         # Sample x2
-#         if(key is not None):
-#             noise2 = np.exp(0.5*log_diag_cov2)*random.normal(k3, x2_mean.shape)
-#             x2 = x2_mean + noise2
-#         else:
-#             noise2 = np.zeros_like(x2_mean)
-#             x2 = x2_mean
-
-#         """ N(x_1|Az_1 + b(x_2), Sigma(x_2)) """
-
-#         # Compute the bias and covariance conditioned on x2.  \sigma(x2), b(x2)
-#         (log_diag_cov1, b1), updated_t_state1 = apply_fun(t_params1, t_state1, x2, key=k4, **kwargs)
-
-#         # Compute the mean of x2
-#         x1_mean = upsample(full_repeats, z1) + b1
-
-#         # Sample x2
-#         if(key is not None):
-#             noise1 = np.exp(0.5*log_diag_cov1)*random.normal(k5, x1_mean.shape)
-#             x1 = x1_mean + noise1
-#         else:
-#             noise1 = np.zeros_like(x1_mean)
-#             x1 = x1_mean
-
-#         # Combine x
-#         is_batched = z.ndim == 4
-#         combine = recombine_vmapped if is_batched else recombine
-#         x = recombine_vmapped(x1, upsampled_z_indices[0]) + recombine_vmapped(x2, upsampled_z_indices[1])
-
-#         # Compute N(x1|Az1 + b(x2), Sigma(x2))N(x2|Az2 + b(z1), Sigma(z1))
-#         log_px1 = -0.5*np.sum(noise1*np.exp(-0.5*log_diag_cov1)*noise1, axis=-1) - 0.5*np.sum(log_diag_cov1) - 0.5*x1.shape[-1]*np.log(2*np.pi)
-#         log_px2 = -0.5*np.sum(noise2*np.exp(-0.5*log_diag_cov2)*noise2, axis=-1) - 0.5*np.sum(log_diag_cov2) - 0.5*x2.shape[-1]*np.log(2*np.pi)
-
-#         updated_states = ((), updated_prior_state, updated_t_state1, updated_t_state2)
-#         return log_pz + log_px1 + log_px2, x, updated_states
-
-#     return init_fun, forward, inverse
 
 # ################################################################################################################
 
