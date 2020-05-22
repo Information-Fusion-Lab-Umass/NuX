@@ -35,7 +35,7 @@ parser.add_argument('--numimage', action='store', type=int,
 parser.add_argument('--quantize', action='store', type=int,
                    help='Sets the value of quantize_level_bits, default=5', default=5)
 parser.add_argument('--startingit', action ='store', type=int,
-                   help='Sets the training iteration to start on. There must be a stored file for this to occure', default=0)
+                   help='Sets the training iteration to start on. There must be a stored file for this to occure', default=-1)
 parser.add_argument('--model', action ='store', type=str,
                    help='Sets the model to use', default='CelebADefault')
 parser.add_argument('--printevery', action='store', type=int,
