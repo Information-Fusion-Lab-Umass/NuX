@@ -62,4 +62,4 @@ def STL10Default(injective=True, quantize_level_bits=3):
                            prior_flow)
     return flow
 
-# python glow_injective.py --name=STL10_256 --batchsize=8 --dataset=STL10 --numimage=-1 --quantize=3 --model=STL10Default --startingit=0 --printevery=2000
+# python glow_injective.py --name=STL10_256 --batchsize=8 --dataset=STL10 --numimage=-1 --quantize=3 --model=STL10Default --startingit=-1 --printevery=2000

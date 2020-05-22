@@ -85,6 +85,8 @@ if(dataset == 'CelebA'):
     assert x_shape == (64, 64, 3)
 elif(dataset == 'CIFAR'):
     data_loader, x_shape = cifar10_data_loader(quantize_level_bits=quantize_level_bits, data_folder='data/cifar10/')
+elif(dataset == 'STL10'):
+    data_loader, x_shape = STL10_dataset_loader(quantize_level_bits=quantize_level_bits, data_folder='data/STL10/')
 else:
     assert 0, 'Invalid dataset type.'
 
