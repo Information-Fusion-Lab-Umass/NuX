@@ -35,7 +35,7 @@ parser.add_argument('--numimage', action='store', type=int,
 parser.add_argument('--quantize', action='store', type=int,
                    help='Sets the value of quantize_level_bits, default=5', default=5)
 parser.add_argument('--startingit', action ='store', type=int,
-                   help='Sets the training iteration to start on. There must be a stored file for this to occure', default=0)
+                   help='Sets the training iteration to start on. There must be a stored file for this to occure', default=-1)
 parser.add_argument('--model', action ='store', type=str,
                    help='Sets the model to use', default='CelebADefault')
 parser.add_argument('--printevery', action='store', type=int,
@@ -63,7 +63,7 @@ if(start_it > 0):
 # Get the most recent training iteration
 if(start_it == -1):
     completed_iterations = []
-    for root, dirs, _ in os.walk(experiment_folder):
+    for root,dirs,_ in os.walk(experiment_folder):
         for d in dirs:
             try:
                 completed_iterations.append(int(d))
@@ -85,8 +85,6 @@ if(dataset == 'CelebA'):
     assert x_shape == (64, 64, 3)
 elif(dataset == 'CIFAR'):
     data_loader, x_shape = cifar10_data_loader(quantize_level_bits=quantize_level_bits, data_folder='data/cifar10/')
-elif(dataset == 'STL10'):
-    data_loader, x_shape = STL10_dataset_loader(quantize_level_bits=quantize_level_bits, data_folder='data/STL10/')
 else:
     assert 0, 'Invalid dataset type.'
 
@@ -98,13 +96,6 @@ from CelebA_128 import CelebA128
 
 from CIFAR10_512 import CIFAR512
 from CIFAR10_256 import CIFAR256
-
-from STL10_default_model import STL10Default
-<<<<<<< HEAD
-from STL10_512 import STL10512
-=======
-from upsample_vs_multiscale import CelebAUpscale
->>>>>>> 0c7f7b5551cdd281edf0165fb9b7565869589926
 
 if(model_type == 'CelebA512'):
     assert dataset == 'CelebA', 'Dataset mismatch'
@@ -121,14 +112,6 @@ elif(model_type == 'CIFAR512'):
 elif(model_type == 'CIFAR256'):
     assert dataset == 'CIFAR', 'Dataset mismatch'
     nf, nif = CIFAR256(False, quantize_level_bits), CIFAR256(True, quantize_level_bits)
-elif(model_type == 'STL10Default'):
-    assert dataset == 'STL10', 'Dataset mismatch'
-    nf, nif = STL10Default(False, quantize_level_bits), STL10Default(True, quantize_level_bits)
-elif(model_type == 'STL512'):
-    assert dataset == 'STL10'
-    nf, nif = STL10512(False, quantize_level_bits), STL10512(True, quantize_level_bits)
-elif(model_type == 'CelebAUpsample'):
-    nf, nif = CelebAUpscale(False, quantize_level_bits), CelebAUpscale(True, quantize_level_bits)
 else:
     assert 0, 'Invalid model type.'
 
@@ -155,9 +138,10 @@ for flow in [nf, nif]:
                                                     n_seed_examples=1000,
                                                     batch_size=8,
                                                     notebook=False)
-    n_params = ravel_pytree(params)[0].shape[0]
+
     models.append(Model(names, output_shape, params, state, forward, inverse))
 nf_model, nif_model = models
+
 print('Done With Data Dependent Init')
 
 @partial(jit, static_argnums=(0,))
@@ -196,10 +180,10 @@ if(start_it != 0):
     state_nf = load_pytree(tree_structure(nf_model.state), os.path.join(start_iter_folder, 'state_nf_leaves.p'))
     state_nif = load_pytree(tree_structure(nif_model.state), os.path.join(start_iter_folder, 'state_nf_leaves.p'))
 
-    nf_model = nf_model._replace(state=state_nf)
-    nif_model = nif_model._replace(state=state_nif)
-    nf_model = nf_model._replace(params=opt_state_nf)
-    nif_model = nif_model._replace(params=opt_state_nif)
+    nf_model._replace(state = state_nf)
+    nif_model._replace(state = state_nif)
+    nf_model._replace(params = opt_state_nf)
+    nif_model._replace(params = opt_state_nif)
     with open(os.path.join(start_iter_folder, 'misc.p'),'rb') as f:
         misc = pickle.load(f)
     key = misc['key']
@@ -234,7 +218,7 @@ if(os.path.exists(experiment_folder) == False):
 
 print('About to Start Experiments')
 
-pbar = tqdm(np.arange(start_it, 500000))
+pbar = tqdm(np.arange(start_it, 100000))
 for i in pbar:
     key, *keys = random.split(key, 3)
 
@@ -258,7 +242,7 @@ for i in pbar:
 
     if(i%print_every == 0):
 
-        # Save Model
+        #Save Model
         # Get the trained parameters and the state
         opt_state_nf, opt_state_nif = tree_map(lambda x:x[0], replicated_opt_state_nf), tree_map(lambda x:x[0], replicated_opt_state_nif)
         state_nf, state_nif = tree_map(lambda x:x[0], replicated_state_nf), tree_map(lambda x:x[0], replicated_state_nif)
