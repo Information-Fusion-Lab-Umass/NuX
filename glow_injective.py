@@ -63,7 +63,7 @@ if(start_it > 0):
 # Get the most recent training iteration
 if(start_it == -1):
     completed_iterations = []
-    for root,dirs,_ in os.walk(experiment_folder):
+    for root, dirs, _ in os.walk(experiment_folder):
         for d in dirs:
             try:
                 completed_iterations.append(int(d))
@@ -100,6 +100,7 @@ from CIFAR10_512 import CIFAR512
 from CIFAR10_256 import CIFAR256
 
 from STL10_default_model import STL10Default
+from upsample_vs_multiscale import CelebAUpscale
 
 if(model_type == 'CelebA512'):
     assert dataset == 'CelebA', 'Dataset mismatch'
@@ -119,6 +120,8 @@ elif(model_type == 'CIFAR256'):
 elif(model_type == 'STL10Default'):
     assert dataset == 'STL10', 'Dataset mismatch'
     nf, nif = STL10Default(False, quantize_level_bits), STL10Default(True, quantize_level_bits)
+elif(model_type == 'CelebAUpsample'):
+    nf, nif = CelebAUpscale(False, quantize_level_bits), CelebAUpscale(True, quantize_level_bits)
 else:
     assert 0, 'Invalid model type.'
 
@@ -145,10 +148,9 @@ for flow in [nf, nif]:
                                                     n_seed_examples=1000,
                                                     batch_size=8,
                                                     notebook=False)
-
+    n_params = ravel_pytree(params)[0].shape[0]
     models.append(Model(names, output_shape, params, state, forward, inverse))
 nf_model, nif_model = models
-
 print('Done With Data Dependent Init')
 
 @partial(jit, static_argnums=(0,))
@@ -225,7 +227,7 @@ if(os.path.exists(experiment_folder) == False):
 
 print('About to Start Experiments')
 
-pbar = tqdm(np.arange(start_it, 100000))
+pbar = tqdm(np.arange(start_it, 500000))
 for i in pbar:
     key, *keys = random.split(key, 3)
 
@@ -249,7 +251,7 @@ for i in pbar:
 
     if(i%print_every == 0):
 
-        #Save Model
+        # Save Model
         # Get the trained parameters and the state
         opt_state_nf, opt_state_nif = tree_map(lambda x:x[0], replicated_opt_state_nf), tree_map(lambda x:x[0], replicated_opt_state_nif)
         state_nf, state_nif = tree_map(lambda x:x[0], replicated_state_nf), tree_map(lambda x:x[0], replicated_state_nif)
