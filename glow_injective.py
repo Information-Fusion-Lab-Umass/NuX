@@ -100,6 +100,7 @@ from CIFAR10_512 import CIFAR512
 from CIFAR10_256 import CIFAR256
 
 from STL10_default_model import STL10Default
+from STL10_512 import STL10512
 
 if(model_type == 'CelebA512'):
     assert dataset == 'CelebA', 'Dataset mismatch'
@@ -119,6 +120,9 @@ elif(model_type == 'CIFAR256'):
 elif(model_type == 'STL10Default'):
     assert dataset == 'STL10', 'Dataset mismatch'
     nf, nif = STL10Default(False, quantize_level_bits), STL10Default(True, quantize_level_bits)
+elif(model_type == 'STL512'):
+    assert dataset == 'STL10'
+    nf, nif = STL10512(False, quantize_level_bits), STL10512(True, quantize_level_bits)
 else:
     assert 0, 'Invalid model type.'
 
