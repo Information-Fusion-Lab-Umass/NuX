@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 from datasets import *
 from jax.flatten_util import ravel_pytree
 ravel_pytree = jit(ravel_pytree)
-from jax.tree_util import tree_map, tree_leaves, tree_structure, tree_unflatten
+from jax.tree_util import tree_map,tree_leaves,tree_structure,tree_unflatten
 from collections import namedtuple
 from datasets import get_celeb_dataset
 import argparse
@@ -134,7 +134,7 @@ print('Done Loading Model')
 Model = namedtuple('model', 'names output_shape params state forward inverse')
 
 models = []
-for i, flow in enumerate([nf, nif]):
+for flow in [nf, nif]:
     init_fun, forward, inverse = flow
     key = random.PRNGKey(0)
     names, output_shape, params, state = init_fun(key, x_shape, ())
@@ -154,7 +154,7 @@ for i, flow in enumerate([nf, nif]):
                                                     n_seed_examples=1000,
                                                     batch_size=8,
                                                     notebook=False)
-
+    n_params = ravel_pytree(params)[0].shape[0]
     models.append(Model(names, output_shape, params, state, forward, inverse))
 nf_model, nif_model = models
 print('Done With Data Dependent Init')
