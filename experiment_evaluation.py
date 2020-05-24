@@ -4,6 +4,7 @@ from jax import random, vmap, jit, value_and_grad
 from jax.experimental import optimizers, stax
 import staxplusplus as spp
 from normalizing_flows import *
+import matplotlib
 import matplotlib.pyplot as plt
 from jax.flatten_util import ravel_pytree
 ravel_pytree = jit(ravel_pytree)
@@ -16,9 +17,11 @@ import pickle
 import jax.nn.initializers as jaxinit
 import jax.numpy as np
 import glob
+import tensorflow
+import subprocess
 clip_grads = jit(optimizers.clip_grads)
 
-def save_final_samples(key, model, quantize_level_bits, temp=1.0, n_samples=64, n_samples_per_batch=4, results_folder='./realnvp_results', name='samples.png'):
+def save_final_samples(key, model, quantize_level_bits, temp=1.0, n_samples=64, n_samples_per_batch=4, results_folder='results', name='samples.png'):
     """
     Save a bunch of final sampels
     """
@@ -39,8 +42,8 @@ def save_final_samples(key, model, quantize_level_bits, temp=1.0, n_samples=64, 
     # Generate the samples
     for j in range(n_samples//n_samples_per_batch):
         z = zs[j*n_samples_per_batch:(j + 1)*n_samples_per_batch]
-        _, fz, _ = inverse(params, state, np.zeros(n_samples_per_batch), z, (), test=TEST)
-        fz /= (2.0**quantize_level_bits) # Put the image (mostly) between 0 and 1
+        _, fz, _ = inverse(params, state, np.zeros(n_samples_per_batch), z, (), test=TEST, key=key)
+        fz /= (2.0**quantize_level_bits)
         fz *= (1.0 - 2*0.05)
         fz += 0.05
 
@@ -61,7 +64,7 @@ def save_final_samples(key, model, quantize_level_bits, temp=1.0, n_samples=64, 
     plt.savefig(samples_path)
     plt.close()
 
-def save_reconstructions(key, data_loader, model, quantize_level_bits, n_samples=16, n_samples_per_batch=4, results_folder='./realnvp_results', name='reconstructions.png'):
+def save_reconstructions(key, data_loader, model, quantize_level_bits, n_samples=16, n_samples_per_batch=4, results_folder='results', name='reconstructions.png'):
     """
     Save reconstructions
     """
@@ -76,12 +79,27 @@ def save_reconstructions(key, data_loader, model, quantize_level_bits, n_samples
     fig, axes = plt.subplots(n_rows, n_cols)
     fig.set_size_inches(2*n_cols, 2*n_rows)
 
+    inital_key = key
+
+    @jit
+    def reconstruct(x, key):
+        keys = random.split(key, 2)
+        # log_px, finvx, _ = forward(params, state, np.zeros(n_samples_per_batch), x, (), key=inital_key)
+        log_px, finvx, _ = forward(params, state, np.zeros(n_samples_per_batch), x, (), key=keys[0])
+        # _, fz, _ = inverse(params, state, np.zeros(n_samples_per_batch), finvx, (), key=inital_key)
+        _, fz, _ = inverse(params, state, np.zeros(n_samples_per_batch), finvx, (), key=keys[1])
+        return fz
+
     for j in range(n_samples//n_samples_per_batch):
-        key, *keys = random.split(key, 2)
+        key, *keys = random.split(key, 3)
         _x = data_loader(keys[0], 1, n_samples_per_batch)[0]
 
-        log_px, finvx, _ = forward(params, state, np.zeros(n_samples_per_batch), _x, (), test=TEST, sigma=0.0)
-        _, fz, _ = inverse(params, state, np.zeros(n_samples_per_batch), finvx, (), test=TEST)
+        keys = np.array(random.split(key, 64))
+        fzs = jit(vmap(partial(reconstruct, _x)))(keys)
+        fz = np.mean(fzs, axis=0)
+
+        # log_px, finvx, _ = forward(params, state, np.zeros(n_samples_per_batch), _x, (), key=keys[0])
+        # _, fz, _ = inverse(params, state, np.zeros(n_samples_per_batch), finvx, (), key=keys[1])
         fz /= (2.0**quantize_level_bits)
         fz *= (1.0 - 2*0.05)
         fz += 0.05
@@ -104,7 +122,7 @@ def save_reconstructions(key, data_loader, model, quantize_level_bits, n_samples
     plt.savefig(reconstruction_path)
     plt.close()
 
-def save_temperature_comparisons(key, nf_model, nif_model, quantize_level_bits, n_samples=16, n_samples_per_batch=4, results_folder='./realnvp_results', name='temperature_comparisons.png'):
+def save_temperature_comparisons(key, nf_model, nif_model, quantize_level_bits, n_samples=16, n_samples_per_batch=4, results_folder='results', name='temperature_comparisons.png'):
     """
     Save reconstructions
     """
@@ -128,7 +146,7 @@ def save_temperature_comparisons(key, nf_model, nif_model, quantize_level_bits, 
     for j in range(n_samples//n_samples_per_batch):
         z = zs[j*n_samples_per_batch:(j + 1)*n_samples_per_batch]
         _, fz, _ = nif_model.inverse(nif_model.params, nif_model.state, np.zeros(n_samples_per_batch), z, (), key=key, test=TEST)
-        fz /= (2.0**quantize_level_bits) # Put the image (mostly) between 0 and 1
+        fz /= (2.0**quantize_level_bits)
         fz *= (1.0 - 2*0.05)
         fz += 0.05
 
@@ -146,7 +164,7 @@ def save_temperature_comparisons(key, nf_model, nif_model, quantize_level_bits, 
     for j in range(n_samples//n_samples_per_batch):
         z = zs[j*n_samples_per_batch:(j + 1)*n_samples_per_batch]
         _, fz, _ = nf_model.inverse(nf_model.params, nf_model.state, np.zeros(n_samples_per_batch), z, (), key=key, test=TEST)
-        fz /= (2.0**quantize_level_bits) # Put the image (mostly) between 0 and 1
+        fz /= (2.0**quantize_level_bits)
         fz *= (1.0 - 2*0.05)
         fz += 0.05
 
@@ -167,7 +185,7 @@ def save_temperature_comparisons(key, nf_model, nif_model, quantize_level_bits, 
     plt.savefig(temp_comparison_path, bbox_inches='tight')
     plt.close()
 
-def compute_aggregate_posteriors(key, data_loader, nf_model, nif_model, quantize_level_bits, n_samples=10000, n_samples_per_batch=32, results_folder='./realnvp_results', name='aggregate_posterior.txt'):
+def compute_aggregate_posteriors(key, data_loader, nf_model, nif_model, quantize_level_bits, n_samples=10000, n_samples_per_batch=32, results_folder='results', name='aggregate_posterior.txt'):
     """
     Save reconstructions
     """
@@ -197,3 +215,201 @@ def compute_aggregate_posteriors(key, data_loader, nf_model, nif_model, quantize
     # Save the results to a text file
     aggregate_stats = np.array([[nif_mean, nif_std], [nf_mean, nf_std]])
     onp.savetxt(os.path.join(results_folder, name), aggregate_stats, delimiter=",")
+
+def interpolate_pairs(key, data_loader, nif_model, quantize_level_bits, n_pairs=5, n_points=10, results_folder='results', name='interpolation.png'):
+    """
+    Interpolate images
+    """
+    k1, k2 = random.split(key, 2)
+    x_for_interpolation = data_loader(key, 1, n_pairs)[0]
+    random_pairs = random.randint(key, (2*n_pairs,), minval=0, maxval=x_for_interpolation.shape[0])
+    pairs_iter = iter(random_pairs)
+    index_pairs = [(next(pairs_iter), next(pairs_iter)) for _ in range(n_pairs)]
+
+    n_cols = n_points
+    n_rows = len(index_pairs)
+
+    fig, axes = plt.subplots(n_rows, n_cols)
+    fig.set_size_inches(2*n_cols, 2*n_rows)
+
+    for i, (idx1, idx2) in enumerate(index_pairs):
+        x = x_for_interpolation[[idx1, idx2]]
+        _, finvx, _ = nif_model.forward(nif_model.params, nif_model.state, np.zeros(2), x, (), test=TEST, key=key)
+        finvx1, finvx2 = finvx
+        interpolation_z = np.linspace(finvx1, finvx2, n_points)
+        _, fz, _ = nif_model.inverse(nif_model.params, nif_model.state, np.zeros(n_points), interpolation_z, (), test=TEST)
+        fz /= (2.0**quantize_level_bits)
+        fz *= (1.0 - 2*0.05)
+        fz += 0.05
+        for j in range(n_points):
+            axes[i,j].imshow(fz[j])
+            axes[i,j].set_axis_off()
+
+    plt.subplots_adjust(wspace=0, hspace=0, left=0, right=1, bottom=0, top=1)
+
+    temp_comparison_path = os.path.join(results_folder, 'plots', name)
+    plt.savefig(temp_comparison_path, bbox_inches='tight')
+    plt.close()
+
+def compute_fid_score(model,
+                      key,
+                      quantize_level_bits,
+                      temp=1.0,
+                      sigma=1.0,
+                      TTUR_path='TTUR/',
+                      stats_path='FID/fid_stats_celeba.npz',
+                      n_samples=10000,
+                      n_samples_per_batch=128,
+                      checkpoint_folder='results',
+                      fid_score_folder_name='fid_scores',
+                      sample_fid_folder_name='sample_fid_folder',
+                      check_for_stats=True,
+                      name='fid.txt'):
+
+    results_folder = os.path.join(checkpoint_folder, fid_score_folder_name)
+    sample_fid_folder = os.path.join(checkpoint_folder, sample_fid_folder_name)
+
+    if(os.path.exists(results_folder) == False):
+        os.makedirs(results_folder)
+
+    if(os.path.exists(sample_fid_folder) == False):
+        os.makedirs(sample_fid_folder)
+
+    # See if we have already computed the stats for this experiment
+    using_stats = False
+    if(check_for_stats == True):
+        our_stats_path = glob.glob(sample_fid_folder+'/*.npz')
+        if(len(our_stats_path) > 0):
+            our_stats_path = our_stats_path[0]
+            sample_fid_folder = our_stats_path
+            using_stats = True
+
+    # If we're not using stats, then we need to compute them
+    if(using_stats == False):
+
+        # Add in the kwargs to the model
+        _, _, _, _, forward, inverse = model
+        model = model._replace(forward=jit(partial(forward, sigma=sigma)))
+        model = model._replace(inverse=jit(partial(inverse, sigma=sigma)))
+
+        # Generate the samples from the noisy injective flow
+        number_invalid = 0
+        zs = random.normal(key, (n_samples,) + model.output_shape)*temp
+        for j in tqdm(np.arange(n_samples//n_samples_per_batch), leave=False):
+            z = zs[j*n_samples_per_batch:(j + 1)*n_samples_per_batch]
+            _, fz, _ = model.inverse(model.params, model.state, np.zeros(n_samples_per_batch), z, (), key=key, test=TEST)
+            fz /= (2.0**quantize_level_bits)
+            fz *= (1.0 - 2*0.05)
+            fz += 0.05
+            for k in range(j*n_samples_per_batch, (j + 1)*n_samples_per_batch):
+                # Save each of the images
+                sample_name = 'sample_%d.jpg'%k
+                if(np.any(np.isnan(fz[k-j*n_samples_per_batch]))):
+                    number_invalid += 1
+                    continue
+                if(np.any(np.isinf(fz[k-j*n_samples_per_batch]))):
+                    number_invalid += 1
+                    continue
+                matplotlib.image.imsave(os.path.join(sample_fid_folder, sample_name), fz[k-j*n_samples_per_batch])
+
+    # If a bunch of the samples are infinity or nan, then don't even bother with the FID
+    if(using_stats == False and number_invalid > n_samples*0.2):
+        fid_score = np.nan
+    else:
+        # Compute the fid score
+        try:
+            TTUR_command = ['python', os.path.join(TTUR_path, 'fid.py'), sample_fid_folder, stats_path, '--gpu', '0']
+            proc = subprocess.Popen(TTUR_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            out, err = proc.communicate()
+            fid_score = float(str(out).split('FID:')[1].strip()[:-3])
+        except:
+            TTUR_command = ['python', os.path.join(TTUR_path, 'fid.py'), sample_fid_folder, stats_path]
+            proc = subprocess.Popen(TTUR_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            out, err = proc.communicate()
+            try:
+                fid_score = float(str(out).split('FID:')[1].strip()[:-3])
+            except:
+                print('out:', out)
+                print('\n\n')
+                print('err:', err)
+                assert 0
+
+    # Save the results to a text file
+    fid_save_path = os.path.join(results_folder, name)
+    onp.savetxt(fid_save_path, np.array([fid_score]), delimiter=",")
+
+def save_fid_scores(nf_model,
+                    nif_model,
+                    key,
+                    quantize_level_bits,
+                    temp=1.0,
+                    TTUR_path='TTUR/',
+                    stats_path='FID/fid_stats_celeba.npz',
+                    n_samples=10000,
+                    n_samples_per_batch=128,
+                    results_folder='results',
+                    name='fid.txt'):
+    # stats_name = 'fid_stats_cifar10_train.npz'
+
+    nf_fid_folder = os.path.join(results_folder, 'tmp_nf_fid_folder/')
+    nif_fid_folder = os.path.join(results_folder, 'tmp_nif_fid_folder/')
+
+    if(os.path.exists(nf_fid_folder) == False):
+        os.makedirs(nf_fid_folder)
+    if(os.path.exists(nif_fid_folder) == False):
+        os.makedirs(nif_fid_folder)
+
+    # Generate the samples from the noisy injective flow
+    zs = random.normal(key, (n_samples,) + nif_model.output_shape)*temp
+    for j in tqdm(np.arange(n_samples//n_samples_per_batch)):
+        break
+        z = zs[j*n_samples_per_batch:(j + 1)*n_samples_per_batch]
+        _, fz, _ = nif_model.inverse(nif_model.params, nif_model.state, np.zeros(n_samples_per_batch), z, (), key=key, test=TEST)
+        fz /= (2.0**quantize_level_bits)
+        fz *= (1.0 - 2*0.05)
+        fz += 0.05
+        for k in range(j*n_samples_per_batch, (j + 1)*n_samples_per_batch):
+            # Save each of the images
+            sample_name = 'nif_sample_%d.jpg'%k
+            if(np.any(np.isnan(fz[k-j*n_samples_per_batch]))):
+                continue
+            matplotlib.image.imsave(os.path.join(nif_fid_folder, sample_name), fz[k-j*n_samples_per_batch])
+
+    # Compute the fid score
+    try:
+        proc = subprocess.Popen(['python', os.path.join(TTUR_path, 'fid.py'), nif_fid_folder, stats_path, '--gpu', '0'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        out, err = proc.communicate()
+        nif_fid_score = float(str(out).split('FID:')[1].strip()[:-3])
+    except:
+        proc = subprocess.Popen(['python', os.path.join(TTUR_path, 'fid.py'), nif_fid_folder, stats_path], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        out, err = proc.communicate()
+        nif_fid_score = float(str(out).split('FID:')[1].strip()[:-3])
+
+    # Generate the samples from the normalizing flow
+    zs = random.normal(key, (n_samples,) + nf_model.output_shape)*temp
+    for j in tqdm(np.arange(n_samples//n_samples_per_batch)):
+        z = zs[j*n_samples_per_batch:(j + 1)*n_samples_per_batch]
+        _, fz, _ = nf_model.inverse(nf_model.params, nf_model.state, np.zeros(n_samples_per_batch), z, (), key=key, test=TEST)
+        fz /= (2.0**quantize_level_bits)
+        fz *= (1.0 - 2*0.05)
+        fz += 0.05
+        for k in range(j*n_samples_per_batch, (j + 1)*n_samples_per_batch):
+        # Save each of the images
+            sample_name = 'nf_sample_%d.jpg'%k
+            if(np.any(np.isnan(fz[k-j*n_samples_per_batch]))):
+                continue
+            matplotlib.image.imsave(os.path.join(nf_fid_folder, sample_name), fz[k-j*n_samples_per_batch])
+
+    # Compute the fid score
+    try:
+        proc = subprocess.Popen(['python', os.path.join(TTUR_path, 'fid.py'), nf_fid_folder, stats_path, '--gpu', '0'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        out, err = proc.communicate()
+        nf_fid_score = float(str(out).split('FID:')[1].strip()[:-3])
+    except:
+        proc = subprocess.Popen(['python', os.path.join(TTUR_path, 'fid.py'), nf_fid_folder, stats_path], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        out, err = proc.communicate()
+        nf_fid_score = float(str(out).split('FID:')[1].strip()[:-3])
+
+    # Save the results to a text file
+    fid_scores = np.array([nif_fid_score, nf_fid_score])
+    onp.savetxt(os.path.join(results_folder, name), fid_scores, delimiter=",")

@@ -4,6 +4,7 @@ from jax import random, jit, vmap, jacobian, grad, value_and_grad
 import jax.nn
 import jax.numpy as np
 from functools import partial, reduce
+from jax.tree_util import tree_map, tree_leaves, tree_structure, tree_unflatten
 from jax.experimental import stax
 from jax.nn.initializers import glorot_normal, normal, ones, zeros
 from jax.ops import index, index_add, index_update
@@ -158,7 +159,8 @@ def AffineGaussianPriorDiagCov(out_dim, A_init=glorot_normal(), name='unnamed'):
 
         key = kwargs.pop('key', None)
         if(key is not None):
-            noise = random.normal(key, x.shape)*np.exp(0.5*log_diag_cov)
+            sigma = kwargs.pop('sigma', 1.0)
+            noise = random.normal(key, x.shape)*np.exp(0.5*log_diag_cov)*sigma
             x += noise
         else:
             noise = x*0.0
@@ -198,7 +200,6 @@ def tall_affine_posterior_diag_cov(x, b, A, log_diag_cov):
 
     return z, log_hx, sigma_ATA_chol
 
-
 # @partial(jit, static_argnums=(0, 6))
 def importance_sample_prior(prior_forward, prior_params, prior_state, z, condition, sigma_ATA_chol, n_training_importance_samples, **kwargs):
     # Sample from N(z|\mu(x),\Sigma(x))
@@ -220,17 +221,17 @@ def importance_sample_prior(prior_forward, prior_params, prior_state, z, conditi
 
     # Compute the rest of the flow with the samples of z
     vmapped_forward = vmap(partial(prior_forward, **kwargs), in_axes=(None, None, None, 0, None))
-    log_pxs, zs, updated_prior_states = vmapped_forward(prior_params, prior_state, np.zeros(z_samples.shape[0]), z_samples, condition)
+    log_pxs, zs, updated_prior_states = vmapped_forward(prior_params, prior_state, np.zeros(z.shape[0]), z_samples, condition)
 
     # Compile the results
     log_px = logsumexp(log_pxs, axis=0) - np.log(log_pxs.shape[0])
     z = np.mean(zs, axis=0) # Just average the state
-    updated_prior_states = updated_prior_states # For some reason, this isn't changed with vmap?
+    updated_prior_states = tree_map(lambda x:x[0], updated_prior_states)
     return log_px, z, updated_prior_states
 
 ################################################################################################################
 
-def TallAffineDiagCov(flow, out_dim, n_training_importance_samples=1, A_init=glorot_normal(), b_init=normal(), name='unnamed'):
+def TallAffineDiagCov(flow, out_dim, n_training_importance_samples=32, A_init=glorot_normal(), b_init=normal(), name='unnamed'):
     """ Affine function to go up a dimension
 
         Args:
@@ -276,6 +277,13 @@ def TallAffineDiagCov(flow, out_dim, n_training_importance_samples=1, A_init=glo
         # Compute Az + b
         # Don't need to sample because we already sampled from p(z)!!!!
         x = np.dot(z, A.T) + b
+        key = kwargs.pop('key', None)
+        if(key is not None):
+
+            sigma = kwargs.pop('sigma', 1.0)
+            noise = random.normal(key, x.shape)*sigma
+
+            x += noise*np.exp(0.5*log_diag_cov)
 
         # Compute N(x|Az + b, \Sigma).  This is just the log partition function.
         log_px = - 0.5*np.sum(log_diag_cov) - 0.5*x.shape[-1]*np.log(2*np.pi)

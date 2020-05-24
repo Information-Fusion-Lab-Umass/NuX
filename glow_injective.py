@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 from datasets import *
 from jax.flatten_util import ravel_pytree
 ravel_pytree = jit(ravel_pytree)
-from jax.tree_util import tree_map,tree_leaves,tree_structure,tree_unflatten
+from jax.tree_util import tree_map, tree_leaves, tree_structure, tree_unflatten
 from collections import namedtuple
 from datasets import get_celeb_dataset
 import argparse
@@ -100,6 +100,7 @@ from CIFAR10_512 import CIFAR512
 from CIFAR10_256 import CIFAR256
 
 from STL10_default_model import STL10Default
+# from STL10_512 import STL10512
 from upsample_vs_multiscale import CelebAUpscale
 
 if(model_type == 'CelebA512'):
@@ -120,6 +121,9 @@ elif(model_type == 'CIFAR256'):
 elif(model_type == 'STL10Default'):
     assert dataset == 'STL10', 'Dataset mismatch'
     nf, nif = STL10Default(False, quantize_level_bits), STL10Default(True, quantize_level_bits)
+elif(model_type == 'STL512'):
+    assert dataset == 'STL10', 'Dataset mismatch'
+    nf, nif = STL10512(False, quantize_level_bits), STL10512(True, quantize_level_bits)
 elif(model_type == 'CelebAUpsample'):
     nf, nif = CelebAUpscale(False, quantize_level_bits), CelebAUpscale(True, quantize_level_bits)
 else:
@@ -130,10 +134,12 @@ print('Done Loading Model')
 Model = namedtuple('model', 'names output_shape params state forward inverse')
 
 models = []
-for flow in [nf, nif]:
+for i, flow in enumerate([nf, nif]):
     init_fun, forward, inverse = flow
     key = random.PRNGKey(0)
     names, output_shape, params, state = init_fun(key, x_shape, ())
+    n_params = ravel_pytree(params)[0].shape[0]
+    print('n_params', n_params)
     z_dim = output_shape[-1]
     flow_model = ((names, output_shape, params, state), forward, inverse)
     actnorm_names = [name for name in tree_flatten(names)[0] if 'act_norm' in name]
@@ -148,7 +154,7 @@ for flow in [nf, nif]:
                                                     n_seed_examples=1000,
                                                     batch_size=8,
                                                     notebook=False)
-    n_params = ravel_pytree(params)[0].shape[0]
+
     models.append(Model(names, output_shape, params, state, forward, inverse))
 nf_model, nif_model = models
 print('Done With Data Dependent Init')

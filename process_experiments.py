@@ -18,7 +18,12 @@ import jax.nn.initializers as jaxinit
 import jax.numpy as np
 import glob
 clip_grads = jit(optimizers.clip_grads)
-from experiment_evaluation import save_final_samples, save_reconstructions, save_temperature_comparisons, compute_aggregate_posteriors
+from experiment_evaluation import save_final_samples, \
+                                  save_reconstructions, \
+                                  save_temperature_comparisons, \
+                                  compute_aggregate_posteriors, \
+                                  interpolate_pairs, \
+                                  save_fid_scores
 
 n_gpus = xla_bridge.device_count()
 print('n_gpus:', n_gpus)
@@ -90,6 +95,7 @@ from CIFAR10_256 import CIFAR256
 
 from STL10_default_model import STL10Default
 from upsample_vs_multiscale import CelebAUpscale
+from CelebAImportanceSample import CelebAImportanceSample
 
 if(model_type == 'CelebA512'):
     assert dataset == 'CelebA', 'Dataset mismatch'
@@ -111,6 +117,8 @@ elif(model_type == 'STL10Default'):
     nf, nif = STL10Default(False, quantize_level_bits), STL10Default(True, quantize_level_bits)
 elif(model_type == 'CelebAUpsample'):
     nf, nif = CelebAUpscale(False, quantize_level_bits), CelebAUpscale(True, quantize_level_bits)
+elif(model_type == 'CelebAImportanceSample'):
+    nf, nif = CelebAImportanceSample(False, quantize_level_bits), CelebAImportanceSample(True, quantize_level_bits)
 else:
     assert 0, 'Invalid model type.'
 
@@ -126,6 +134,7 @@ for flow in [nf, nif]:
     names, output_shape, params, state = init_fun(key, x_shape, ())
     z_dim = output_shape[-1]
 
+    # models.append(Model(names, output_shape, params, state, jit(partial(forward, n_importance_samples=1)), jit(partial(inverse, n_importance_samples=1))))
     models.append(Model(names, output_shape, params, state, jit(forward), jit(inverse)))
 nf_model, nif_model = models
 
@@ -160,19 +169,19 @@ for checkpoint_path in pbar:
     # Save some samples
     pbar.set_description('Samples')
     save_final_samples(key, nif_model, quantize_level_bits, n_samples=64, n_samples_per_batch=64, results_folder=checkpoint_path, name='nif_samples.png')
-    save_final_samples(key, nf_model, quantize_level_bits, n_samples=64, n_samples_per_batch=64, results_folder=checkpoint_path, name='nf_samples.png')
+    # save_final_samples(key, nf_model, quantize_level_bits, n_samples=64, n_samples_per_batch=64, results_folder=checkpoint_path, name='nf_samples.png')
 
     # Save higher temperature samples
     k1, k2, k3, k4 = random.split(key, 4)
     pbar.set_description('High Temp Samples')
-    save_final_samples(k1, nif_model, quantize_level_bits, temp=2.0, n_samples=64, n_samples_per_batch=64, results_folder=checkpoint_path, name='nif_samples_temp2p0.png')
-    save_final_samples(k2, nif_model, quantize_level_bits, temp=4.0, n_samples=64, n_samples_per_batch=64, results_folder=checkpoint_path, name='nif_samples_temp4p0.png')
-    save_final_samples(k3, nif_model, quantize_level_bits, temp=6.0, n_samples=64, n_samples_per_batch=64, results_folder=checkpoint_path, name='nif_samples_temp6p0.png')
-    save_final_samples(k4, nif_model, quantize_level_bits, temp=8.0, n_samples=64, n_samples_per_batch=64, results_folder=checkpoint_path, name='nif_samples_temp8p0.png')
+    # save_final_samples(k1, nif_model, quantize_level_bits, temp=2.0, n_samples=64, n_samples_per_batch=64, results_folder=checkpoint_path, name='nif_samples_temp2p0.png')
+    # save_final_samples(k2, nif_model, quantize_level_bits, temp=4.0, n_samples=64, n_samples_per_batch=64, results_folder=checkpoint_path, name='nif_samples_temp4p0.png')
+    # save_final_samples(k3, nif_model, quantize_level_bits, temp=6.0, n_samples=64, n_samples_per_batch=64, results_folder=checkpoint_path, name='nif_samples_temp6p0.png')
+    # save_final_samples(k4, nif_model, quantize_level_bits, temp=8.0, n_samples=64, n_samples_per_batch=64, results_folder=checkpoint_path, name='nif_samples_temp8p0.png')
 
-    # # Save some reconstructions
+    # Save some reconstructions
     pbar.set_description('Reconstructions')
-    save_reconstructions(key, data_loader, nif_model, quantize_level_bits, n_samples=16, n_samples_per_batch=16, results_folder=checkpoint_path, name='nif_reconstructions.png')
+    # save_reconstructions(key, data_loader, nif_model, quantize_level_bits, n_samples=16, n_samples_per_batch=2, results_folder=checkpoint_path, name='nif_reconstructions.png')
     # save_reconstructions(key, data_loader, nf_model, quantize_level_bits, n_samples=16, n_samples_per_batch=16, results_folder=checkpoint_path, name='nf_reconstructions.png')
 
     # Save high temperature comparisons.  4th one looks the best!
@@ -181,11 +190,25 @@ for checkpoint_path in pbar:
     # save_temperature_comparisons(k1, nf_model, nif_model, quantize_level_bits, n_samples=10, n_samples_per_batch=10, results_folder=checkpoint_path, name='temperature_comparisons1.png')
     # save_temperature_comparisons(k2, nf_model, nif_model, quantize_level_bits, n_samples=10, n_samples_per_batch=10, results_folder=checkpoint_path, name='temperature_comparisons2.png')
     # save_temperature_comparisons(k3, nf_model, nif_model, quantize_level_bits, n_samples=10, n_samples_per_batch=10, results_folder=checkpoint_path, name='temperature_comparisons3.png')
-    save_temperature_comparisons(k4, nf_model, nif_model, quantize_level_bits, n_samples=10, n_samples_per_batch=10, results_folder=checkpoint_path, name='temperature_comparisons4.png')
+    # save_temperature_comparisons(k4, nf_model, nif_model, quantize_level_bits, n_samples=10, n_samples_per_batch=10, results_folder=checkpoint_path, name='temperature_comparisons4.png')
 
     # Compute the aggregate posteriors
     pbar.set_description('Aggregate Posterior')
     # compute_aggregate_posteriors(key, data_loader, nf_model, nif_model, quantize_level_bits, n_samples=10000, n_samples_per_batch=32, results_folder=checkpoint_path, name='aggregate_posterior.txt')
 
-    # Reconstruct GLOW samples
-    pbar.set_description('GLOW Reconstruct')
+    # Interpolate images
+    pbar.set_description('Interpolations')
+    # interpolate_pairs(key, data_loader, nif_model, quantize_level_bits, n_pairs=5, n_points=10, results_folder=checkpoint_path, name='interpolation.png')
+
+    # Compute the FID scores
+    # save_fid_scores(nf_model,
+    #                 nif_model,
+    #                 key,
+    #                 quantize_level_bits,
+    #                 temp=1.0,
+    #                 TTUR_path='TTUR/',
+    #                 stats_path='FID/fid_stats_celeba.npz',
+    #                 n_samples=128,
+    #                 n_samples_per_batch=128,
+    #                 results_folder=checkpoint_path,
+    #                 name='fid.txt')
