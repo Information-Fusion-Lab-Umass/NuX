@@ -104,7 +104,7 @@ def save_reconstructions(key, data_loader, model, quantize_level_bits, n_samples
         fz *= (1.0 - 2*0.05)
         fz += 0.05
 
-        for i in range(n_samples_per_batch):
+        for i in range(i):
             axes[0,j*n_samples_per_batch + i].imshow(fz[i])
             axes[1,j*n_samples_per_batch + i].imshow(_x[i]/(2.0**quantize_level_bits))
             axes[0,j*n_samples_per_batch + i].set_axis_off()
@@ -250,6 +250,64 @@ def interpolate_pairs(key, data_loader, nif_model, quantize_level_bits, n_pairs=
     temp_comparison_path = os.path.join(results_folder, 'plots', name)
     plt.savefig(temp_comparison_path, bbox_inches='tight')
     plt.close()
+
+
+def get_embeddings(key, data_loader, model, n_samples_per_batch=4):
+    """
+    Save reconstructions
+    """
+    names, output_shape, params, state, forward, inverse = model
+    inital_key = key
+    embeddings = []
+    labels = []
+    for j in range(n_samples//n_samples_per_batch):
+        key, *keys = random.split(key, 3)
+        _x, _y = data_loader((n_samples_per_batch,), None, j*n_samples_per_batch, True, True)
+        keys = np.array(random.split(key, 64))
+        log_px, finvx, _ = forward(params, state, np.zeros(n_samples_per_batch), _x, (), key=keys[0])
+        embeddings.append(finvx)
+        labels.extend(_y)
+    final_labels = np.array(labels)
+    final_embeddings = np.concatenate(embeddings, axis = 0)
+
+    return final_embeddings, final_labels
+
+def print_reduced_embeddings(key, data_loader, nf_model, nif_model, n_samples_per_batch=4):
+    test_nf_embeddings, y = get_embeddings(key, data_loader, nif_model, n_samples_per_batch=4)
+    test_nif_embeddings, y = get_embeddings(key, data_loader, nf_model, n_samples_per_batch=4)
+    nf_2d_embeddings = umap.UMAP().fit_transform(test_nf_embeddings, y=y)
+    nif_2d_embeddings = umap.UMAP().fit_transform(test_nif_embeddings, y=y)
+    colors = y
+
+    colors = np.nonzero(y_test)[1][:test_nif_2d_embeddings.shape[0]]
+
+    fig, axes = plt.subplots(1, 2, figsize=(40, 20))
+    axes[0].scatter(nif_2d_embeddings[:,0], nif_2d_embeddings[:,1], s=7.0, c=colors, cmap='Spectral', alpha=0.8)
+    scatter = axes[1].scatter(nf_2d_embeddings[:,0], nf_2d_embeddings[:,1], s=7.0, c=colors, cmap='Spectral', alpha=0.8)
+
+    axes[0].set_title('Our Embedding')
+    axes[1].set_title('GLOW Embedding')
+
+    axes[0].xaxis.set_visible(False)
+    axes[0].yaxis.set_visible(False)
+    axes[1].xaxis.set_visible(False)
+    axes[1].yaxis.set_visible(False)
+
+    cbar = fig.colorbar(scatter, boundaries=np.arange(11) - 0.5)
+    cbar.set_ticks(np.arange(10))
+    plt.savefig('subplot.svg')
+    plt.close()
+
+
+
+
+
+
+
+
+
+
+
 
 def compute_fid_score(model,
                       key,

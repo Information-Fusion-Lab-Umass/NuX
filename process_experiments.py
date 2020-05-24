@@ -212,3 +212,28 @@ for checkpoint_path in pbar:
     #                 n_samples_per_batch=128,
     #                 results_folder=checkpoint_path,
     #                 name='fid.txt')
+    pbar.set_description('Calculate KNN Accuracy')
+    print_reduced_embeddings(k1, data_loader, nf_model, nif_model, )
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

@@ -206,7 +206,7 @@ def get_cifar10_data(quantize_level_bits=2, data_folder='data/cifar10/'):
     test_images = test_images//factor
 
     return train_images, train_labels, test_images, test_labels
-
+'''
 def cifar10_data_loader(quantize_level_bits=2, data_folder='data/cifar10/'):
     # language=rst
     """
@@ -217,7 +217,7 @@ def cifar10_data_loader(quantize_level_bits=2, data_folder='data/cifar10/'):
     train_images, train_labels, test_images, test_labels = get_cifar10_data(quantize_level_bits=quantize_level_bits, data_folder=data_folder)
     x_shape = train_images.shape[1:]
 
-    def data_loader(key, n_gpus, batch_size, train=True, label=False):
+    def data_loader(key, n_gpus, batch_size, train=True, label=False, test_batch=None):
         batch_idx = random.randint(key, (n_gpus, batch_size), minval=0, maxval=train_images.shape[0])
         if(train):
             if(label):
@@ -226,9 +226,36 @@ def cifar10_data_loader(quantize_level_bits=2, data_folder='data/cifar10/'):
                 return train_images[batch_idx,...]
         else:
             if(label):
-                return test_images[batch_idx,...], test_labels[batch_idx]
+                return test_images[test_batch,...], test_labels[batch_idx]
             else:
-                return test_images[batch_idx,...]
+                return test_images[test_batch,...]
+'''
+def cifar10_data_loader(quantize_level_bits=2, data_folder='data/cifar10/'):
+    # language=rst
+    """
+    Load the cifar 10 dataset.
+    :param data_folder: Where to download the data to
+    """
+    train_images, train_labels, test_images, test_labels = get_cifar10_data(quantize_level_bits=quantize_level_bits, data_folder=data_folder)
+
+    x_shape = train_images.shape[1:]
+    def data_loader(batch_shape, key=None, start=None, test=False, labels=False):
+        assert (key is None)^(start is None)
+        test_labels = np.nonzero(test_labels)[1]
+        if(key is not None):
+            batch_idx = random.randint(key, batch_shape, minval=0, maxval=train_images.shape[0])
+        else:
+            n_points = batch_shape[0]
+            batch_idx = np.arange(n_points)
+        # Broadcast the batch indices to be correct
+        assert 0, 'Unimplemented'
+        batch_idx = batch_idx
+        data = (train_images[batch_idx], train_labels[batch_idx]) if train else (test_images[batch_idx], test_labels[batch_idx])
+        data = data if labels else data[0]
+        return data
+    return data_loader, x_shape
+
+
 
 ############################################################################################################################################################
 
