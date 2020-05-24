@@ -217,11 +217,18 @@ def cifar10_data_loader(quantize_level_bits=2, data_folder='data/cifar10/'):
     train_images, train_labels, test_images, test_labels = get_cifar10_data(quantize_level_bits=quantize_level_bits, data_folder=data_folder)
     x_shape = train_images.shape[1:]
 
-    def data_loader(key, n_gpus, batch_size):
+    def data_loader(key, n_gpus, batch_size, train=True, label=False):
         batch_idx = random.randint(key, (n_gpus, batch_size), minval=0, maxval=train_images.shape[0])
-        return train_images[batch_idx,...]
-
-    return data_loader, x_shape
+        if(train):
+            if(label):
+                return train_images[batch_idx,...], train_labels[batch_idx]
+            else:
+                return train_images[batch_idx,...]
+        else:
+            if(label):
+                return test_images[batch_idx,...], test_labels[batch_idx]
+            else:
+                return test_images[batch_idx,...]
 
 ############################################################################################################################################################
 
