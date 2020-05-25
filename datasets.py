@@ -230,27 +230,30 @@ def cifar10_data_loader(quantize_level_bits=2, data_folder='data/cifar10/'):
             else:
                 return test_images[test_batch,...]
 '''
-def cifar10_data_loader(quantize_level_bits=2, data_folder='data/cifar10/'):
+def cifar10_data_loader(quantize_level_bits=2, onehot = True, data_folder='data/cifar10/'):
     # language=rst
     """
     Load the cifar 10 dataset.
     :param data_folder: Where to download the data to
     """
     train_images, train_labels, test_images, test_labels = get_cifar10_data(quantize_level_bits=quantize_level_bits, data_folder=data_folder)
-
+    
+    if(not onehot):
+        train_labels = onp.nonzero(train_labels)[1]
+        test_labels = onp.nonzero(test_labels)[1]
     x_shape = train_images.shape[1:]
-    def data_loader(batch_shape, key=None, start=None, test=False, labels=False):
+    def data_loader(batch_shape, key=None, start=None, train=True, labels=False):
         assert (key is None)^(start is None)
-        test_labels = np.nonzero(test_labels)[1]
+
         if(key is not None):
             batch_idx = random.randint(key, batch_shape, minval=0, maxval=train_images.shape[0])
         else:
             n_points = batch_shape[0]
-            batch_idx = np.arange(n_points)
+            batch_idx = start + np.arange(n_points)
         # Broadcast the batch indices to be correct
-        assert 0, 'Unimplemented'
+        #assert 0, 'Unimplemented'
         batch_idx = batch_idx
-        data = (train_images[batch_idx], train_labels[batch_idx]) if train else (test_images[batch_idx], test_labels[batch_idx])
+        data = (train_images[batch_idx,...], np.take(train_labels, batch_idx, axis=0)) if train else (test_images[batch_idx,...], np.take(test_labels, batch_idx, axis=0))
         data = data if labels else data[0]
         return data
     return data_loader, x_shape

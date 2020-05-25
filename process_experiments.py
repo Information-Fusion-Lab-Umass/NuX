@@ -18,12 +18,7 @@ import jax.nn.initializers as jaxinit
 import jax.numpy as np
 import glob
 clip_grads = jit(optimizers.clip_grads)
-from experiment_evaluation import save_final_samples, \
-                                  save_reconstructions, \
-                                  save_temperature_comparisons, \
-                                  compute_aggregate_posteriors, \
-                                  interpolate_pairs, \
-                                  save_fid_scores
+from experiment_evaluation import *
 
 n_gpus = xla_bridge.device_count()
 print('n_gpus:', n_gpus)
@@ -77,7 +72,7 @@ if(dataset == 'CelebA'):
     data_loader, x_shape = celeb_dataset_loader(quantize_level_bits=quantize_level_bits, strides=(2, 2), crop=((26, -19), (12, -13)), data_folder='data/img_align_celeba/')
     assert x_shape == (64, 64, 3)
 elif(dataset == 'CIFAR'):
-    data_loader, x_shape = cifar10_data_loader(quantize_level_bits=quantize_level_bits, data_folder='data/cifar10/')
+    data_loader, x_shape = cifar10_data_loader(quantize_level_bits=quantize_level_bits, data_folder='data/cifar10/', onehot=False)
 elif(dataset == 'STL10'):
     data_loader, x_shape = STL10_dataset_loader(quantize_level_bits=quantize_level_bits, data_folder='data/STL10/')
 else:
@@ -168,7 +163,7 @@ for checkpoint_path in pbar:
 
     # Save some samples
     pbar.set_description('Samples')
-    save_final_samples(key, nif_model, quantize_level_bits, n_samples=64, n_samples_per_batch=64, results_folder=checkpoint_path, name='nif_samples.png')
+    #save_final_samples(key, nif_model, quantize_level_bits, n_samples=64, n_samples_per_batch=64, results_folder=checkpoint_path, name='nif_samples.png')
     # save_final_samples(key, nf_model, quantize_level_bits, n_samples=64, n_samples_per_batch=64, results_folder=checkpoint_path, name='nf_samples.png')
 
     # Save higher temperature samples
@@ -213,7 +208,8 @@ for checkpoint_path in pbar:
     #                 results_folder=checkpoint_path,
     #                 name='fid.txt')
     pbar.set_description('Calculate KNN Accuracy')
-    print_reduced_embeddings(k1, data_loader, nf_model, nif_model, )
+    #save_embeddings(k1, data_loader, nf_model, nif_model, checkpoint_path, False)
+    print_reduced_embeddings(k1, data_loader, nf_model, nif_model, checkpoint_path, False)
 
 
 

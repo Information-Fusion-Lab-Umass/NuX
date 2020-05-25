@@ -16,9 +16,14 @@ from jax.lib import xla_bridge
 import pickle
 import jax.nn.initializers as jaxinit
 import jax.numpy as np
+import numpy as onp
 import glob
 import tensorflow
 import subprocess
+import umap
+
+
+print('good version')
 clip_grads = jit(optimizers.clip_grads)
 
 def save_final_samples(key, model, quantize_level_bits, temp=1.0, n_samples=64, n_samples_per_batch=4, results_folder='results', name='samples.png'):
@@ -252,7 +257,7 @@ def interpolate_pairs(key, data_loader, nif_model, quantize_level_bits, n_pairs=
     plt.close()
 
 
-def get_embeddings(key, data_loader, model, n_samples_per_batch=4):
+def get_embeddings_test(key, data_loader, model, n_samples_per_batch=4):
     """
     Save reconstructions
     """
@@ -260,48 +265,101 @@ def get_embeddings(key, data_loader, model, n_samples_per_batch=4):
     inital_key = key
     embeddings = []
     labels = []
-    for j in range(n_samples//n_samples_per_batch):
+    for j in range(10000//n_samples_per_batch):
+        key, *keys = random.split(key, 3)
+        _x, _y = data_loader((n_samples_per_batch,), None, j*n_samples_per_batch, False, True)
+        keys = np.array(random.split(key, 64))
+        log_px, finvx, _ = forward(params, state, np.zeros(n_samples_per_batch), _x, (), key=keys[0])
+        embeddings.append(finvx)
+        labels.extend(_y)
+        if(j % 100 == 1):
+            print(j)
+    final_labels = np.array(labels)
+    final_embeddings = np.concatenate(embeddings, axis = 0)
+    return final_embeddings, final_labels
+def get_embeddings_training(key, data_loader, model, n_samples_per_batch=4):
+    """
+    Save reconstructions
+    """
+    names, output_shape, params, state, forward, inverse = model
+    inital_key = key
+    embeddings = []
+    labels = []
+    for j in range(50000//n_samples_per_batch):
         key, *keys = random.split(key, 3)
         _x, _y = data_loader((n_samples_per_batch,), None, j*n_samples_per_batch, True, True)
         keys = np.array(random.split(key, 64))
         log_px, finvx, _ = forward(params, state, np.zeros(n_samples_per_batch), _x, (), key=keys[0])
         embeddings.append(finvx)
         labels.extend(_y)
+        if(j % 100 == 1):
+            print(j)
     final_labels = np.array(labels)
     final_embeddings = np.concatenate(embeddings, axis = 0)
-
     return final_embeddings, final_labels
 
-def print_reduced_embeddings(key, data_loader, nf_model, nif_model, n_samples_per_batch=4):
-    test_nf_embeddings, y = get_embeddings(key, data_loader, nif_model, n_samples_per_batch=4)
-    test_nif_embeddings, y = get_embeddings(key, data_loader, nf_model, n_samples_per_batch=4)
-    nf_2d_embeddings = umap.UMAP().fit_transform(test_nf_embeddings, y=y)
-    nif_2d_embeddings = umap.UMAP().fit_transform(test_nif_embeddings, y=y)
+def save_embeddings(key, data_loader, nf_model, nif_model, path, test = True, n_samples_per_batch=4):
+    if(test):
+        test_nf_embeddings, y = get_embeddings_test(key, data_loader, nf_model, n_samples_per_batch=4)
+        test_nif_embeddings, y = get_embeddings_test(key, data_loader, nif_model, n_samples_per_batch=4)
+        test_nf_embeddings, test_nif_embeddings, y = onp.array(test_nf_embeddings), onp.array(test_nif_embeddings), onp.array(y)
+        onp.save(os.path.join(path, 'test_nif_embeddings'), test_nif_embeddings)
+        onp.save(os.path.join(path, 'test_nf_embeddings'), test_nf_embeddings)
+        onp.save(os.path.join(path, 'test_y'), y)
+    else:
+        training_nf_embeddings, y = get_embeddings_training(key, data_loader, nf_model, n_samples_per_batch=4)
+        training_nif_embeddings, y = get_embeddings_training(key, data_loader, nif_model, n_samples_per_batch=4)
+        training_nf_embeddings, training_nif_embeddings, training_y = onp.array(training_nf_embeddings), onp.array(training_nif_embeddings), onp.array(y)
+        onp.save(os.path.join(path, 'training_nif_embeddings'), training_nif_embeddings)
+        onp.save(os.path.join(path, 'training_nf_embeddings'), training_nf_embeddings)
+        onp.save(os.path.join(path, 'training_y'), training_y)
+
+def print_reduced_embeddings(key, data_loader, nf_model, nif_model, path, test=True, n_samples_per_batch=4):
+    if(test):
+        test_nif_embeddings = onp.array(onp.load(os.path.join(path, 'test_nif_embeddings.npy')))
+        test_nf_embeddings = onp.array(onp.load(os.path.join(path, 'test_nf_embeddings.npy')))
+        y = onp.array(onp.load(os.path.join(path, 'test_y.npy')))
+    else:
+        test_nif_embeddings = onp.array(onp.load(os.path.join(path, 'training_nif_embeddings.npy')))
+        test_nf_embeddings = onp.array(onp.load(os.path.join(path, 'training_nf_embeddings.npy')))
+        y = onp.array(onp.load(os.path.join(path, 'training_y.npy')))
+    print(test_nif_embeddings == test_nf_embeddings)
+    print(y.shape)
+    nf_2d_embeddings = umap.UMAP(random_state=0).fit_transform(test_nf_embeddings, y=y)
+    nif_2d_embeddings = umap.UMAP(random_state=0).fit_transform(test_nif_embeddings, y=y)
     colors = y
 
-    colors = np.nonzero(y_test)[1][:test_nif_2d_embeddings.shape[0]]
+    def outlier_mask(data, m=2):
+        return np.all(np.abs(data - np.mean(data)) < m * np.std(data), axis=1)
 
-    fig, axes = plt.subplots(1, 2, figsize=(40, 20))
-    axes[0].scatter(nif_2d_embeddings[:,0], nif_2d_embeddings[:,1], s=7.0, c=colors, cmap='Spectral', alpha=0.8)
-    scatter = axes[1].scatter(nf_2d_embeddings[:,0], nf_2d_embeddings[:,1], s=7.0, c=colors, cmap='Spectral', alpha=0.8)
+    #colorsnf = colors[outlier_mask(nf_2d_embeddings)]
+    #colorsnif = colors[outlier_mask(nif_2d_embeddings)]
+    #nf_2d_embeddings = nf_2d_embeddings[outlier_mask(nf_2d_embeddings)]
+    #nif_2d_embeddings = nif_2d_embeddings[outlier_mask(nif_2d_embeddings)]
 
-    axes[0].set_title('Our Embedding')
-    axes[1].set_title('GLOW Embedding')
+    fig, axes = plt.subplots(1, 2, figsize=(10, 5))
+    axes[0].scatter(nif_2d_embeddings[:,0], nif_2d_embeddings[:,1], s=3.0, c=y, cmap='Spectral', alpha=0.6)
+    scatter = axes[1].scatter(nf_2d_embeddings[:,0], nf_2d_embeddings[:,1], s=3.0, c=y, cmap='Spectral', alpha=0.6)
 
-    axes[0].xaxis.set_visible(False)
-    axes[0].yaxis.set_visible(False)
-    axes[1].xaxis.set_visible(False)
-    axes[1].yaxis.set_visible(False)
+    axes[0].set_title('Our Method', fontdict={'fontsize': 18})
+    axes[1].set_title('GLOW', fontdict={'fontsize': 18})
+
+    #axes[0].xaxis.set_visible(False)
+    #axes[0].yaxis.set_visible(False)
+    #axes[1].xaxis.set_visible(False)
+    #axes[1].yaxis.set_visible(False)
+    #axes[0].set_xlim(1, 11)
+    #axes[0].set_ylim(-4, 5)
+
+    #axes[1].set_xlim(-5, 2)
+    #axes[1].set_ylim(-5, 2)
 
     cbar = fig.colorbar(scatter, boundaries=np.arange(11) - 0.5)
     cbar.set_ticks(np.arange(10))
-    plt.savefig('subplot.svg')
+    cbar.ax.set_yticklabels(['Airplane', 'Automobile', 'Bird', 'Cat', 'Deer', 'Dog', 'Frog', 'Horse', 'Ship', 'Truck'])
+    cbar.ax.tick_params(labelsize=12)
+    plt.savefig('subplot.png')
     plt.close()
-
-
-
-
-
 
 
 
