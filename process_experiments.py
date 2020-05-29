@@ -92,6 +92,9 @@ from STL10_default_model import STL10Default
 from upsample_vs_multiscale import CelebAUpscale
 from CelebAImportanceSample import CelebAImportanceSample
 
+from CelebAImportanceSample128 import CelebAIS128
+from CelebAImportanceSample256 import CelebAIS256
+
 if(model_type == 'CelebA512'):
     assert dataset == 'CelebA', 'Dataset mismatch'
     nf, nif = CelebA512(False, quantize_level_bits), CelebA512(True, quantize_level_bits)
@@ -101,6 +104,12 @@ elif(model_type == 'CelebA256'):
 elif(model_type == 'CelebA128'):
     assert dataset == 'CelebA', 'Dataset mismatch'
     nf, nif = CelebA128(False, quantize_level_bits), CelebA128(True, quantize_level_bits)
+elif(model_type == 'CelebAIS256'):
+    assert dataset == 'CelebA', 'Dataset mismatch'
+    nf, nif = CelebAIS256(False, quantize_level_bits), CelebAIS256(True, quantize_level_bits)
+elif(model_type == 'CelebAIS128'):
+    assert dataset == 'CelebA', 'Dataset mismatch'
+    nf, nif = CelebAIS128(False, quantize_level_bits), CelebAIS128(True, quantize_level_bits)
 elif(model_type == 'CIFAR512'):
     assert dataset == 'CIFAR', 'Dataset mismatch'
     nf, nif = CIFAR512(False, quantize_level_bits), CIFAR512(True, quantize_level_bits)
@@ -163,37 +172,37 @@ for checkpoint_path in pbar:
 
     # Save some samples
     pbar.set_description('Samples')
-    #save_final_samples(key, nif_model, quantize_level_bits, n_samples=64, n_samples_per_batch=64, results_folder=checkpoint_path, name='nif_samples.png')
-    # save_final_samples(key, nf_model, quantize_level_bits, n_samples=64, n_samples_per_batch=64, results_folder=checkpoint_path, name='nf_samples.png')
+    save_final_samples(key, nif_model, quantize_level_bits, n_samples=64, n_samples_per_batch=64, results_folder=checkpoint_path, name='nif_samples.png')
+    save_final_samples(key, nf_model, quantize_level_bits, n_samples=64, n_samples_per_batch=64, results_folder=checkpoint_path, name='nf_samples.png')
 
     # Save higher temperature samples
     k1, k2, k3, k4 = random.split(key, 4)
     pbar.set_description('High Temp Samples')
-    # save_final_samples(k1, nif_model, quantize_level_bits, temp=2.0, n_samples=64, n_samples_per_batch=64, results_folder=checkpoint_path, name='nif_samples_temp2p0.png')
-    # save_final_samples(k2, nif_model, quantize_level_bits, temp=4.0, n_samples=64, n_samples_per_batch=64, results_folder=checkpoint_path, name='nif_samples_temp4p0.png')
-    # save_final_samples(k3, nif_model, quantize_level_bits, temp=6.0, n_samples=64, n_samples_per_batch=64, results_folder=checkpoint_path, name='nif_samples_temp6p0.png')
-    # save_final_samples(k4, nif_model, quantize_level_bits, temp=8.0, n_samples=64, n_samples_per_batch=64, results_folder=checkpoint_path, name='nif_samples_temp8p0.png')
+    save_final_samples(k1, nif_model, quantize_level_bits, temp=2.0, n_samples=64, n_samples_per_batch=64, results_folder=checkpoint_path, name='nif_samples_temp2p0.png')
+    save_final_samples(k2, nif_model, quantize_level_bits, temp=4.0, n_samples=64, n_samples_per_batch=64, results_folder=checkpoint_path, name='nif_samples_temp4p0.png')
+    save_final_samples(k3, nif_model, quantize_level_bits, temp=6.0, n_samples=64, n_samples_per_batch=64, results_folder=checkpoint_path, name='nif_samples_temp6p0.png')
+    save_final_samples(k4, nif_model, quantize_level_bits, temp=8.0, n_samples=64, n_samples_per_batch=64, results_folder=checkpoint_path, name='nif_samples_temp8p0.png')
 
     # Save some reconstructions
     pbar.set_description('Reconstructions')
-    # save_reconstructions(key, data_loader, nif_model, quantize_level_bits, n_samples=16, n_samples_per_batch=2, results_folder=checkpoint_path, name='nif_reconstructions.png')
-    # save_reconstructions(key, data_loader, nf_model, quantize_level_bits, n_samples=16, n_samples_per_batch=16, results_folder=checkpoint_path, name='nf_reconstructions.png')
+    save_reconstructions(key, data_loader, nif_model, quantize_level_bits, n_samples=16, n_samples_per_batch=2, results_folder=checkpoint_path, name='nif_reconstructions.png')
+    save_reconstructions(key, data_loader, nf_model, quantize_level_bits, n_samples=16, n_samples_per_batch=16, results_folder=checkpoint_path, name='nf_reconstructions.png')
 
     # Save high temperature comparisons.  4th one looks the best!
     pbar.set_description('Temperature Comparison')
     k1, k2, k3, k4 = random.split(key, 4)
-    # save_temperature_comparisons(k1, nf_model, nif_model, quantize_level_bits, n_samples=10, n_samples_per_batch=10, results_folder=checkpoint_path, name='temperature_comparisons1.png')
-    # save_temperature_comparisons(k2, nf_model, nif_model, quantize_level_bits, n_samples=10, n_samples_per_batch=10, results_folder=checkpoint_path, name='temperature_comparisons2.png')
-    # save_temperature_comparisons(k3, nf_model, nif_model, quantize_level_bits, n_samples=10, n_samples_per_batch=10, results_folder=checkpoint_path, name='temperature_comparisons3.png')
-    # save_temperature_comparisons(k4, nf_model, nif_model, quantize_level_bits, n_samples=10, n_samples_per_batch=10, results_folder=checkpoint_path, name='temperature_comparisons4.png')
+    save_temperature_comparisons(k1, nf_model, nif_model, quantize_level_bits, n_samples=10, n_samples_per_batch=10, results_folder=checkpoint_path, name='temperature_comparisons1.png')
+    save_temperature_comparisons(k2, nf_model, nif_model, quantize_level_bits, n_samples=10, n_samples_per_batch=10, results_folder=checkpoint_path, name='temperature_comparisons2.png')
+    save_temperature_comparisons(k3, nf_model, nif_model, quantize_level_bits, n_samples=10, n_samples_per_batch=10, results_folder=checkpoint_path, name='temperature_comparisons3.png')
+    save_temperature_comparisons(k4, nf_model, nif_model, quantize_level_bits, n_samples=10, n_samples_per_batch=10, results_folder=checkpoint_path, name='temperature_comparisons4.png')
 
     # Compute the aggregate posteriors
     pbar.set_description('Aggregate Posterior')
-    # compute_aggregate_posteriors(key, data_loader, nf_model, nif_model, quantize_level_bits, n_samples=10000, n_samples_per_batch=32, results_folder=checkpoint_path, name='aggregate_posterior.txt')
+    compute_aggregate_posteriors(key, data_loader, nf_model, nif_model, quantize_level_bits, n_samples=10000, n_samples_per_batch=32, results_folder=checkpoint_path, name='aggregate_posterior.txt')
 
     # Interpolate images
     pbar.set_description('Interpolations')
-    # interpolate_pairs(key, data_loader, nif_model, quantize_level_bits, n_pairs=5, n_points=10, results_folder=checkpoint_path, name='interpolation.png')
+    interpolate_pairs(key, data_loader, nif_model, quantize_level_bits, n_pairs=5, n_points=10, results_folder=checkpoint_path, name='interpolation.png')
 
     # Compute the FID scores
     # save_fid_scores(nf_model,
@@ -209,7 +218,7 @@ for checkpoint_path in pbar:
     #                 name='fid.txt')
     pbar.set_description('Calculate KNN Accuracy')
     #save_embeddings(k1, data_loader, nf_model, nif_model, checkpoint_path, False)
-    print_reduced_embeddings(k1, data_loader, nf_model, nif_model, checkpoint_path, True)
+    #print_reduced_embeddings(k1, data_loader, nf_model, nif_model, checkpoint_path, True)
     #svm_reduced_embeddings(k1, data_loader, nf_model, nif_model, checkpoint_path)
 
 

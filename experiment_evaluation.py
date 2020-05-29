@@ -106,17 +106,17 @@ def save_reconstructions(key, data_loader, model, quantize_level_bits, n_samples
         key, *keys = random.split(key, 3)
         _x = data_loader(keys[0], 1, n_samples_per_batch)[0]
 
-        keys = np.array(random.split(key, 64))
-        fzs = jit(vmap(partial(reconstruct, _x)))(keys)
-        fz = np.mean(fzs, axis=0)
+        #keys = np.array(random.split(key, 64))
+        #fzs = jit(vmap(partial(reconstruct, _x)))(keys)
+        #fz = np.mean(fzs, axis=0)
 
-        # log_px, finvx, _ = forward(params, state, np.zeros(n_samples_per_batch), _x, (), key=keys[0])
-        # _, fz, _ = inverse(params, state, np.zeros(n_samples_per_batch), finvx, (), key=keys[1])
+        log_px, finvx, _ = forward(params, state, np.zeros(n_samples_per_batch), _x, (), key=keys[0])
+        _, fz, _ = inverse(params, state, np.zeros(n_samples_per_batch), finvx, (), key=keys[1])
         fz /= (2.0**quantize_level_bits)
         fz *= (1.0 - 2*0.05)
         fz += 0.05
 
-        for i in range(i):
+        for i in range(n_samples_per_batch):
             axes[0,j*n_samples_per_batch + i].imshow(fz[i])
             axes[1,j*n_samples_per_batch + i].imshow(_x[i]/(2.0**quantize_level_bits))
             axes[0,j*n_samples_per_batch + i].set_axis_off()
