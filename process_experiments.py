@@ -209,7 +209,8 @@ for checkpoint_path in pbar:
     #                 name='fid.txt')
     pbar.set_description('Calculate KNN Accuracy')
     #save_embeddings(k1, data_loader, nf_model, nif_model, checkpoint_path, False)
-    print_reduced_embeddings(k1, data_loader, nf_model, nif_model, checkpoint_path, False)
+    print_reduced_embeddings(k1, data_loader, nf_model, nif_model, checkpoint_path, True)
+    #svm_reduced_embeddings(k1, data_loader, nf_model, nif_model, checkpoint_path)
 
 
 

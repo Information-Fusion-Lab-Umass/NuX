@@ -99,6 +99,10 @@ from CelebA_128 import CelebA128
 from CIFAR10_512 import CIFAR512
 from CIFAR10_256 import CIFAR256
 
+from CelebAImportanceSample128 import CelebAIS128
+from CelebAImportanceSample256 import CelebAIS256
+
+
 from STL10_default_model import STL10Default
 # from STL10_512 import STL10512
 from upsample_vs_multiscale import CelebAUpscale
@@ -112,6 +116,12 @@ elif(model_type == 'CelebA256'):
 elif(model_type == 'CelebA128'):
     assert dataset == 'CelebA', 'Dataset mismatch'
     nf, nif = CelebA128(False, quantize_level_bits), CelebA128(True, quantize_level_bits)
+elif(model_type == 'CelebAIS128'):
+    assert dataset == 'CelebA', 'Dataset mismatch'
+    nf, nif = CelebAIS128(False, quantize_level_bits), CelebAIS128(True, quantize_level_bits)
+elif(model_type == 'CelebAIS256'):
+    assert dataset == 'CelebA', 'Dataset mismatch'
+    nf, nif = CelebAIS256(False, quantize_level_bits), CelebAIS256(True, quantize_level_bits)
 elif(model_type == 'CIFAR512'):
     assert dataset == 'CIFAR', 'Dataset mismatch'
     nf, nif = CIFAR512(False, quantize_level_bits), CIFAR512(True, quantize_level_bits)

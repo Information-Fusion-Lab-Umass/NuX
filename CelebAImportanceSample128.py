@@ -26,9 +26,9 @@ def GLOW(name_iter, norm_type='instance', conditioned_actnorm=False):
     layers = [GLOWBlock(GLOWNet, masked=False, name=next(name_iter), additive_coupling=False)]*16
     return sequential_flow(Debug(''), *layers)
 
-def CelebAImportanceSample(injective=True, quantize_level_bits=3):
+def CelebAIS128(injective=True, quantize_level_bits=3):
     if(injective):
-        z_dim = 512
+        z_dim = 128
     else:
         z_dim = None
 
@@ -50,10 +50,6 @@ def CelebAImportanceSample(injective=True, quantize_level_bits=3):
     flow = multi_scale(flow)
     flow = multi_scale(flow)
     if(z_dim is not None):
-        # prior_layers = [AffineCoupling(FlatTransform), ActNorm(name=next(an_names)), Reverse()]*10
-        # prior_flow = sequential_flow(*prior_layers, UnitGaussianPrior())
-        # # prior_flow = sequential_flow(*prior_layers, AffineGaussianPriorDiagCov(z_dim))
-        # prior_flow = TallAffineDiagCov(prior_flow, z_dim)
         prior_flow = AffineGaussianPriorDiagCov(z_dim)
     else:
         prior_flow = UnitGaussianPrior()
@@ -63,5 +59,3 @@ def CelebAImportanceSample(injective=True, quantize_level_bits=3):
                            Flatten(),
                            prior_flow)
     return flow
-
-# python glow_injective.py --name=CelebA128 --batchsize=8 --dataset=CelebA --numimage=-1 --quantize=3 --model=CelebADefault --startingit=0 --printevery=500

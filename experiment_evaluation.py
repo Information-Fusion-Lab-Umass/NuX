@@ -21,7 +21,14 @@ import glob
 import tensorflow
 import subprocess
 import umap
-
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.ensemble import RandomForestClassifier,GradientBoostingClassifier
+from sklearn.model_selection import LeaveOneOut
+from sklearn.metrics import accuracy_score
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
+from sklearn.svm import SVC
+import xgboost as xgb
 
 print('good version')
 clip_grads = jit(optimizers.clip_grads)
@@ -341,25 +348,91 @@ def print_reduced_embeddings(key, data_loader, nf_model, nif_model, path, test=T
     axes[0].scatter(nif_2d_embeddings[:,0], nif_2d_embeddings[:,1], s=3.0, c=y, cmap='Spectral', alpha=0.6)
     scatter = axes[1].scatter(nf_2d_embeddings[:,0], nf_2d_embeddings[:,1], s=3.0, c=y, cmap='Spectral', alpha=0.6)
 
-    axes[0].set_title('Our Method', fontdict={'fontsize': 18})
-    axes[1].set_title('GLOW', fontdict={'fontsize': 18})
+    #axes[0].set_title('Our Method', fontdict={'fontsize': 18})
+    #axes[1].set_title('GLOW', fontdict={'fontsize': 18})
 
-    #axes[0].xaxis.set_visible(False)
-    #axes[0].yaxis.set_visible(False)
-    #axes[1].xaxis.set_visible(False)
-    #axes[1].yaxis.set_visible(False)
-    #axes[0].set_xlim(1, 11)
-    #axes[0].set_ylim(-4, 5)
+    axes[0].xaxis.set_visible(False)
+    axes[0].yaxis.set_visible(False)
+    axes[1].xaxis.set_visible(False)
+    axes[1].yaxis.set_visible(False)
+    axes[0].set_xlim(1, 11)
+    axes[0].set_ylim(-4, 5)
 
-    #axes[1].set_xlim(-5, 2)
-    #axes[1].set_ylim(-5, 2)
+    axes[1].set_xlim(-5, 1.5)
+    axes[1].set_ylim(-5, 2)
 
     cbar = fig.colorbar(scatter, boundaries=np.arange(11) - 0.5)
     cbar.set_ticks(np.arange(10))
     cbar.ax.set_yticklabels(['Airplane', 'Automobile', 'Bird', 'Cat', 'Deer', 'Dog', 'Frog', 'Horse', 'Ship', 'Truck'])
     cbar.ax.tick_params(labelsize=12)
-    plt.savefig('subplot.png')
+    plt.savefig('subplot.pdf', format='pdf')
     plt.close()
+
+def knn_reduced_embeddings(key, data_loader, nf_model, nif_model, path, test=True, k = 1, n_samples_per_batch=4):
+    if(test):
+        nif_embeddings = onp.array(onp.load(os.path.join(path, 'test_nif_embeddings.npy')))
+        nf_embeddings = onp.array(onp.load(os.path.join(path, 'test_nf_embeddings.npy')))
+        y = onp.array(onp.load(os.path.join(path, 'test_y.npy')))
+    else:
+        nif_embeddings = onp.array(onp.load(os.path.join(path, 'training_nif_embeddings.npy')))
+        nf_embeddings = onp.array(onp.load(os.path.join(path, 'training_nf_embeddings.npy')))
+        y = onp.array(onp.load(os.path.join(path, 'training_y.npy')))
+
+    nif_accuracy = []
+    nf_accuracy = []
+
+    loo = LeaveOneOut()
+    loo.get_n_splits(nif_embeddings)
+    for train_index, test_index in loo.split(nif_embeddings):
+        nf_train, nf_test = nf_embeddings[train_index], nf_embeddings[test_index]
+        nif_train, nif_test = nif_embeddings[train_index], nif_embeddings[test_index]
+        y_train, y_test = y[train_index], y[test_index]
+
+        nif_classifier = KNeighborsClassifier(n_neighbors=1)
+        nf_classifier = KNeighborsClassifier(n_neighbors=1)
+
+        nif_classifier.fit(nif_train, y_train)
+        nf_classifier.fit(nf_train, y_train)
+
+        for i in range(y_test.shape[0]):
+            print(onp.array(y_test[i]))
+            print(nif_classifier.predict(nif_test[i].reshape(1, -1)))
+            nif_accuracy.append(y_test[i] == nif_classifier.predict(nif_test[i].reshape(1, -1)).item())
+            nf_accuracy.append(y_test[i] == nf_classifier.predict(nf_test[i].reshape(1, -1)).item())
+        print(onp.mean(nif_accuracy))
+        print(onp.mean(nf_accuracy))
+
+
+    print(onp.mean(nif_accuracy))
+    print(onp.mean(nf_accuracy))
+
+def svm_reduced_embeddings(key, data_loader, nf_model, nif_model, path, test=True, n_samples_per_batch=4):
+    
+    test_nif_embeddings = onp.array(onp.load(os.path.join(path, 'test_nif_embeddings.npy')))
+    test_nf_embeddings = onp.array(onp.load(os.path.join(path, 'test_nf_embeddings.npy')))
+    test_y = onp.array(onp.load(os.path.join(path, 'test_y.npy')))
+    print(test_y.shape)
+    train_nif_embeddings = onp.array(onp.load(os.path.join(path, 'training_nif_embeddings.npy')))
+    train_nf_embeddings = onp.array(onp.load(os.path.join(path, 'training_nf_embeddings.npy')))
+    train_y = onp.array(onp.load(os.path.join(path, 'training_y.npy')))
+
+
+    #clf_nif = GradientBoostingClassifier()
+    #clf_nf = GradientBoostingClassifier()
+    clf_nif = xgb.XGBClassifier(learning_rate=0.1,n_estimators=100,max_depth=4)
+    clf_nf = xgb.XGBClassifier(learning_rate=0.1,n_estimators=100,max_depth=4)
+    clf_nif.fit(train_nif_embeddings, train_y)
+    clf_nf.fit(train_nf_embeddings, train_y)
+
+    print(accuracy_score(test_y, clf_nf.predict(test_nf_embeddings)))
+    print(accuracy_score(test_y, clf_nif.predict(test_nif_embeddings)))
+
+
+
+
+
+
+
 
 
 

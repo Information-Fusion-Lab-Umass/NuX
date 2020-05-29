@@ -258,6 +258,37 @@ def cifar10_data_loader(quantize_level_bits=2, onehot = True, data_folder='data/
         return data
     return data_loader, x_shape
 
+def cifar10_reduced_data_loader(train=True, path='Experiments/CIFAR512/100000'):
+    # language=rst
+    """
+    Load the cifar 10 dataset.
+    :param data_folder: Where to download the data to
+    """
+    test_nif_embeddings = onp.load(os.path.join(path, 'test_nif_embeddings.npy'))
+    test_nf_embeddings = onp.load(os.path.join(path, 'test_nf_embeddings.npy'))
+    test_y = onp.load(os.path.join(path, 'test_y.npy'))
+    training_nif_embeddings = onp.load(os.path.join(path, 'training_nif_embeddings.npy'))
+    training_nf_embeddings = onp.load(os.path.join(path, 'training_nf_embeddings.npy'))
+    training_y = onp.load(os.path.join(path, 'training_y.npy'))
+
+    def data_loader(batch_shape, key=None, start=None, train=True, labels=False):
+        assert (key is None)^(start is None)
+
+        if(key is not None):
+            batch_idx = random.randint(key, batch_shape, minval=0, maxval = 50000)
+        else:
+            n_points = batch_shape[0]
+            batch_idx = start + np.arange(n_points)
+        # Broadcast the batch indices to be correct
+        #assert 0, 'Unimplemented'
+        if(train):
+            data = (training_nif_embeddings[batch_idx,...],  training_nf_embeddings[batch_idx,...], np.take(training_y, batch_idx, axis=0))
+        else:
+            data = (test_nif_embeddings[batch_idx,...],test_nf_embeddings[batch_idx,...] , np.take(test_y, batch_idx, axis=0))
+        data = data if labels else data[0]
+        return data
+    return data_loader
+
 
 
 ############################################################################################################################################################
