@@ -18,17 +18,7 @@ import jax.nn.initializers as jaxinit
 import jax.numpy as np
 import glob
 clip_grads = jit(optimizers.clip_grads)
-from experiment_evaluation import save_final_samples, \
-                                  save_reconstructions, \
-                                  save_temperature_comparisons, \
-                                  compute_aggregate_posteriors, \
-                                  interpolate_pairs, \
-                                  log_likelihood_estimation, \
-                                  save_increasing_temp, \
-                                  posterior_variance, \
-                                  compare_sample_over_t, \
-                                  compare_sample_over_s, \
-                                  save_sample_comparisons
+from experiment_evaluation import *
 
 n_gpus = xla_bridge.device_count()
 print('n_gpus:', n_gpus)
@@ -82,7 +72,7 @@ if(dataset == 'CelebA'):
     data_loader, x_shape = celeb_dataset_loader(quantize_level_bits=quantize_level_bits, strides=(2, 2), crop=((26, -19), (12, -13)), data_folder='data/img_align_celeba/')
     assert x_shape == (64, 64, 3)
 elif(dataset == 'CIFAR'):
-    data_loader, x_shape = cifar10_data_loader(quantize_level_bits=quantize_level_bits, data_folder='data/cifar10/')
+    data_loader, x_shape = cifar10_data_loader(quantize_level_bits=quantize_level_bits, data_folder='data/cifar10/', onehot=False)
 elif(dataset == 'STL10'):
     data_loader, x_shape = STL10_dataset_loader(quantize_level_bits=quantize_level_bits, data_folder='data/STL10/')
 else:
@@ -102,6 +92,9 @@ from STL10_default_model import STL10Default
 from upsample_vs_multiscale import CelebAUpscale
 from CelebAImportanceSample import CelebAImportanceSample
 
+from CelebAImportanceSample128 import CelebAIS128
+from CelebAImportanceSample256 import CelebAIS256
+
 if(model_type == 'CelebA512'):
     assert dataset == 'CelebA', 'Dataset mismatch'
     nf, nif = CelebA512(False, quantize_level_bits), CelebA512(True, quantize_level_bits)
@@ -111,6 +104,12 @@ elif(model_type == 'CelebA256'):
 elif(model_type == 'CelebA128'):
     assert dataset == 'CelebA', 'Dataset mismatch'
     nf, nif = CelebA128(False, quantize_level_bits), CelebA128(True, quantize_level_bits)
+elif(model_type == 'CelebAIS256'):
+    assert dataset == 'CelebA', 'Dataset mismatch'
+    nf, nif = CelebAIS256(False, quantize_level_bits), CelebAIS256(True, quantize_level_bits)
+elif(model_type == 'CelebAIS128'):
+    assert dataset == 'CelebA', 'Dataset mismatch'
+    nf, nif = CelebAIS128(False, quantize_level_bits), CelebAIS128(True, quantize_level_bits)
 elif(model_type == 'CIFAR512'):
     assert dataset == 'CIFAR', 'Dataset mismatch'
     nf, nif = CIFAR512(False, quantize_level_bits), CIFAR512(True, quantize_level_bits)
@@ -176,21 +175,6 @@ for checkpoint_path in pbar:
     # pbar.set_description('Aggregate Posterior')
     # compute_aggregate_posteriors(key, data_loader, nf_model, nif_model, quantize_level_bits, n_samples=10000, n_samples_per_batch=32, results_folder=checkpoint_path, name='aggregate_posterior.txt')
 
-    # Compute the FID scores
-    # save_fid_scores(nf_model,
-    #                 nif_model,
-    #                 key,
-    #                 quantize_level_bits,
-    #                 temp=1.0,
-    #                 TTUR_path='TTUR/',
-    #                 stats_path='FID/fid_stats_celeba.npz',
-    #                 n_samples=128,
-    #                 n_samples_per_batch=128,
-    #                 results_folder=checkpoint_path,
-    #                 name='fid.txt')
-
-
-# 6, 9, 13, 14, 16, 17, 23, 29,
 
     # # See how many importance samples are needed to accurately compute the log likelihood
     # pbar.set_description('Log Likelihood')
@@ -328,3 +312,15 @@ for checkpoint_path in pbar:
     # # Compare the samples from the model
     # sample_comparison_key = random.PRNGKey(2)
     # save_sample_comparisons(sample_comparison_key, nf_model, nif_model, quantize_level_bits, results_folder=checkpoint_path, name='nif_vs_nf_samples.pdf')
+    pbar.set_description('Calculate KNN Accuracy')
+    #save_embeddings(k1, data_loader, nf_model, nif_model, checkpoint_path, False)
+    #print_reduced_embeddings(k1, data_loader, nf_model, nif_model, checkpoint_path, True)
+    #svm_reduced_embeddings(k1, data_loader, nf_model, nif_model, checkpoint_path)
+
+
+
+
+
+
+
+

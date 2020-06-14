@@ -16,9 +16,21 @@ from jax.lib import xla_bridge
 import pickle
 import jax.nn.initializers as jaxinit
 import jax.numpy as np
+import numpy as onp
 import glob
 import tensorflow
 import subprocess
+import umap
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.ensemble import RandomForestClassifier,GradientBoostingClassifier
+from sklearn.model_selection import LeaveOneOut
+from sklearn.metrics import accuracy_score
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
+from sklearn.svm import SVC
+import xgboost as xgb
+
+print('good version')
 clip_grads = jit(optimizers.clip_grads)
 
 def save_increasing_temp(key, model, quantize_level_bits, results_folder='results', name='temp_change.pdf'):
@@ -147,6 +159,7 @@ def save_reconstructions(key, data_loader, model, quantize_level_bits, n_samples
 
         log_px, finvx, _ = forward(params, state, np.zeros(n_samples_per_batch), _x, (), key=keys[0])
         _, fz, _ = inverse(params, state, np.zeros(n_samples_per_batch), finvx, (), key=keys[1], sigma=0.0)
+
         fz /= (2.0**quantize_level_bits)
         fz *= (1.0 - 2*0.05)
         fz += 0.05

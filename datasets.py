@@ -206,7 +206,7 @@ def get_cifar10_data(quantize_level_bits=2, data_folder='data/cifar10/'):
     test_images = test_images//factor
 
     return train_images, train_labels, test_images, test_labels
-
+'''
 def cifar10_data_loader(quantize_level_bits=2, data_folder='data/cifar10/'):
     # language=rst
     """
@@ -217,11 +217,79 @@ def cifar10_data_loader(quantize_level_bits=2, data_folder='data/cifar10/'):
     train_images, train_labels, test_images, test_labels = get_cifar10_data(quantize_level_bits=quantize_level_bits, data_folder=data_folder)
     x_shape = train_images.shape[1:]
 
-    def data_loader(key, n_gpus, batch_size):
+    def data_loader(key, n_gpus, batch_size, train=True, label=False, test_batch=None):
         batch_idx = random.randint(key, (n_gpus, batch_size), minval=0, maxval=train_images.shape[0])
-        return train_images[batch_idx,...]
+        if(train):
+            if(label):
+                return train_images[batch_idx,...], train_labels[batch_idx]
+            else:
+                return train_images[batch_idx,...]
+        else:
+            if(label):
+                return test_images[test_batch,...], test_labels[batch_idx]
+            else:
+                return test_images[test_batch,...]
+'''
+def cifar10_data_loader(quantize_level_bits=2, onehot = True, data_folder='data/cifar10/'):
+    # language=rst
+    """
+    Load the cifar 10 dataset.
+    :param data_folder: Where to download the data to
+    """
+    train_images, train_labels, test_images, test_labels = get_cifar10_data(quantize_level_bits=quantize_level_bits, data_folder=data_folder)
+    
+    if(not onehot):
+        train_labels = onp.nonzero(train_labels)[1]
+        test_labels = onp.nonzero(test_labels)[1]
+    x_shape = train_images.shape[1:]
+    def data_loader(batch_shape, key=None, start=None, train=True, labels=False):
+        assert (key is None)^(start is None)
 
+        if(key is not None):
+            batch_idx = random.randint(key, batch_shape, minval=0, maxval=train_images.shape[0])
+        else:
+            n_points = batch_shape[0]
+            batch_idx = start + np.arange(n_points)
+        # Broadcast the batch indices to be correct
+        #assert 0, 'Unimplemented'
+        batch_idx = batch_idx
+        data = (train_images[batch_idx,...], np.take(train_labels, batch_idx, axis=0)) if train else (test_images[batch_idx,...], np.take(test_labels, batch_idx, axis=0))
+        data = data if labels else data[0]
+        return data
     return data_loader, x_shape
+
+def cifar10_reduced_data_loader(train=True, path='Experiments/CIFAR512/100000'):
+    # language=rst
+    """
+    Load the cifar 10 dataset.
+    :param data_folder: Where to download the data to
+    """
+    test_nif_embeddings = onp.load(os.path.join(path, 'test_nif_embeddings.npy'))
+    test_nf_embeddings = onp.load(os.path.join(path, 'test_nf_embeddings.npy'))
+    test_y = onp.load(os.path.join(path, 'test_y.npy'))
+    training_nif_embeddings = onp.load(os.path.join(path, 'training_nif_embeddings.npy'))
+    training_nf_embeddings = onp.load(os.path.join(path, 'training_nf_embeddings.npy'))
+    training_y = onp.load(os.path.join(path, 'training_y.npy'))
+
+    def data_loader(batch_shape, key=None, start=None, train=True, labels=False):
+        assert (key is None)^(start is None)
+
+        if(key is not None):
+            batch_idx = random.randint(key, batch_shape, minval=0, maxval = 50000)
+        else:
+            n_points = batch_shape[0]
+            batch_idx = start + np.arange(n_points)
+        # Broadcast the batch indices to be correct
+        #assert 0, 'Unimplemented'
+        if(train):
+            data = (training_nif_embeddings[batch_idx,...],  training_nf_embeddings[batch_idx,...], np.take(training_y, batch_idx, axis=0))
+        else:
+            data = (test_nif_embeddings[batch_idx,...],test_nf_embeddings[batch_idx,...] , np.take(test_y, batch_idx, axis=0))
+        data = data if labels else data[0]
+        return data
+    return data_loader
+
+
 
 ############################################################################################################################################################
 
