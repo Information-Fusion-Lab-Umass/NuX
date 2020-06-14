@@ -102,6 +102,7 @@ from CIFAR10_256 import CIFAR256
 from STL10_default_model import STL10Default
 # from STL10_512 import STL10512
 from upsample_vs_multiscale import CelebAUpscale
+from CelebAImportanceSample import CelebAImportanceSample
 
 if(model_type == 'CelebA512'):
     assert dataset == 'CelebA', 'Dataset mismatch'
@@ -126,6 +127,8 @@ elif(model_type == 'STL512'):
     nf, nif = STL10512(False, quantize_level_bits), STL10512(True, quantize_level_bits)
 elif(model_type == 'CelebAUpsample'):
     nf, nif = CelebAUpscale(False, quantize_level_bits), CelebAUpscale(True, quantize_level_bits)
+elif(model_type == 'CelebAImportanceSample'):
+    nf, nif = CelebAImportanceSample(False, quantize_level_bits), CelebAImportanceSample(True, quantize_level_bits)
 else:
     assert 0, 'Invalid model type.'
 
@@ -175,7 +178,7 @@ def spmd_update(forward, opt_update, get_params, i, opt_state, state, x_batch, k
 
 # Create the optimizer
 
-def lr_schedule(i, lr_decay=1.0, max_lr=1e-4):
+def lr_schedule(i, lr_decay=1.0, max_lr=2e-5):
     warmup_steps = 10000
     return np.where(i < warmup_steps, max_lr*i/warmup_steps, max_lr*(lr_decay**(i - warmup_steps)))
 
@@ -242,7 +245,8 @@ for i in pbar:
     train_keys = np.array(random.split(keys[1], n_gpus))
     replicated_i = np.ones(n_gpus)*i
 
-    replicated_val_nf, replicated_state_nf, replicated_opt_state_nf = filled_spmd_update_nf(replicated_i, replicated_opt_state_nf, replicated_state_nf, x_batch, train_keys)
+    if(i == start_it):
+        replicated_val_nf, replicated_state_nf, replicated_opt_state_nf = filled_spmd_update_nf(replicated_i, replicated_opt_state_nf, replicated_state_nf, x_batch, train_keys)
     replicated_val_nif, replicated_state_nif, replicated_opt_state_nif = filled_spmd_update_nif(replicated_i, replicated_opt_state_nif, replicated_state_nif, x_batch, train_keys)
 
     # Convert to bits/dimension

@@ -21,7 +21,63 @@ import tensorflow
 import subprocess
 clip_grads = jit(optimizers.clip_grads)
 
-def save_final_samples(key, model, quantize_level_bits, temp=1.0, n_samples=64, n_samples_per_batch=4, results_folder='results', name='samples.png'):
+def save_increasing_temp(key, model, quantize_level_bits, results_folder='results', name='temp_change.pdf'):
+    """
+    Save a bunch of final sampels
+    """
+    names, output_shape, params, state, forward, inverse = model
+
+    # Create the axes
+    n_cols = 8
+    n_rows = 2
+
+    n_samples = n_cols*n_rows
+    n_samples_per_batch = n_cols*n_rows
+    temp = np.linspace(0.0, 4.0, n_cols)
+    temp = np.hstack(list(temp)*n_rows)
+
+    key, *keys = random.split(key, 5)
+
+    # Pull noise samples
+    zs = random.normal(key, (n_samples,) + output_shape)*temp[:,None]
+
+    # Make the subplots
+    fig, axes = plt.subplots(n_rows, n_cols); axes = axes.ravel()
+    axes_iter = iter(axes)
+    fig.set_size_inches(2*n_cols, 2*n_rows)
+
+    # Generate the samples
+    index = 0
+    for j in range(n_samples//n_samples_per_batch):
+        z = zs[j*n_samples_per_batch:(j + 1)*n_samples_per_batch]
+        _, fz, _ = inverse(params, state, np.zeros(n_samples_per_batch), z, (), test=TEST, key=key, sigma=0.0)
+        fz /= (2.0**quantize_level_bits)
+        fz *= (1.0 - 2*0.05)
+        fz += 0.05
+
+        for k in range(n_samples_per_batch):
+            ax = next(axes_iter)
+            if(index < n_cols):
+                ax.set_title('T = %5.3f'%(temp[index]))
+            ax.imshow(fz[k])
+            ax.set_axis_off()
+            index += 1
+
+    plt.subplots_adjust(wspace=0, hspace=0, left=0, right=1, bottom=0, top=1)
+
+    # Save the image samples
+    samples_folder = os.path.join(results_folder, 'plots')
+
+    if(os.path.exists(samples_folder) == False):
+        os.makedirs(samples_folder)
+
+    samples_path = os.path.join(samples_folder, name)
+    plt.savefig(samples_path, bbox_inches='tight', format='pdf')
+    plt.close()
+
+################################################################################################################################################
+
+def save_final_samples(key, model, quantize_level_bits, sigma=1.0, temp=1.0, n_samples=64, n_cols=8, n_samples_per_batch=4, results_folder='results', name='samples.pdf'):
     """
     Save a bunch of final sampels
     """
@@ -31,7 +87,6 @@ def save_final_samples(key, model, quantize_level_bits, temp=1.0, n_samples=64, 
     zs = random.normal(key, (n_samples,) + output_shape)*temp
 
     # Create the axes
-    n_cols = 8
     n_rows = int(np.ceil(n_samples/n_cols))
 
     # Make the subplots
@@ -42,7 +97,7 @@ def save_final_samples(key, model, quantize_level_bits, temp=1.0, n_samples=64, 
     # Generate the samples
     for j in range(n_samples//n_samples_per_batch):
         z = zs[j*n_samples_per_batch:(j + 1)*n_samples_per_batch]
-        _, fz, _ = inverse(params, state, np.zeros(n_samples_per_batch), z, (), test=TEST, key=key)
+        _, fz, _ = inverse(params, state, np.zeros(n_samples_per_batch), z, (), test=TEST, key=key, sigma=sigma)
         fz /= (2.0**quantize_level_bits)
         fz *= (1.0 - 2*0.05)
         fz += 0.05
@@ -61,10 +116,12 @@ def save_final_samples(key, model, quantize_level_bits, temp=1.0, n_samples=64, 
         os.makedirs(samples_folder)
 
     samples_path = os.path.join(samples_folder, name)
-    plt.savefig(samples_path)
+    plt.savefig(samples_path, bbox_inches='tight')
     plt.close()
 
-def save_reconstructions(key, data_loader, model, quantize_level_bits, n_samples=16, n_samples_per_batch=4, results_folder='results', name='reconstructions.png'):
+################################################################################################################################################
+
+def save_reconstructions(key, data_loader, model, quantize_level_bits, n_samples=16, n_samples_per_batch=4, results_folder='results', name='reconstructions.pdf'):
     """
     Save reconstructions
     """
@@ -81,25 +138,15 @@ def save_reconstructions(key, data_loader, model, quantize_level_bits, n_samples
 
     inital_key = key
 
-    @jit
-    def reconstruct(x, key):
-        keys = random.split(key, 2)
-        # log_px, finvx, _ = forward(params, state, np.zeros(n_samples_per_batch), x, (), key=inital_key)
-        log_px, finvx, _ = forward(params, state, np.zeros(n_samples_per_batch), x, (), key=keys[0])
-        # _, fz, _ = inverse(params, state, np.zeros(n_samples_per_batch), finvx, (), key=inital_key)
-        _, fz, _ = inverse(params, state, np.zeros(n_samples_per_batch), finvx, (), key=keys[1])
-        return fz
+    x = data_loader(key, 1, n_samples)[0]
+    # x = data_loader(0, 0, 0, indices=[94, 136, 153, 195, 332, 347, 365, 407])[0]
 
     for j in range(n_samples//n_samples_per_batch):
         key, *keys = random.split(key, 3)
-        _x = data_loader(keys[0], 1, n_samples_per_batch)[0]
+        _x = x[j*n_samples_per_batch:(j + 1)*n_samples_per_batch]
 
-        keys = np.array(random.split(key, 64))
-        fzs = jit(vmap(partial(reconstruct, _x)))(keys)
-        fz = np.mean(fzs, axis=0)
-
-        # log_px, finvx, _ = forward(params, state, np.zeros(n_samples_per_batch), _x, (), key=keys[0])
-        # _, fz, _ = inverse(params, state, np.zeros(n_samples_per_batch), finvx, (), key=keys[1])
+        log_px, finvx, _ = forward(params, state, np.zeros(n_samples_per_batch), _x, (), key=keys[0])
+        _, fz, _ = inverse(params, state, np.zeros(n_samples_per_batch), finvx, (), key=keys[1], sigma=0.0)
         fz /= (2.0**quantize_level_bits)
         fz *= (1.0 - 2*0.05)
         fz += 0.05
@@ -119,10 +166,12 @@ def save_reconstructions(key, data_loader, model, quantize_level_bits, n_samples
         os.makedirs(reconstruction_folder)
 
     reconstruction_path = os.path.join(reconstruction_folder, name)
-    plt.savefig(reconstruction_path)
+    plt.savefig(reconstruction_path, bbox_inches='tight', format='pdf')
     plt.close()
 
-def save_temperature_comparisons(key, nf_model, nif_model, quantize_level_bits, n_samples=16, n_samples_per_batch=4, results_folder='results', name='temperature_comparisons.png'):
+################################################################################################################################################
+
+def save_temperature_comparisons(key, nf_model, nif_model, quantize_level_bits, n_samples=16, n_samples_per_batch=4, results_folder='results', name='temperature_comparisons.pdf'):
     """
     Save reconstructions
     """
@@ -145,7 +194,7 @@ def save_temperature_comparisons(key, nf_model, nif_model, quantize_level_bits, 
 
     for j in range(n_samples//n_samples_per_batch):
         z = zs[j*n_samples_per_batch:(j + 1)*n_samples_per_batch]
-        _, fz, _ = nif_model.inverse(nif_model.params, nif_model.state, np.zeros(n_samples_per_batch), z, (), key=key, test=TEST)
+        _, fz, _ = nif_model.inverse(nif_model.params, nif_model.state, np.zeros(n_samples_per_batch), z, (), key=key, test=TEST, sigma=0.0)
         fz /= (2.0**quantize_level_bits)
         fz *= (1.0 - 2*0.05)
         fz += 0.05
@@ -182,8 +231,10 @@ def save_temperature_comparisons(key, nf_model, nif_model, quantize_level_bits, 
         os.makedirs(temp_comparison_folder)
 
     temp_comparison_path = os.path.join(temp_comparison_folder, name)
-    plt.savefig(temp_comparison_path, bbox_inches='tight')
+    plt.savefig(temp_comparison_path, bbox_inches='tight', format='pdf')
     plt.close()
+
+################################################################################################################################################
 
 def compute_aggregate_posteriors(key, data_loader, nf_model, nif_model, quantize_level_bits, n_samples=10000, n_samples_per_batch=32, results_folder='results', name='aggregate_posterior.txt'):
     """
@@ -212,16 +263,42 @@ def compute_aggregate_posteriors(key, data_loader, nf_model, nif_model, quantize
     zs = np.concatenate(zs)
     nf_mean, nf_std = np.mean(zs), np.std(zs)
 
+    print('nif_mean', nif_mean)
+    print('nif_std', nif_std)
+    print('nf_mean', nf_mean)
+    print('nf_std', nf_std)
+
     # Save the results to a text file
     aggregate_stats = np.array([[nif_mean, nif_std], [nf_mean, nf_std]])
     onp.savetxt(os.path.join(results_folder, name), aggregate_stats, delimiter=",")
 
-def interpolate_pairs(key, data_loader, nif_model, quantize_level_bits, n_pairs=5, n_points=10, results_folder='results', name='interpolation.png'):
+################################################################################################################################################
+
+import jax.ops
+
+@jit
+def cartesian_to_spherical(x):
+    r = np.sqrt(np.sum(x**2))
+    denominators = np.sqrt(np.cumsum(x[::-1]**2)[::-1])[:-1]
+    phi = np.arccos(x[:-1]/denominators)
+
+    last_value = np.where(x[-1] >= 0, phi[-1], 2*np.pi - phi[-1])
+    phi = jax.ops.index_update(phi, -1, last_value)
+
+    return np.hstack([r, phi])
+
+@jit
+def spherical_to_cartesian(phi_x):
+    r = phi_x[0]
+    phi = phi_x[1:]
+    return r*np.hstack([1.0, np.cumprod(np.sin(phi))])*np.hstack([np.cos(phi), 1.0])
+
+def interpolate_pairs(key, data_loader, nif_model, quantize_level_bits, n_pairs=5, n_points=10, results_folder='results', name='interpolation.pdf'):
     """
     Interpolate images
     """
     k1, k2 = random.split(key, 2)
-    x_for_interpolation = data_loader(key, 1, n_pairs)[0]
+    x_for_interpolation = data_loader(key, 1, 2*n_pairs)[0]
     random_pairs = random.randint(key, (2*n_pairs,), minval=0, maxval=x_for_interpolation.shape[0])
     pairs_iter = iter(random_pairs)
     index_pairs = [(next(pairs_iter), next(pairs_iter)) for _ in range(n_pairs)]
@@ -234,9 +311,16 @@ def interpolate_pairs(key, data_loader, nif_model, quantize_level_bits, n_pairs=
 
     for i, (idx1, idx2) in enumerate(index_pairs):
         x = x_for_interpolation[[idx1, idx2]]
-        _, finvx, _ = nif_model.forward(nif_model.params, nif_model.state, np.zeros(2), x, (), test=TEST, key=key)
-        finvx1, finvx2 = finvx
-        interpolation_z = np.linspace(finvx1, finvx2, n_points)
+        # _, finvx, _ = nif_model.forward(nif_model.params, nif_model.state, np.zeros(2), x, (), test=TEST, key=key)
+        key, _ = random.split(key, 2)
+        finvx = random.normal(key, (2,) + nif_model.output_shape)
+
+        # Interpolate
+        phi = jit(vmap(cartesian_to_spherical))(finvx)
+        phi1, phi2 = phi
+        interpolation_phi = np.linspace(phi1, phi2, n_points)
+        interpolation_z = jit(vmap(spherical_to_cartesian))(interpolation_phi)
+
         _, fz, _ = nif_model.inverse(nif_model.params, nif_model.state, np.zeros(n_points), interpolation_z, (), test=TEST)
         fz /= (2.0**quantize_level_bits)
         fz *= (1.0 - 2*0.05)
@@ -248,168 +332,307 @@ def interpolate_pairs(key, data_loader, nif_model, quantize_level_bits, n_pairs=
     plt.subplots_adjust(wspace=0, hspace=0, left=0, right=1, bottom=0, top=1)
 
     temp_comparison_path = os.path.join(results_folder, 'plots', name)
-    plt.savefig(temp_comparison_path, bbox_inches='tight')
+    plt.savefig(temp_comparison_path, bbox_inches='tight', format='pdf')
     plt.close()
 
-def compute_fid_score(model,
-                      key,
-                      quantize_level_bits,
-                      temp=1.0,
-                      sigma=1.0,
-                      TTUR_path='TTUR/',
-                      stats_path='FID/fid_stats_celeba.npz',
-                      n_samples=10000,
-                      n_samples_per_batch=128,
-                      checkpoint_folder='results',
-                      fid_score_folder_name='fid_scores',
-                      sample_fid_folder_name='sample_fid_folder',
-                      check_for_stats=True,
-                      name='fid.txt'):
+################################################################################################################################################
 
-    results_folder = os.path.join(checkpoint_folder, fid_score_folder_name)
-    sample_fid_folder = os.path.join(checkpoint_folder, sample_fid_folder_name)
+def log_likelihood_estimation(key, data_loader, nif_model, results_folder='results', name='log_likelihood.pdf'):
+    """
+    See how effectively we can estimate log likelihood
+    """
+    n_samples = 128
+    importance_samples = np.array([1, 2, 4, 8, 16, 32, 64])
+    # importance_samples = np.array([1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048])
+    n_samples_per_batch = 128
 
-    if(os.path.exists(results_folder) == False):
-        os.makedirs(results_folder)
+    @jit
+    def estimate_log_likelihood(x, key):
+        log_px, _, _ = nif_model.forward(nif_model.params, nif_model.state, np.zeros(x.shape[0]), x, (), key=key, n_importance_samples=1)
+        return log_px
 
-    if(os.path.exists(sample_fid_folder) == False):
-        os.makedirs(sample_fid_folder)
+    data_key = random.PRNGKey(0)
+    importance_sample_key = random.PRNGKey(1)
+    iw_estimates = []
 
-    # See if we have already computed the stats for this experiment
-    using_stats = False
-    if(check_for_stats == True):
-        our_stats_path = glob.glob(sample_fid_folder+'/*.npz')
-        if(len(our_stats_path) > 0):
-            our_stats_path = our_stats_path[0]
-            sample_fid_folder = our_stats_path
-            using_stats = True
+    # Pull new data
+    x = data_loader(data_key, 1, n_samples)[0]
 
-    # If we're not using stats, then we need to compute them
-    if(using_stats == False):
+    # Compute all of the estimates
+    for n_importance_samples in tqdm(importance_samples):
+        keys = random.split(importance_sample_key, n_importance_samples)
+        log_likelihoods = []
 
-        # Add in the kwargs to the model
-        _, _, _, _, forward, inverse = model
-        model = model._replace(forward=jit(partial(forward, sigma=sigma)))
-        model = model._replace(inverse=jit(partial(inverse, sigma=sigma)))
+        # Evaluate each importance sample
+        for key in tqdm(keys):
 
-        # Generate the samples from the noisy injective flow
-        number_invalid = 0
-        zs = random.normal(key, (n_samples,) + model.output_shape)*temp
-        for j in tqdm(np.arange(n_samples//n_samples_per_batch), leave=False):
-            z = zs[j*n_samples_per_batch:(j + 1)*n_samples_per_batch]
-            _, fz, _ = model.inverse(model.params, model.state, np.zeros(n_samples_per_batch), z, (), key=key, test=TEST)
-            fz /= (2.0**quantize_level_bits)
-            fz *= (1.0 - 2*0.05)
-            fz += 0.05
-            for k in range(j*n_samples_per_batch, (j + 1)*n_samples_per_batch):
-                # Save each of the images
-                sample_name = 'sample_%d.jpg'%k
-                if(np.any(np.isnan(fz[k-j*n_samples_per_batch]))):
-                    number_invalid += 1
-                    continue
-                if(np.any(np.isinf(fz[k-j*n_samples_per_batch]))):
-                    number_invalid += 1
-                    continue
-                matplotlib.image.imsave(os.path.join(sample_fid_folder, sample_name), fz[k-j*n_samples_per_batch])
+            log_likelihoods_per_key = []
 
-    # If a bunch of the samples are infinity or nan, then don't even bother with the FID
-    if(using_stats == False and number_invalid > n_samples*0.2):
-        fid_score = np.nan
-    else:
-        # Compute the fid score
-        try:
-            TTUR_command = ['python', os.path.join(TTUR_path, 'fid.py'), sample_fid_folder, stats_path, '--gpu', '0']
-            proc = subprocess.Popen(TTUR_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            out, err = proc.communicate()
-            fid_score = float(str(out).split('FID:')[1].strip()[:-3])
-        except:
-            TTUR_command = ['python', os.path.join(TTUR_path, 'fid.py'), sample_fid_folder, stats_path]
-            proc = subprocess.Popen(TTUR_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            out, err = proc.communicate()
-            try:
-                fid_score = float(str(out).split('FID:')[1].strip()[:-3])
-            except:
-                print('out:', out)
-                print('\n\n')
-                print('err:', err)
-                assert 0
+            # Use batches of data
+            for j in tqdm(np.arange(n_samples//n_samples_per_batch)):
+                key, *keys = random.split(key, 2)
 
-    # Save the results to a text file
-    fid_save_path = os.path.join(results_folder, name)
-    onp.savetxt(fid_save_path, np.array([fid_score]), delimiter=",")
+                _x = x[j*n_samples_per_batch:(j + 1)*n_samples_per_batch]
+                log_px = estimate_log_likelihood(_x, keys[0]) # (n_z,)
+                log_likelihoods_per_key.append(log_px)
 
-def save_fid_scores(nf_model,
-                    nif_model,
-                    key,
-                    quantize_level_bits,
-                    temp=1.0,
-                    TTUR_path='TTUR/',
-                    stats_path='FID/fid_stats_celeba.npz',
-                    n_samples=10000,
-                    n_samples_per_batch=128,
-                    results_folder='results',
-                    name='fid.txt'):
-    # stats_name = 'fid_stats_cifar10_train.npz'
+            log_likelihoods_per_key = np.concatenate(log_likelihoods_per_key) # (n_z,)
+            log_likelihoods.append(log_likelihoods_per_key) # (n_keys, n_z)
 
-    nf_fid_folder = os.path.join(results_folder, 'tmp_nf_fid_folder/')
-    nif_fid_folder = os.path.join(results_folder, 'tmp_nif_fid_folder/')
+        log_likelihoods = np.array(log_likelihoods) # (n_keys, n_z)
+        iw_estimate = logsumexp(log_likelihoods, axis=0) - np.log(log_likelihoods.shape[0]) # (n_z,)
+        iw_estimate_mean = iw_estimate.mean() # (1,)
+        iw_estimates.append(iw_estimate_mean)
 
-    if(os.path.exists(nf_fid_folder) == False):
-        os.makedirs(nf_fid_folder)
-    if(os.path.exists(nif_fid_folder) == False):
-        os.makedirs(nif_fid_folder)
+    fig, ax1 = plt.subplots(1, 1)
+    ax1.plot(importance_samples, iw_estimates)
+    ax1.set_xscale('log')
+
+    iw_comparison_path = os.path.join(results_folder, 'plots', name)
+    plt.savefig(iw_comparison_path, bbox_inches='tight', format='pdf')
+    plt.close()
+
+def posterior_variance(key, data_loader, nif_model, results_folder='results', name='embeddings_std.pdf'):
+    """
+    Check how consistent embeddings will be
+    """
+    n_samples = 256
+    n_samples_per_batch = 256
+
+    @jit
+    def sample_from_posterior(x, key):
+        _, z, _ = nif_model.forward(nif_model.params, nif_model.state, np.zeros(x.shape[0]), x, (), key=key, n_importance_samples=1)
+        return z
+
+    data_key = random.PRNGKey(0)
+    importance_sample_key = random.PRNGKey(1)
+    point_stds = []
+
+    # Pull new data
+    x = data_loader(data_key, 1, n_samples)[0]
+    data_key, _ = random.split(data_key)
+
+    # For each data point, we want to see the distribution of embeddings
+    for j in tqdm(np.arange(n_samples//n_samples_per_batch)):
+        key, *keys = random.split(key, 2)
+        _x = x[j*n_samples_per_batch:(j + 1)*n_samples_per_batch]
+
+        zs = []
+        for key in random.split(key, 16):
+            z = sample_from_posterior(_x, key) # (n_z, dim_z)
+            zs.append(z)
+
+        zs = np.array(zs) # (keys, n_z, dim_z)
+        zs_std = np.std(zs, axis=0) # (n_z, dim_z)
+        point_stds.append(zs_std)
+
+    point_stds = np.concatenate(point_stds) # (n_z, dim_z)
+    point_std_means = np.mean(point_stds, axis=0) # (dim_z,)
+    point_std = np.mean(point_std_means) # (1,)
+
+    print('point_std', point_std)
+    assert 0
+
+    fig, ax1 = plt.subplots(1, 1)
+    ax1.plot(importance_samples, point_stds)
+    ax1.set_xscale('log')
+
+    iw_comparison_path = os.path.join(results_folder, 'plots', name)
+    plt.savefig(iw_comparison_path, bbox_inches='tight', format='pdf')
+    plt.close()
+
+
+################################################################################################################################################
+
+def compare_sample_over_t(data_key, key, nf_model, nif_model, quantize_level_bits, n_samples=16, n_samples_per_batch=4, results_folder='results', name='vary_t.pdf'):
+    """
+    Save reconstructions
+    """
+    # Use a sample from the NF model for these plots
+    z = random.normal(data_key, (1,) + nf_model.output_shape)*0.7
+    _, x, _ = nf_model.inverse(nf_model.params, nf_model.state, np.zeros(1), z, ())
+
+    # Pull noise samples
+    temperatures = np.linspace(0.0, 3.0, n_samples)
+
+    # Create the axes
+    n_cols = n_samples
+    n_rows = 2
+
+    # Make the subplots
+    fig, axes = plt.subplots(n_rows, n_cols); axes = axes.ravel()
+    axes_iter = iter(axes)
+    fig.set_size_inches(2*n_cols, 2*n_rows)
 
     # Generate the samples from the noisy injective flow
-    zs = random.normal(key, (n_samples,) + nif_model.output_shape)*temp
-    for j in tqdm(np.arange(n_samples//n_samples_per_batch)):
-        break
+    _, zs, _ = nif_model.forward(nif_model.params, nif_model.state, np.zeros(1), x, (), key=None)
+    zs *= temperatures[:,None]
+    temp_iter = iter(temperatures)
+
+    for j in range(n_samples//n_samples_per_batch):
         z = zs[j*n_samples_per_batch:(j + 1)*n_samples_per_batch]
-        _, fz, _ = nif_model.inverse(nif_model.params, nif_model.state, np.zeros(n_samples_per_batch), z, (), key=key, test=TEST)
+        _, fz, _ = nif_model.inverse(nif_model.params, nif_model.state, np.zeros(n_samples_per_batch), z, (), key=key, test=TEST, sigma=0.0)
         fz /= (2.0**quantize_level_bits)
         fz *= (1.0 - 2*0.05)
         fz += 0.05
-        for k in range(j*n_samples_per_batch, (j + 1)*n_samples_per_batch):
-            # Save each of the images
-            sample_name = 'nif_sample_%d.jpg'%k
-            if(np.any(np.isnan(fz[k-j*n_samples_per_batch]))):
-                continue
-            matplotlib.image.imsave(os.path.join(nif_fid_folder, sample_name), fz[k-j*n_samples_per_batch])
 
-    # Compute the fid score
-    try:
-        proc = subprocess.Popen(['python', os.path.join(TTUR_path, 'fid.py'), nif_fid_folder, stats_path, '--gpu', '0'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        out, err = proc.communicate()
-        nif_fid_score = float(str(out).split('FID:')[1].strip()[:-3])
-    except:
-        proc = subprocess.Popen(['python', os.path.join(TTUR_path, 'fid.py'), nif_fid_folder, stats_path], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        out, err = proc.communicate()
-        nif_fid_score = float(str(out).split('FID:')[1].strip()[:-3])
+        for k in range(n_samples_per_batch):
+            ax = next(axes_iter)
+            ax.imshow(fz[k])
+            ax.set_title('t = %5.3f'%(next(temp_iter)))
+            ax.set_yticklabels([])
+            ax.set_xticklabels([])
+            ax.tick_params(axis='both', which='both',length=0)
+            if(k == 0 and j == 0):
+                ax.set_ylabel('NIF', fontsize=20)
 
     # Generate the samples from the normalizing flow
-    zs = random.normal(key, (n_samples,) + nf_model.output_shape)*temp
-    for j in tqdm(np.arange(n_samples//n_samples_per_batch)):
+    _, zs, _ = nf_model.forward(nf_model.params, nf_model.state, np.zeros(1), x, (), key=None)
+    zs *= temperatures[:,None]
+    temp_iter = iter(temperatures)
+
+    for j in range(n_samples//n_samples_per_batch):
         z = zs[j*n_samples_per_batch:(j + 1)*n_samples_per_batch]
         _, fz, _ = nf_model.inverse(nf_model.params, nf_model.state, np.zeros(n_samples_per_batch), z, (), key=key, test=TEST)
         fz /= (2.0**quantize_level_bits)
         fz *= (1.0 - 2*0.05)
         fz += 0.05
-        for k in range(j*n_samples_per_batch, (j + 1)*n_samples_per_batch):
-        # Save each of the images
-            sample_name = 'nf_sample_%d.jpg'%k
-            if(np.any(np.isnan(fz[k-j*n_samples_per_batch]))):
-                continue
-            matplotlib.image.imsave(os.path.join(nf_fid_folder, sample_name), fz[k-j*n_samples_per_batch])
 
-    # Compute the fid score
-    try:
-        proc = subprocess.Popen(['python', os.path.join(TTUR_path, 'fid.py'), nf_fid_folder, stats_path, '--gpu', '0'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        out, err = proc.communicate()
-        nf_fid_score = float(str(out).split('FID:')[1].strip()[:-3])
-    except:
-        proc = subprocess.Popen(['python', os.path.join(TTUR_path, 'fid.py'), nf_fid_folder, stats_path], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        out, err = proc.communicate()
-        nf_fid_score = float(str(out).split('FID:')[1].strip()[:-3])
+        for k in range(n_samples_per_batch):
+            ax = next(axes_iter)
+            ax.imshow(fz[k])
+            ax.set_yticklabels([])
+            ax.set_xticklabels([])
+            ax.tick_params(axis='both', which='both',length=0)
+            if(k == 0 and j == 0):
+                ax.set_ylabel('NF', fontsize=20)
 
-    # Save the results to a text file
-    fid_scores = np.array([nif_fid_score, nf_fid_score])
-    onp.savetxt(os.path.join(results_folder, name), fid_scores, delimiter=",")
+    plt.subplots_adjust(wspace=0, hspace=0, left=0, right=1, bottom=0, top=1)
+
+    # Save the image samples
+    temp_comparison_folder = os.path.join(results_folder, 'plots')
+
+    if(os.path.exists(temp_comparison_folder) == False):
+        os.makedirs(temp_comparison_folder)
+
+    temp_comparison_path = os.path.join(temp_comparison_folder, name)
+    plt.savefig(temp_comparison_path, bbox_inches='tight', format='pdf')
+    plt.close()
+
+################################################################################################################################################
+
+def compare_sample_over_s(data_key, key, nf_model, nif_model, quantize_level_bits, n_samples=16, n_samples_per_batch=4, results_folder='results', name='vary_s.pdf'):
+    """
+    Save reconstructions
+    """
+    # Use a sample from the NF model for these plots
+    z = random.normal(data_key, (1,) + nf_model.output_shape)*0.7
+    _, x, _ = nf_model.inverse(nf_model.params, nf_model.state, np.zeros(1), z, ())
+
+    sigmas = np.linspace(0.0, 1.5, n_samples)
+
+    # Create the axes
+    n_cols = n_samples
+    n_rows = 1
+
+    # Make the subplots
+    fig, axes = plt.subplots(n_rows, n_cols); axes = axes.ravel()
+    axes_iter = iter(axes)
+    fig.set_size_inches(2*n_cols, 2*n_rows)
+
+    # Plot the nif model
+    _, z, _ = nif_model.forward(nif_model.params, nif_model.state, np.zeros(1), x, (), key=None)
+    z = z[0]
+
+    for j, s in enumerate(sigmas):
+        _, fz, _ = nif_model.inverse(nif_model.params, nif_model.state, np.zeros(1), z, (), key=key, sigma=s)
+        fz /= (2.0**quantize_level_bits)
+        fz *= (1.0 - 2*0.05)
+        fz += 0.05
+
+        ax = axes[j]
+        ax.imshow(fz)
+        ax.set_yticklabels([])
+        ax.set_xticklabels([])
+        ax.tick_params(axis='both', which='both',length=0)
+        ax.set_title('s = %5.3f'%(s))
+        if(j == 0):
+            ax.set_ylabel('NIF', fontsize=20)
+
+    plt.subplots_adjust(wspace=0, hspace=0, left=0, right=1, bottom=0, top=1)
+
+    # Save the image samples
+    temp_comparison_folder = os.path.join(results_folder, 'plots')
+
+    if(os.path.exists(temp_comparison_folder) == False):
+        os.makedirs(temp_comparison_folder)
+
+    temp_comparison_path = os.path.join(temp_comparison_folder, name)
+    plt.savefig(temp_comparison_path, bbox_inches='tight', format='pdf')
+    plt.close()
+
+################################################################################################################################################
+
+def save_sample_comparisons(key, nf_model, nif_model, quantize_level_bits, results_folder='results', name='sample_comparisons.pdf'):
+    """
+    Save reconstructions
+    """
+    # Create the axes
+    n_rows = 2
+    n_cols_per_model = 5
+    n_cols = 2*n_cols_per_model
+    n_samples = n_rows*n_cols_per_model
+    n_samples_per_batch = min(n_samples, 16)
+
+    # Make the subplots
+    fig, axes = plt.subplots(n_rows, n_cols)
+    axes_iter = iter(axes)
+    fig.set_size_inches(2*n_cols, 2*n_rows)
+
+    # Generate the samples from the noisy injective flow
+    zs = random.normal(key, (n_samples,) + nif_model.output_shape)
+
+    for j in range(n_samples//n_samples_per_batch):
+        z = zs[j*n_samples_per_batch:(j + 1)*n_samples_per_batch]
+        _, fz, _ = nif_model.inverse(nif_model.params, nif_model.state, np.zeros(n_samples_per_batch), z, (), key=key, test=TEST, sigma=0.0)
+        fz /= (2.0**quantize_level_bits)
+        fz *= (1.0 - 2*0.05)
+        fz += 0.05
+
+        for k in range(n_samples_per_batch):
+            index = j*n_samples_per_batch + k
+            u = index//n_cols_per_model
+            v = index%n_cols_per_model
+            ax = axes[u, v + n_cols_per_model]
+            ax.imshow(fz[k])
+            ax.set_axis_off()
+
+    # Generate the samples from the normalizing flow
+    zs = random.normal(key, (n_samples,) + nf_model.output_shape)
+
+    for j in range(n_samples//n_samples_per_batch):
+        z = zs[j*n_samples_per_batch:(j + 1)*n_samples_per_batch]
+        _, fz, _ = nf_model.inverse(nf_model.params, nf_model.state, np.zeros(n_samples_per_batch), z, (), key=key, test=TEST)
+        fz /= (2.0**quantize_level_bits)
+        fz *= (1.0 - 2*0.05)
+        fz += 0.05
+
+        for k in range(n_samples_per_batch):
+            index = j*n_samples_per_batch + k
+            u = index//n_cols_per_model
+            v = index%n_cols_per_model
+            ax = axes[u, v]
+            ax.imshow(fz[k])
+            ax.set_axis_off()
+
+    plt.subplots_adjust(wspace=0, hspace=0, left=0, right=1, bottom=0, top=1)
+
+    # Save the image samples
+    temp_comparison_folder = os.path.join(results_folder, 'plots')
+
+    if(os.path.exists(temp_comparison_folder) == False):
+        os.makedirs(temp_comparison_folder)
+
+    temp_comparison_path = os.path.join(temp_comparison_folder, name)
+    plt.savefig(temp_comparison_path, bbox_inches='tight', format='pdf')
+    plt.close()

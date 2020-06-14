@@ -61,5 +61,3 @@ def CelebA128(injective=True, quantize_level_bits=3):
                            Flatten(),
                            prior_flow)
     return flow
-
-# python glow_injective.py --name=CelebA128 --batchsize=8 --dataset=CelebA --numimage=-1 --quantize=3 --model=CelebADefault --startingit=0 --printevery=500

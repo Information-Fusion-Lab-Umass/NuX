@@ -264,6 +264,10 @@ def celeb_dataset_loader(quantize_level_bits=8, strides=(2, 2), crop=((26, -19),
     celeb_dir = data_folder
 
     all_files = glob.glob('%s*.jpg'%celeb_dir)
+
+    # Sort these the images
+    all_files = sorted(all_files, key=lambda x: int(os.path.split(x)[1].strip('.jpg')))
+
     if(n_images == -1 or n_images is None):
         n_images = len(all_files)
 
@@ -279,9 +283,14 @@ def celeb_dataset_loader(quantize_level_bits=8, strides=(2, 2), crop=((26, -19),
     x_shape = np.array(im).shape
 
     # The loader will be used to pull batches of data
-    def data_loader(key, n_gpus, batch_size):
-        batch_idx = random.randint(key, (n_gpus*batch_size,), minval=0, maxval=total_files)
-        batch_files = all_files[onp.array(batch_idx)]
+    def data_loader(key, n_gpus, batch_size, indices=None):
+        if(indices is not None):
+            batch_files = all_files[indices]
+            n_gpus = 1
+            batch_size = len(indices)
+        else:
+            batch_idx = random.randint(key, (n_gpus*batch_size,), minval=0, maxval=total_files)
+            batch_files = all_files[onp.array(batch_idx)]
 
         images = onp.zeros((n_gpus, batch_size) + x_shape, dtype=onp.int32)
         for k, path in enumerate(batch_files):

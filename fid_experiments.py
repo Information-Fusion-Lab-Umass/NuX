@@ -14,28 +14,93 @@ from datasets import get_celeb_dataset
 import argparse
 from jax.lib import xla_bridge
 import pickle
-import jax.nn.initializers as jaxinit
 import jax.numpy as np
 import glob
-clip_grads = jit(optimizers.clip_grads)
-from experiment_evaluation import save_final_samples, \
-                                  save_reconstructions, \
-                                  save_temperature_comparisons, \
-                                  compute_aggregate_posteriors, \
-                                  interpolate_pairs, \
-                                  save_fid_scores, \
-                                  compute_fid_score
+import matplotlib
+
+def generate_images_for_fid(model,
+                            key,
+                            quantize_level_bits,
+                            temp=1.0,
+                            sigma=1.0,
+                            n_samples=10000,
+                            n_samples_per_batch=128,
+                            checkpoint_folder='results',
+                            fid_score_folder_name='fid_scores',
+                            sample_fid_folder_name='sample_fid_folder',
+                            check_for_stats=True,
+                            name='fid.txt'):
+
+    results_folder = os.path.join(checkpoint_folder, fid_score_folder_name)
+    sample_fid_folder = os.path.join(checkpoint_folder, sample_fid_folder_name)
+    fid_save_path = os.path.join(results_folder, name)
+    # if(os.path.exists(fid_save_path)):
+    #     return
+
+    if(os.path.exists(results_folder) == False):
+        os.makedirs(results_folder)
+
+    if(os.path.exists(sample_fid_folder) == False):
+        os.makedirs(sample_fid_folder)
+
+    # See if we have already computed the stats for this experiment
+    using_stats = False
+    if(check_for_stats == True):
+        our_stats_path = glob.glob(sample_fid_folder+'/*.npz')
+        if(len(our_stats_path) > 0):
+            our_stats_path = our_stats_path[0]
+            sample_fid_folder = our_stats_path
+            using_stats = True
+
+    # If we're not using stats, then we need to compute them
+    if(using_stats == False):
+
+        # Add in the kwargs to the model
+        _, _, _, _, forward, inverse = model
+        model = model._replace(forward=jit(partial(forward, sigma=sigma)))
+        model = model._replace(inverse=jit(partial(inverse, sigma=sigma)))
+
+        # Generate the samples from the noisy injective flow
+        number_invalid = 0
+        zs = random.normal(key, (n_samples,) + model.output_shape)*temp
+        pbar = tqdm(np.arange(n_samples//n_samples_per_batch), leave=False)
+        for j in pbar:
+            pbar.set_description('fid image batch %d'%j)
+            z = zs[j*n_samples_per_batch:(j + 1)*n_samples_per_batch]
+            _, fz, _ = model.inverse(model.params, model.state, np.zeros(n_samples_per_batch), z, (), key=key, test=TEST)
+            fz /= (2.0**quantize_level_bits)
+            fz *= (1.0 - 2*0.05)
+            fz += 0.05
+            for k in range(j*n_samples_per_batch, (j + 1)*n_samples_per_batch):
+                # Save each of the images
+                sample_name = 'sample_%d.jpg'%k
+                image_save_path = os.path.join(sample_fid_folder, sample_name)
+
+                if(np.any(np.isnan(fz[k-j*n_samples_per_batch]))):
+                    number_invalid += 1
+                    continue
+                if(np.any(np.isinf(fz[k-j*n_samples_per_batch]))):
+                    number_invalid += 1
+                    continue
+                if(np.any(fz[k-j*n_samples_per_batch] < -1e-5)):
+                    number_invalid += 1
+                    continue
+
+                matplotlib.image.imsave(image_save_path, fz[k-j*n_samples_per_batch])
+
 
 n_gpus = xla_bridge.device_count()
 print('n_gpus:', n_gpus)
 
 # Parse the user inputs
 parser = argparse.ArgumentParser(description='Processing Noisy Injective Flows Checkpoint')
-parser.add_argument('--name',            action='store', type=str, help='Name of model', default='CelebADefault')
-parser.add_argument('--dataset',         action='store', type=str, help='Dataset to load', default='CelebA')
-parser.add_argument('--quantize',        action='store', type=int, help='Sets the value of quantize_level_bits', default=5)
-parser.add_argument('--start_it',        action='store', type=int, help='Experiment iteration to start with', default=0)
-parser.add_argument('--model',           action='store', type=str, help='Sets the model to use', default='CelebADefault')
+parser.add_argument('--name',     action='store', type=str, help='Name of model', default='CelebADefault')
+parser.add_argument('--dataset',  action='store', type=str, help='Dataset to load', default='CelebA')
+parser.add_argument('--quantize', action='store', type=int, help='Sets the value of quantize_level_bits', default=5)
+parser.add_argument('--start_it', action='store', type=int, help='Experiment iteration to start with', default=0)
+parser.add_argument('--model',    action='store', type=str, help='Sets the model to use', default='CelebADefault')
+parser.add_argument('--sigma',    action='store', type=float, help='Value of sigma', default=-1.0)
+parser.add_argument('--temp',    action='store', type=float, help='Value of sigma', default=-1.0)
 args = parser.parse_args()
 
 dataset = args.dataset
@@ -97,6 +162,7 @@ from CIFAR10_256 import CIFAR256
 
 from STL10_default_model import STL10Default
 from upsample_vs_multiscale import CelebAUpscale
+from CelebAImportanceSample import CelebAImportanceSample
 
 if(model_type == 'CelebA512'):
     assert dataset == 'CelebA', 'Dataset mismatch'
@@ -118,6 +184,8 @@ elif(model_type == 'STL10Default'):
     nf, nif = STL10Default(False, quantize_level_bits), STL10Default(True, quantize_level_bits)
 elif(model_type == 'CelebAUpsample'):
     nf, nif = CelebAUpscale(False, quantize_level_bits), CelebAUpscale(True, quantize_level_bits)
+elif(model_type == 'CelebAImportanceSample'):
+    nf, nif = CelebAImportanceSample(False, quantize_level_bits), CelebAImportanceSample(True, quantize_level_bits)
 else:
     assert 0, 'Invalid model type.'
 
@@ -163,46 +231,59 @@ nif_model = nif_model._replace(params=get_params(opt_state_nif))
 
 key = random.PRNGKey(0)
 
-temp_pbar = tqdm(np.linspace(0.10, 4.0, 10))
+# Determine what values of sigma to use
+if(args.sigma < 0.0):
+    # sigmas = np.linspace(0, 1.2, 20) # For vary s test
+    # sigmas = [0.3] # For vary t test
+    sigmas = [0.0]
+else:
+    sigmas = [args.sigma]
+
+if(args.temp < 0.0):
+    # temps = [1.0] # For vary s test
+    # temps = np.linspace(0.0, 2.0, 35) # For vary t test
+    temps = [1.0] # For vary t test
+else:
+    temps = [args.temp]
+
+temp_pbar = tqdm(temps)
 for temp in temp_pbar:
+    temp_pbar.set_description('temp: %5.3f'%temp)
 
     temp_as_str = str(temp)
     temp_as_str = temp_as_str.replace('.', 'p')
 
     # Compute the FID score for the NF first
-    compute_fid_score(nf_model,
-                      key,
-                      quantize_level_bits,
-                      temp=temp,
-                      sigma=1.0,
-                      TTUR_path='TTUR/',
-                      stats_path='FID/fid_stats_celeba.npz',
-                      n_samples=10000,
-                      n_samples_per_batch=128,
-                      checkpoint_folder=checkpoint_path,
-                      fid_score_folder_name='fid_scores',
-                      sample_fid_folder_name='nf_samples_temp_%s_fid_folder'%temp_as_str,
-                      check_for_stats=True,
-                      name='nf_fid_temp_%s.txt'%temp_as_str)
+    generate_images_for_fid(nf_model,
+                            key,
+                            quantize_level_bits,
+                            temp=temp,
+                            sigma=1.0,
+                            n_samples=20000,
+                            n_samples_per_batch=128,
+                            checkpoint_folder=checkpoint_path,
+                            fid_score_folder_name='fid_scores',
+                            sample_fid_folder_name='nf_samples_temp_%s_fid_folder'%temp_as_str,
+                            check_for_stats=True,
+                            name='nf_fid_temp_%s.txt'%temp_as_str)
 
     # Compute the FID score for the NIF at each sigma
-    sigma_pbar = tqdm(np.array([0.00, 0.50, 1.00]))
+    sigma_pbar = tqdm(sigmas)
     for sigma in sigma_pbar:
+        sigma_pbar.set_description('sigma: %5.3f'%sigma)
 
         sigma_as_str = str(sigma)
         sigma_as_str = sigma_as_str.replace('.', 'p')
 
-        compute_fid_score(nif_model,
-                          key,
-                          quantize_level_bits,
-                          temp=temp,
-                          sigma=sigma,
-                          TTUR_path='TTUR/',
-                          stats_path='FID/fid_stats_celeba.npz',
-                          n_samples=10000,
-                          n_samples_per_batch=128,
-                          checkpoint_folder=checkpoint_path,
-                          fid_score_folder_name='fid_scores',
-                          sample_fid_folder_name='nif_samples_temp_%s_sigma_%s_fid_folder'%(temp_as_str, sigma_as_str),
-                          check_for_stats=True,
-                          name='nif_fid_temp_%s_sigma_%s.txt'%(temp_as_str, sigma_as_str))
+        generate_images_for_fid(nif_model,
+                                key,
+                                quantize_level_bits,
+                                temp=temp,
+                                sigma=sigma,
+                                n_samples=20000,
+                                n_samples_per_batch=128,
+                                checkpoint_folder=checkpoint_path,
+                                fid_score_folder_name='fid_scores',
+                                sample_fid_folder_name='nif_samples_temp_%s_sigma_%s_fid_folder'%(temp_as_str, sigma_as_str),
+                                check_for_stats=True,
+                                name='nif_fid_temp_%s_sigma_%s.txt'%(temp_as_str, sigma_as_str))

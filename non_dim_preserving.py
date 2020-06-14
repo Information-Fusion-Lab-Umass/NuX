@@ -92,7 +92,8 @@ def AffineGaussianPriorFullCov(out_dim, A_init=glorot_normal(), Sigma_chol_init=
 
         key = kwargs.pop('key', None)
         if(key is not None):
-            noise = random.normal(key, x.shape)
+            sigma = kwargs.pop('sigma', 1.0)
+            noise = random.normal(key, x.shape)*sigma
             x += np.dot(noise, Sigma_chol.T)
         else:
             noise = np.zeros_like(x)
@@ -160,13 +161,17 @@ def AffineGaussianPriorDiagCov(out_dim, A_init=glorot_normal(), name='unnamed'):
         key = kwargs.pop('key', None)
         if(key is not None):
             sigma = kwargs.pop('sigma', 1.0)
-            noise = random.normal(key, x.shape)*np.exp(0.5*log_diag_cov)*sigma
+            noise = random.normal(key, x.shape)*np.exp(0.5*log_diag_cov)*sigma # CHANGE THIS MANUALLY FOR THE MOMENT
             x += noise
+
+            # Compute N(x|Az+b, Sigma)
+            log_px = util.gaussian_diag_cov_logpdf(noise, np.zeros_like(noise), log_diag_cov)
+
         else:
             noise = x*0.0
 
-        # Compute N(x|Az+b, Sigma)
-        log_px = util.gaussian_diag_cov_logpdf(noise, np.zeros_like(noise), log_diag_cov)
+            # Otherwise we're just computing the manifold pdf
+            log_px = -0.5*np.linalg.slogdet(A.T@A)[1]
 
         return log_pz + log_px, x, state
 
