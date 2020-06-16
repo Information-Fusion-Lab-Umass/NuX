@@ -23,7 +23,8 @@ def UniformDequantization(noise_scale=None, scale=256.0, name='unnamed'):
     def forward(params, state, x, **kwargs):
         # Add uniform noise
         key_name = '%s_key'%name if name != 'unnamed' else 'key'
-        key = kwargs.pop(key_name, None)
+        key = kwargs.pop('key', None)
+        # key = kwargs.pop(key_name, None)
         if(key is None):
             noise = jnp.zeros_like(x)
         else:

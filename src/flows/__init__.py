@@ -7,3 +7,7 @@ from src.flows.conv import *
 from src.flows.compose import *
 from src.flows.maf import *
 from src.flows.coupling import *
+from src.flows.spline import *
+from src.flows.helper import *
+from src.flows.priors import *
+from src.flows.base import *

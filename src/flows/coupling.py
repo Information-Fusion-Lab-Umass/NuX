@@ -7,16 +7,17 @@ import src.util as util
 
 ################################################################################################################
 
-def Coupling(network=None, hidden_layer_sizes=[1024]*4, kind='affine', axis=-1, name='unnamed'):
+def Coupling(haiku_network=None, hidden_layer_sizes=[1024]*4, kind='affine', axis=-1, name='unnamed'):
     # language=rst
     """
     Apply an arbitrary transform to half of the input vector.
     Use a squeeze before this if you want a checkerboard pattern coupling transform.
 
-    :param network: A Haiku network that is already initialized with hk.transform
+    :param network: An uninitialized Haiku network
     :param axis: Axis to split on
     """
     assert kind == 'affine' or kind == 'additive'
+    network = None
 
     def init_fun(key, input_shape):
         ax = axis % len(input_shape)
@@ -28,11 +29,13 @@ def Coupling(network=None, hidden_layer_sizes=[1024]*4, kind='affine', axis=-1, 
 
         # Build the network if it isn't passed in
         nonlocal network
-        if(network is None):
+        if(haiku_network is None):
             if(len(input_shape) == 3):
-                network = hk.transform(lambda x, **kwargs: util.SimpleConv(split_input_shape[-1], 256, kind=='additive')(x, **kwargs))
+                network = hk.transform(lambda x, **kwargs: util.SimpleConv(split_input_shape, 256, kind=='additive')(x, **kwargs))
             else:
                 network = hk.transform(lambda x, **kwargs: util.SimpleMLP(split_input_shape, hidden_layer_sizes, kind=='additive')(x, **kwargs))
+        else:
+            network = hk.transform(lambda x, **kwargs: haiku_network(split_input_shape)(x, **kwargs))
 
         params = network.init(key, jnp.zeros(split_input_shape))
 

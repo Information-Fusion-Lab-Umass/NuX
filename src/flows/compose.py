@@ -7,80 +7,189 @@ import src.util as util
 
 ################################################################################################################
 
-def sequential(*layers):
-    # language=rst
-    """
-    Sequential flow builder.  Like spp.sequential, but also passes density and works in reverse.
-    forward transforms data, x, into a latent variable, z.
-    inverse transforms a latent variable, z, into data, x.
-    We can also pass a condition in order to compute logp(x|condition)
+def sequential(*layers, name='sequential'):
 
-    :param layers - An unpacked list of (init_fun, apply_fun)
+    init_funs, data_dependent_init_funs = zip(*layers)
 
-    **Example**
+    def get_apply_funs(forwards, inverses):
 
-    .. code-block:: python
+        def forward(params, state, inputs, **kwargs):
+            funs = forwards
+            names = list(params.keys())
+            param_vals = list(params.values())
+            state_vals = list(state.values())
+            key = kwargs.pop('key', None)
+            keys = random.split(key, len(funs)) if key is not None else (None,)*len(funs)
+            log_det = 0.0
 
-        from jax import random
-        from normalizing_flows import sequential, MAF, BatchNorm, UnitGaussianPrior
-        from util import TRAIN, TEST
-        key = random.PRNGKey(0)
+            for f, name, p, s, k in zip(funs, names, param_vals, state_vals, keys):
+                inputs, updated_state = f(p, s, inputs, key=k, **kwargs)
+                log_det += inputs['log_det']
+                state[name] = updated_state
 
-        # Create the flow
-        input_shape = (5,)
-        flow = sequential(MAF([1024]), Reverse(), BatchNorm(), MAF([1024]), UnitGaussianPrior())
+            inputs['log_det'] = log_det
+            return inputs, state
 
-        # Initialize it
-        init_fun, forward, inverse = flow
-        names, output_shape, params, state = init_fun(key, input_shape)
+        def inverse(params, state, inputs, **kwargs):
+            funs = inverses[::-1]
+            names = list(params.keys())[::-1]
+            param_vals = list(params.values())[::-1]
+            state_vals = list(state.values())[::-1]
+            key = kwargs.pop('key', None)
+            keys = random.split(key, len(funs)) if key is not None else (None,)*len(funs)
+            log_det = 0.0
 
-        # Run an input through the flow
-        inputs = jnp.ones((10, 5))
-        log_det1, z, updated_state = forward(params, state, inputs)
-        log_det2, fz, _ = inverse(params, state, z)
+            for f, name, p, s, k in zip(funs, names, param_vals, state_vals, keys):
+                inputs, updated_state = f(p, s, inputs, key=k, **kwargs)
+                log_det += inputs['log_det']
+                state[name] = updated_state
 
-        assert jnp.allclose(fz, x)
-        assert jnp.allclose(log_det1, log_det2)
-    """
-    n_layers = len(layers)
-    init_funs, forward_funs, inverse_funs = zip(*layers)
+            inputs['log_det'] = log_det
+            return inputs, state
 
-    def init_fun(key, input_shape):
-        names, params, states = [], [], []
-        keys = random.split(key, len(init_funs))
+        return forward, inverse
+
+    def init_fun(key, input_shapes):
+        n_layers = len(init_funs)
+        keys = random.split(key, n_layers)
+        actual_input_shape = input_shapes
+        params = OrderedDict()
+        state = OrderedDict()
+        forwards = []
+        inverses = []
+        used_names = set()
         for key, init_fun in zip(keys, init_funs):
-            # Conditioning can only be added in a factor call or at the top level call
-            name, input_shape, param, state = init_fun(key, input_shape)
-            names.append(name)
-            params.append(param)
-            states.append(state)
-        return tuple(names), input_shape, tuple(params), tuple(states)
+            flow = init_fun(key, input_shapes)
 
-    def evaluate(apply_funs, params, state, inputs, **kwargs):
+            # Can't repeat names!
+            assert flow.name not in used_names
+            used_names.add(flow.name)
 
-        # Need to store the ouputs of the functions and the updated state
-        updated_states = []
+            input_shapes = flow.output_shapes
+            forwards.append(flow.forward)
+            inverses.append(flow.inverse)
+            params[flow.name] = flow.params
+            state[flow.name] = flow.state
 
-        # Need to pop so that we don't resuse random keys!
-        key = kwargs.pop('key', None)
-        keys = random.split(key, n_layers) if key is not None else (None,)*n_layers
+        forward, inverse = get_apply_funs(forwards, inverses)
+        output_shapes = input_shapes
+        return Flow(name, actual_input_shape, output_shapes, params, state, forward, inverse)
 
-        # Evaluate each function and store the updated static parameters
-        log_det = 0.0
-        for fun, param, s, key in zip(apply_funs, params, state, keys):
-            _log_det, inputs, updated_state = fun(param, s, inputs, key=key, **kwargs)
-            updated_states.append(updated_state)
-            log_det += _log_det
+    def data_dependent_init(key, inputs, **kwargs):
+        n_layers = len(data_dependent_init_funs)
+        keys = random.split(key, n_layers)
+        actual_input_shape = util.tree_shapes(inputs)
+        params = OrderedDict()
+        state = OrderedDict()
+        forwards = []
+        inverses = []
+        for key, ddi_fun in zip(keys, data_dependent_init_funs):
+            inputs, flow = ddi_fun(key, inputs)
+            input_shapes = flow.output_shapes
+            forwards.append(flow.forward)
+            inverses.append(flow.inverse)
+            params[flow.name] = flow.params
+            state[flow.name] = flow.state
 
-        return log_det, inputs, tuple(updated_states)
+        forward, inverse = get_apply_funs(forwards, inverses)
+        output_shapes = input_shapes
+        return inputs, Flow(name, actual_input_shape, output_shapes, params, state, forward, inverse)
 
-    def forward(params, state, x, **kwargs):
-        return evaluate(forward_funs, params, state, x, **kwargs)
+    return init_fun, data_dependent_init
 
-    def inverse(params, state, z, **kwargs):
-        return evaluate(inverse_funs[::-1], params[::-1], state[::-1], z, **kwargs)
+# def sequential(*layers):
+#     # language=rst
+#     """
+#     Sequential flow builder.  Like spp.sequential, but also passes density and works in reverse.
+#     forward transforms data, x, into a latent variable, z.
+#     inverse transforms a latent variable, z, into data, x.
+#     We can also pass a condition in order to compute logp(x|condition)
 
-    return init_fun, forward, inverse
+#     :param layers - An unpacked list of (init_fun, apply_fun)
+
+#     **Example**
+
+#     .. code-block:: python
+
+#         from jax import random
+#         from normalizing_flows import sequential, MAF, BatchNorm, UnitGaussianPrior
+#         from util import TRAIN, TEST
+#         key = random.PRNGKey(0)
+
+#         # Create the flow
+#         input_shape = (5,)
+#         flow = sequential(MAF([1024]), Reverse(), BatchNorm(), MAF([1024]), UnitGaussianPrior())
+
+#         # Initialize it
+#         init_fun, forward, inverse = flow
+#         names, output_shape, params, state = init_fun(key, input_shape)
+
+#         # Run an input through the flow
+#         inputs = jnp.ones((10, 5))
+#         log_det1, z, updated_state = forward(params, state, inputs)
+#         log_det2, fz, _ = inverse(params, state, z)
+
+#         assert jnp.allclose(fz, x)
+#         assert jnp.allclose(log_det1, log_det2)
+#     """
+#     n_layers = len(layers)
+#     init_funs, forward_funs, inverse_funs = zip(*layers)
+
+#     # Keep track of the number of expected dimensions so that we can vmap accordingly
+#     expected_input_dims  = None
+#     expected_output_dims  = None
+
+#     def init_fun(key, input_shape):
+#         nonlocal expected_input_dims
+#         expected_input_dims = len(input_shape)
+
+#         names, params, states = [], [], []
+#         keys = random.split(key, len(init_funs))
+#         for key, init_fun in zip(keys, init_funs):
+#             # Conditioning can only be added in a factor call or at the top level call
+#             name, input_shape, param, state = init_fun(key, input_shape)
+#             names.append(name)
+#             params.append(param)
+#             states.append(state)
+
+#         nonlocal expected_output_dims
+#         expected_output_dims = len(input_shape)
+
+#         return tuple(names), input_shape, tuple(params), tuple(states)
+
+#     def evaluate(apply_funs, params, state, inputs, **kwargs):
+
+#         # Need to store the ouputs of the functions and the updated state
+#         updated_states = []
+
+#         # Need to pop so that we don't resuse random keys!
+#         key = kwargs.pop('key', None)
+#         keys = random.split(key, n_layers) if key is not None else (None,)*n_layers
+
+#         # Evaluate each function and store the updated static parameters
+#         log_det = 0.0
+#         for fun, param, s, key in zip(apply_funs, params, state, keys):
+#             _log_det, inputs, updated_state = fun(param, s, inputs, key=key, **kwargs)
+#             updated_states.append(updated_state)
+#             log_det += _log_det
+
+#         return log_det, inputs, tuple(updated_states)
+
+#     def forward(params, state, x, **kwargs):
+#         # See if we need to vmap
+#         if(x.ndim > expected_input_dims):
+#             return vmap(partial(forward, params, state, **kwargs))(x)
+
+#         return evaluate(forward_funs, params, state, x, **kwargs)
+
+#     def inverse(params, state, z, **kwargs):
+#         # See if we need to vmap
+#         if(z.ndim > expected_output_dims):
+#             return vmap(partial(inverse, params, state, **kwargs))(z)
+
+#         return evaluate(inverse_funs[::-1], params[::-1], state[::-1], z, **kwargs)
+
+#     return init_fun, forward, inverse
 
 def factored(*layers, condition_on_results=False):
     # language=rst
@@ -193,31 +302,6 @@ def factored(*layers, condition_on_results=False):
                 condition = condition + (inp,)
 
         return log_det, outputs, tuple(states)
-
-    return init_fun, forward, inverse
-
-################################################################################################################
-
-def UnitGaussianPrior(axis=(-1,), name='unnamed'):
-    # language=rst
-    """
-    Prior for the normalizing flow.
-
-    :param axis - Axes to reduce over
-    """
-    def init_fun(key, input_shape):
-        params, state = (), ()
-        return name, input_shape, params, state
-
-    def forward(params, state, x, **kwargs):
-        dim = jnp.prod([x.shape[ax] for ax in axis])
-        log_det = -0.5*jnp.sum(x**2, axis=axis) + -0.5*dim*jnp.log(2*jnp.pi)
-        return log_det, x, state
-
-    def inverse(params, state, z, **kwargs):
-        # Usually we're sampling z from a Gaussian, so if we want to do Monte Carlo
-        # estimation, ignore the value of N(z|0,I).
-        return 0.0, z, state
 
     return init_fun, forward, inverse
 
@@ -378,7 +462,48 @@ def FanInConcat(num, axis=-1, name='unnamed'):
 
 ################################################################################################################
 
+def Augment(flow, sampler, name='unnamed'):
+    # language=rst
+    """
+    Run a normalizing flow in an augmented space https://arxiv.org/pdf/2002.07101.pdf
+
+    :param flow: The normalizing flow
+    :param sampler: Function to sample from the convolving distribution
+    """
+    _init_fun, _forward, _inverse = flow
+
+    def init_fun(key, input_shape):
+        augmented_input_shape = input_shape[:-1] + (2*input_shape[-1],)
+        return _init_fun(key, augmented_input_shape)
+
+    def forward(params, state, x, **kwargs):
+        key = kwargs.pop('key', None)
+        if(key is None):
+            assert 0, 'Need a key for this'
+        k1, k2 = random.split(key, 2)
+
+        # Sample e and concatenate it to x
+        e = random.normal(k1, x.shape)
+        xe = jnp.concatenate([x, e], axis=-1)
+
+        return _forward(params, state, xe, key=k2, **kwargs)
+
+    def inverse(params, state, z, **kwargs):
+        key = kwargs.pop('key', None)
+        if(key is None):
+            assert 0, 'Need a key for this'
+        k1, k2 = random.split(key, 2)
+
+        x, e = jnp.split(z, axis=-1)
+
+        return _inverse(params, state, x, key=k2, **kwargs)
+
+    return init_fun, forward, inverse
+
+################################################################################################################
+
 from src.flows.reshape import Squeeze, UnSqueeze
+from src.flows.helper import Debug
 
 def multi_scale(flow, existing_flow):
     return sequential(Squeeze(),
@@ -392,11 +517,11 @@ def multi_scale(flow, existing_flow):
 
 __all__ = ['sequential',
            'factored',
-           'UnitGaussianPrior',
            'Identity',
            'ReverseInputs',
            'Split',
            'Concat',
            'FactorOut',
            'FanInConcat',
+           'Augment',
            'multi_scale']

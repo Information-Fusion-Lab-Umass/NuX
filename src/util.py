@@ -16,6 +16,12 @@ TRAIN = jnp.ones((0,))
 
 ################################################################################################################
 
+@jit
+def tree_shapes(pytree):
+    return jax.tree_util.tree_map(lambda x:x.shape, pytree)
+
+################################################################################################################
+
 class SimpleMLP(hk.Module):
 
     def __init__(self, out_shape, hidden_layer_sizes, is_additive, name=None):
@@ -37,8 +43,9 @@ class SimpleMLP(hk.Module):
 
 class SimpleConv(hk.Module):
 
-    def __init__(self, out_channels, n_hidden_channels, is_additive, name=None):
+    def __init__(self, out_shape, n_hidden_channels, is_additive, name=None):
         super().__init__(name=name)
+        _, _, out_channels = out_shape
         self.out_channels = out_channels
         self.n_hidden_channels = n_hidden_channels
         self.is_additive = is_additive

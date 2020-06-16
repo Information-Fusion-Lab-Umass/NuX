@@ -4,6 +4,7 @@ from jax import random
 from jax.flatten_util import ravel_pytree
 from functools import partial
 import src.util as util
+import jax.tree_util as tree_util
 
 import src.flows.affine as affine
 import src.flows.nonlinearities as nonlinearities
@@ -16,7 +17,7 @@ import src.flows.maf as maf
 import src.flows.coupling as coupling
 import src.flows.spline as spline
 
-def flow_test(flow, x, key):
+def flow_test(layer, inputs, key):
     # language=rst
     """
     Test if a flow implementation is correct.  Checks if the forward and inverse functions are consistent and
@@ -26,37 +27,46 @@ def flow_test(flow, x, key):
     :param x: A batched input
     :param key: JAX random key
     """
-    # Initialize the flow with conditioning.
-    init_fun, forward, inverse = flow
-    names, output_shape, params, state = init_fun(key, x.shape)
+    init_fun, data_dependent_init_fun = layer
 
-    # Make sure that the forwards and inverse functions are consistent
-    log_det1, z, updated_state = forward(params, state, x, key=key)
-    log_det2, fz, updated_state = inverse(params, state, z, key=key)
+    input_shapes = util.tree_shapes(inputs)
 
-    x_diff = jnp.linalg.norm(x - fz)
-    log_det_diff = jnp.linalg.norm(log_det1 - log_det2)
-    print('Transform consistency diffs: x_diff: %5.3f, log_det_diff: %5.3f'%(x_diff, log_det_diff))
+    # Initialize the flow
+    flow = init_fun(key, input_shapes)
+    params_structure = tree_util.tree_structure(flow.params)
+    state_structure = tree_util.tree_structure(flow.state)
+
+    # Ensure that data dependent init produces the same output shapes
+    _, flow_ddi = data_dependent_init_fun(key, inputs)
+    params_structure_ddi = tree_util.tree_structure(flow_ddi.params)
+    state_structure_ddi = tree_util.tree_structure(flow_ddi.state)
+
+    assert params_structure == params_structure_ddi
+    assert state_structure == state_structure_ddi
+
+    outputs, _ = flow.forward(flow.params, flow.state, inputs)
+    reconstr, _ = flow.inverse(flow.params, flow.state, outputs)
+
+    assert jnp.allclose(inputs['x'], reconstr['x'])
+    assert jnp.allclose(outputs['log_det'], reconstr['log_det'])
+
+    # Ensure that it works with batches
+    inputs_batched = tree_util.tree_map(lambda x: x[None], inputs)
+    flow.forward(flow.params, flow.state, inputs_batched)
 
     # Make sure that the log det terms are correct
     def z_from_x(unflatten, x_flat):
         x = unflatten(x_flat)
-        z = forward(params, state, x, key=key)[1]
-        return ravel_pytree(z)[0]
+        outputs, _ = flow.forward(flow.params, flow.state, {'x': x})
+        return ravel_pytree(outputs['x'])[0]
 
     def single_elt_logdet(x):
         x_flat, unflatten = ravel_pytree(x)
         jac = jax.jacobian(partial(z_from_x, unflatten))(x_flat)
-        return jnp.linalg.slogdet(jac)[1]
-        # return 0.5*jnp.linalg.slogdet(jac.T@jac)[1]
+        return 0.5*jnp.linalg.slogdet(jac.T@jac)[1]
 
-    actual_log_det = single_elt_logdet(x)
-
-    print('actual_log_det', actual_log_det)
-    print('log_det', log_det1)
-
-    log_det_diff = jnp.linalg.norm(log_det1 - actual_log_det)
-    print('Log det diff: %5.3f'%(log_det_diff))
+    actual_log_det = single_elt_logdet(inputs['x'])
+    assert jnp.allclose(actual_log_det, outputs['log_det'])
 
 def standard_layer_tests():
     layers = [affine.AffineLDU,
@@ -109,5 +119,7 @@ def unit_test():
     key = random.PRNGKey(0)
     # x = random.normal(key, (6, 2, 4))
     x = random.normal(key, (10,))
-    layer = spline.NeuralSpline(4)
-    flow_test(layer, x, key)
+    inputs = {'x': x}
+
+    layer = normalization.BatchNorm()
+    flow_test(layer, inputs, key)

@@ -1,3 +1,50 @@
+import jax
+import jax.numpy as jnp
+from jax import vmap, random, jit
+import jax.nn.initializers as jaxinit
+from functools import partial
+import src.util as util
+import src.flows.base as base
+
+@base.auto_batch
+def UnitGaussianPrior(name='unit_gaussian_prior'):
+    # language=rst
+    """
+    Prior for the normalizing flow.
+
+    :param axis - Axes to reduce over
+    """
+    dim = None
+
+    def forward(params, state, inputs, **kwargs):
+        x = inputs['x']
+        inputs['log_det'] = -0.5*jnp.sum(x**2) + -0.5*dim*jnp.log(2*jnp.pi)
+        return inputs, state
+
+    def inverse(params, state, inputs, **kwargs):
+        # Usually we're sampling z from a Gaussian, so if we want to do Monte Carlo
+        # estimation, ignore the value of N(z|0,I).
+        x = inputs['x']
+        if(kwargs.get('sample', False)):
+            inputs['log_det'] = 0.0
+        else:
+            inputs['log_det'] = -0.5*jnp.sum(x**2) + -0.5*dim*jnp.log(2*jnp.pi)
+        return inputs, state
+
+    def init_fun(key, input_shapes):
+        x_shape = input_shapes['x']
+        nonlocal dim
+        dim = jnp.prod(x_shape)
+        params, state = {}, {}
+
+        output_shapes = {}
+        output_shapes.update(input_shapes)
+        output_shapes['log_det_shape'] = (1,)
+        return base.Flow(name, input_shapes, output_shapes, params, state, forward, inverse)
+
+    return init_fun, base.data_independent_init(init_fun)
+
+################################################################################################################
 
 def AffineGaussianPriorFullCov(out_dim, A_init=jaxinit.glorot_normal(), Sigma_chol_init=jaxinit.normal(), name='unnamed'):
     """ Analytic solution to int N(z|0,I)N(x|Az,Sigma)dz.
@@ -57,9 +104,9 @@ def AffineGaussianPriorFullCov(out_dim, A_init=jaxinit.glorot_normal(), Sigma_ch
         log_hx -= 0.5*jnp.linalg.slogdet(ATSA)[1]
         log_hx -= diag.sum()
         log_hx -= 0.5*x_dim*jnp.log(2*jnp.pi)
-        return log_px + log_hx, z, state
+        return log_hx, z, state
 
-    def inverse(params, state, log_pz, z, **kwargs):
+    def inverse(params, state, z, **kwargs):
         # Passing back through the network, we just need to sample from N(x|Az,Sigma).
         # Assume we have already sampled z ~ N(0,I)
         A, Sigma_chol_flat = params
@@ -74,7 +121,7 @@ def AffineGaussianPriorFullCov(out_dim, A_init=jaxinit.glorot_normal(), Sigma_ch
 
         Sigma_chol = Sigma_chol_flat[triangular_indices]
         diag = jnp.diag(Sigma_chol)
-        Sigma_chol = index_update(Sigma_chol, jnp.diag_indices(Sigma_chol.shape[0]), jnp.exp(diag))
+        Sigma_chol = jax.ops.index_update(Sigma_chol, jnp.diag_indices(Sigma_chol.shape[0]), jnp.exp(diag))
 
         key = kwargs.pop('key', None)
         if(key is not None):
@@ -85,8 +132,8 @@ def AffineGaussianPriorFullCov(out_dim, A_init=jaxinit.glorot_normal(), Sigma_ch
             noise = jnp.zeros_like(x)
 
         # Compute N(x|Az+b, Sigma)
-        # log_px = util.gaussian_diag_cov_logpdf(noise, jnp.zeros_like(noise), log_diag_cov)
-        return log_pz, x, state
+        log_px = util.gaussian_diag_cov_logpdf(noise, jnp.zeros_like(noise), log_diag_cov)
+        return log_px, x, state
 
     return init_fun, forward, inverse
 
@@ -136,12 +183,12 @@ def AffineGaussianPriorDiagCov(out_dim, A_init=jaxinit.glorot_normal(), name='un
         # In case we want to retrieve the manifold penalty
         get_manifold_penalty = kwargs.get('get_manifold_penalty', False)
         if(get_manifold_penalty):
-            _, mp, _ = tall_affine_posterior_diag_cov(x, jnp.zeros_like(x), A, log_diag_cov, 1.0)
+            _, mp, _ = util.tall_affine_posterior_diag_cov(x, jnp.zeros_like(x), A, log_diag_cov, 1.0)
             state = (mp,)
 
-        return log_px + log_hx, z, state
+        return log_hx, z, state
 
-    def inverse(params, state, log_pz, z, **kwargs):
+    def inverse(params, state, z, **kwargs):
         # Passing back through the network, we just need to sample from N(x|Az,Sigma).
         # Assume we have already sampled z ~ N(0,I)
         A, log_diag_cov = params
@@ -171,6 +218,12 @@ def AffineGaussianPriorDiagCov(out_dim, A_init=jaxinit.glorot_normal(), name='un
             # Otherwise we're just computing the manifold pdf
             log_px = -0.5*jnp.linalg.slogdet(A.T@A)[1]
 
-        return log_pz + log_px, x, state
+        return log_px, x, state
 
     return init_fun, forward, inverse
+
+################################################################################################################
+
+__all__ = ['UnitGaussianPrior',
+           'AffineGaussianPriorFullCov',
+           'AffineGaussianPriorDiagCov']

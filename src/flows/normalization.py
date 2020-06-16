@@ -3,67 +3,74 @@ import jax.nn.initializers as jaxinit
 import jax.numpy as jnp
 from jax import random
 import src.util as util
+from collections import OrderedDict
+import src.flows.base as base
 
-def ActNorm(log_s_init=jaxinit.zeros, b_init=jaxinit.zeros, name='unnamed'):
-    # language=rst
-    """
-    Act norm normalization.  Act norm requires a data seed in order to properly initialize
-    its parameters.  This will be done at runtime.
+@base.auto_batch
+def ActNorm(log_s_init=jaxinit.zeros, b_init=jaxinit.zeros, name='act_norm'):
 
-    :param axis: Batch axis
-    """
+    def forward(params, state, inputs, **kwargs):
+        x = inputs['x']
 
-    def init_fun(key, input_shape):
+        z = (x - params['b'])*jnp.exp(-params['log_s'])
+        log_det = -params['log_s'].sum()
+
+        # Need to multiply by the height/width!
+        if(z.ndim == 3):
+            height, width, channel = z.shape[-3], z.shape[-2], z.shape[-1]
+            log_det *= height*width
+
+        inputs['x'] = z
+        inputs['log_det'] = log_det
+
+        return inputs, state
+
+    def inverse(params, state, inputs, **kwargs):
+        z = inputs['x']
+        x = jnp.exp(params['log_s'])*z + params['b']
+        log_det = -params['log_s'].sum()
+
+        # Need to multiply by the height/width!
+        if(z.ndim == 4 or z.ndim == 3):
+            height, width, channel = z.shape[-3], z.shape[-2], z.shape[-1]
+            log_det *= height*width
+
+        inputs['x'] = x
+        inputs['log_det'] = log_det
+
+        return inputs, state
+
+    def init_fun(key, input_shapes):
+        x_shape = input_shapes['x']
+
         k1, k2 = random.split(key)
-        log_s = log_s_init(k1, (input_shape[-1],))
-        b = b_init(k2, (input_shape[-1],))
+        params = {'b'    : b_init(k1, x_shape),
+                  'log_s': log_s_init(k2, x_shape)}
+        state = {}
 
-        params = (log_s, b)
-        state = ()
-        return name, input_shape, params, state
+        output_shapes = {}
+        output_shapes.update(input_shapes)
+        output_shapes['log_det_shape'] = (1,)
 
-    def forward(params, state, x, **kwargs):
-        log_s, b = params
+        return base.Flow(name, input_shapes, output_shapes, params, state, forward, inverse)
 
-        # Check to see if we're seeding this function
-        actnorm_seed = kwargs.get('actnorm_seed', False)
-        if(actnorm_seed == True):
-            # The initial parameters should normalize the input
-            # We want it to be normalized over the channel dimension!
-            axes = tuple(jnp.arange(len(x.shape) - 1))
-            mean = jnp.mean(x, axis=axes)
-            std = jnp.std(x, axis=axes) + 1e-5
-            log_s = jnp.log(std)
-            b = mean
-            updated_state = (log_s, b)
-        else:
-            updated_state = ()
+    def data_dependent_init_fun(key, inputs, **kwargs):
+        x = inputs['x']
+        axes = tuple(jnp.arange(len(x.shape) - 1))
+        params = {'b'    : jnp.mean(x, axis=axes),
+                  'log_s': jnp.log(jnp.std(x, axis=axes) + 1e-5)}
+        state = {}
 
-        z = (x - b)*jnp.exp(-log_s)
-        log_det = -log_s.sum()
+        input_shapes = util.tree_shapes(inputs)
+        outputs, state = forward(params, state, inputs)
+        output_shapes = util.tree_shapes(outputs)
 
-        # Need to multiply by the height/width!
-        if(z.ndim == 4 or z.ndim == 3):
-            height, width, channel = z.shape[-3], z.shape[-2], z.shape[-1]
-            log_det *= height*width
+        return outputs, base.Flow(name, input_shapes, output_shapes, params, state, forward, inverse)
 
-        return log_det, z, updated_state
+    return init_fun, data_dependent_init_fun
 
-    def inverse(params, state, z, **kwargs):
-        log_s, b = params
-        x = jnp.exp(log_s)*z + b
-        log_det = -log_s.sum()
-
-        # Need to multiply by the height/width!
-        if(z.ndim == 4 or z.ndim == 3):
-            height, width, channel = z.shape[-3], z.shape[-2], z.shape[-1]
-            log_det *= height*width
-
-        return log_det, x, state
-
-    return init_fun, forward, inverse
-
-def BatchNorm(epsilon=1e-5, alpha=0.05, beta_init=jaxinit.zeros, gamma_init=jaxinit.zeros, name='unnamed'):
+# Don't use autobatching!
+def BatchNorm(epsilon=1e-5, alpha=0.05, beta_init=jaxinit.zeros, gamma_init=jaxinit.zeros, name='batch_norm'):
     # language=rst
     """
     Invertible batch norm.
@@ -72,15 +79,6 @@ def BatchNorm(epsilon=1e-5, alpha=0.05, beta_init=jaxinit.zeros, gamma_init=jaxi
     :param epsilon: Constant for numerical stability
     :param alpha: Parameter for exponential moving average of population parameters
     """
-    def init_fun(key, input_shape):
-        k1, k2 = random.split(key)
-        beta, log_gamma = beta_init(k1, input_shape), gamma_init(k2, input_shape)
-        running_mean = jnp.zeros(input_shape)
-        running_var = jnp.ones(input_shape)
-        params = (beta, log_gamma)
-        state = (running_mean, running_var)
-        return name, input_shape, params, state
-
     def get_bn_params(x, test, running_mean, running_var):
         """ Update the batch norm statistics """
         if(util.is_testing(test)):
@@ -93,9 +91,10 @@ def BatchNorm(epsilon=1e-5, alpha=0.05, beta_init=jaxinit.zeros, gamma_init=jaxi
 
         return (mean, var), (running_mean, running_var)
 
-    def forward(params, state, x, **kwargs):
-        beta, log_gamma = params
-        running_mean, running_var = state
+    def forward(params, state, inputs, **kwargs):
+        x = inputs['x']
+        beta, log_gamma = params['beta'], params['log_gamma']
+        running_mean, running_var = state['running_mean'], state['running_var']
 
         # Check if we're training or testing
         test = kwargs['test'] if 'test' in kwargs else util.TRAIN
@@ -107,15 +106,21 @@ def BatchNorm(epsilon=1e-5, alpha=0.05, beta_init=jaxinit.zeros, gamma_init=jaxi
         x_hat = (x - mean) / jnp.sqrt(var)
         z = jnp.exp(log_gamma)*x_hat + beta
 
-        log_det = log_gamma.sum()#*jnp.ones((z.shape[0],))
+        log_det = log_gamma.sum()
         log_det += -0.5*jnp.log(var).sum()
 
-        updated_state = (running_mean, running_var)
-        return log_det, z, updated_state
+        state['running_mean'] = running_mean
+        state['running_var'] = running_var
+        outputs = {}
+        outputs.update(inputs)
+        outputs['x'] = z
+        outputs['log_det'] = log_det
+        return outputs, state
 
-    def inverse(params, state, z, **kwargs):
-        beta, log_gamma = params
-        running_mean, running_var = state
+    def inverse(params, state, inputs, **kwargs):
+        z = inputs['x']
+        beta, log_gamma = params['beta'], params['log_gamma']
+        running_mean, running_var = state['running_mean'], state['running_var']
 
         # Check if we're training or testing
         test = kwargs['test'] if 'test' in kwargs else util.TRAIN
@@ -127,13 +132,37 @@ def BatchNorm(epsilon=1e-5, alpha=0.05, beta_init=jaxinit.zeros, gamma_init=jaxi
         z_hat = (z - beta)*jnp.exp(-log_gamma)
         x = z_hat*jnp.sqrt(var) + mean
 
-        log_det = log_gamma.sum()#*jnp.ones((z.shape[0],))
+        log_det = log_gamma.sum()
         log_det += -0.5*jnp.log(var).sum()
 
-        updated_state = (running_mean, running_var)
-        return log_det, x, updated_state
+        state['running_mean'] = running_mean
+        state['running_var'] = running_var
+        outputs = {}
+        outputs.update(inputs)
+        outputs['x'] = x
+        outputs['log_det'] = log_det
+        return outputs, state
 
-    return init_fun, forward, inverse
+    def init_fun(key, input_shapes):
+        x_shape = input_shapes['x']
+        k1, k2 = random.split(key)
+        beta, log_gamma = beta_init(k1, x_shape), gamma_init(k2, x_shape)
+        running_mean = jnp.zeros(x_shape)
+        running_var = jnp.ones(x_shape)
+
+        params = {'beta': beta,
+                  'log_gamma': log_gamma}
+
+        state = {'running_mean': running_mean,
+                 'running_var': running_var}
+
+        output_shapes = {}
+        output_shapes.update(input_shapes)
+        output_shapes['log_det_shape'] = (1,)
+
+        return base.Flow(name, input_shapes, output_shapes, params, state, forward, inverse)
+
+    return init_fun, base.data_independent_init(init_fun)
 
 ################################################################################################################
 
