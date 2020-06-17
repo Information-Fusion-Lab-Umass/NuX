@@ -76,7 +76,6 @@ def standard_layer_tests():
               nonlinearities.LeakyReLU,
               nonlinearities.Sigmoid,
               nonlinearities.Logit,
-              reshape.Flatten,
               reshape.Reverse,
               dequantize.UniformDequantization,
               normalization.ActNorm,
@@ -103,6 +102,7 @@ def image_layer_test():
               partial(conv.CircularConv, filter_size=(2, 2)),
               reshape.Squeeze,
               reshape.UnSqueeze,
+              reshape.Flatten,
               partial(reshape.Transpose, axis_order=(1, 0, 2)),
               partial(reshape.Reshape, shape=(2, -1)),
               coupling.Coupling]
@@ -117,9 +117,9 @@ def image_layer_test():
 
 def unit_test():
     key = random.PRNGKey(0)
-    # x = random.normal(key, (6, 2, 4))
-    x = random.normal(key, (10,))
+    x = random.normal(key, (6, 2, 4))
+    # x = random.normal(key, (10,))
     inputs = {'x': x}
 
-    layer = normalization.BatchNorm()
+    layer = reshape.Reverse()
     flow_test(layer, inputs, key)

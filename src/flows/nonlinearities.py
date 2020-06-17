@@ -1,18 +1,17 @@
 import jax.numpy as jnp
 import jax
+import src.flows.base as base
 
-def LeakyReLU(alpha=0.01, name='unnamed'):
+@base.auto_batch
+def LeakyReLU(alpha=0.01, name='leaky_relu'):
     # language=rst
     """
     Leaky ReLU
 
     :param alpha: Slope for negative inputs
     """
-    def init_fun(key, input_shape):
-        params, state = (), ()
-        return name, input_shape, params, state
-
-    def forward(params, state, x, **kwargs):
+    def forward(params, state, inputs, **kwargs):
+        x = inputs['x']
         z = jnp.where(x > 0, x, alpha*x)
 
         log_dx_dz = jnp.where(x > 0, 0, jnp.log(alpha))
@@ -22,9 +21,11 @@ def LeakyReLU(alpha=0.01, name='unnamed'):
             # Then we have an image and have to sum over the height and width axes
             log_det = log_det.sum(axis=(-2, -1))
 
-        return log_det, z, state
+        outputs = {'x': z, 'log_det': log_det}
+        return outputs, state
 
-    def inverse(params, state, z, **kwargs):
+    def inverse(params, state, inputs, **kwargs):
+        z = inputs['x']
         x = jnp.where(z > 0, z, z/alpha)
 
         log_dx_dz = jnp.where(z > 0, 0, jnp.log(alpha))
@@ -34,26 +35,34 @@ def LeakyReLU(alpha=0.01, name='unnamed'):
             # Then we have an image and have to sum over the height and width axes
             log_det = log_det.sum(axis=(-2, -1))
 
-        return log_det, x, state
+        outputs = {'x': x, 'log_det': log_det}
+        return outputs, state
 
-    return init_fun, forward, inverse
+    def init_fun(key, input_shapes):
+        params, state = {}, {}
+
+        output_shapes = {}
+        output_shapes.update(input_shapes)
+        output_shapes['log_det'] = (1,)
+
+        return base.Flow(name, input_shapes, output_shapes, params, state, forward, inverse)
+
+    return init_fun, base.data_independent_init(init_fun)
 
 ################################################################################################################
 
-def Sigmoid(lmbda=None, name='unnamed'):
+@base.auto_batch
+def Sigmoid(lmbda=None, name='sigmoid'):
     # language=rst
     """
-    Invertible sigmoid.  The logit function is its inverse.  Remember to apply sigmoid before logit so that
-    the input ranges are as expected!
+    Invertible sigmoid.  The logit function is its inverse.
 
     :param lmbda: For numerical stability
     """
     safe = lmbda is not None
-    def init_fun(key, input_shape):
-        params, state = (), ()
-        return name, input_shape, params, state
 
-    def forward(params, state, x, **kwargs):
+    def forward(params, state, inputs, **kwargs):
+        x = inputs['x']
         z = jax.nn.sigmoid(x)
         log_det = -(jax.nn.softplus(x) + jax.nn.softplus(-x))
 
@@ -68,9 +77,11 @@ def Sigmoid(lmbda=None, name='unnamed'):
             # Then we have an image and have to sum over the height and width axes
             log_det = log_det.sum(axis=(-2, -1))
 
-        return log_det, z, state
+        outputs = {'x': z, 'log_det': log_det}
+        return outputs, state
 
-    def inverse(params, state, z, **kwargs):
+    def inverse(params, state, inputs, **kwargs):
+        z = inputs['x']
         if(safe == True):
             z *= 1.0 - 2*lmbda
             z += lmbda
@@ -87,11 +98,22 @@ def Sigmoid(lmbda=None, name='unnamed'):
             # Then we have an image and have to sum over the height and width axes
             log_det = log_det.sum(axis=(-2, -1))
 
-        return log_det, x, state
+        outputs = {'x': x, 'log_det': log_det}
+        return outputs, state
 
-    return init_fun, forward, inverse
+    def init_fun(key, input_shapes):
+        params, state = {}, {}
 
-def Logit(lmbda=0.05, name='unnamed'):
+        output_shapes = {}
+        output_shapes.update(input_shapes)
+        output_shapes['log_det'] = (1,)
+
+        return base.Flow(name, input_shapes, output_shapes, params, state, forward, inverse)
+
+    return init_fun, base.data_independent_init(init_fun)
+
+@base.auto_batch
+def Logit(lmbda=0.05, name='logit'):
     # language=rst
     """
     Inverse of Sigmoid
@@ -99,12 +121,9 @@ def Logit(lmbda=0.05, name='unnamed'):
     :param lmbda: For numerical stability
     """
     safe = lmbda is not None
-    def init_fun(key, input_shape):
-        params, state = (), ()
-        return name, input_shape, params, state
 
-    def forward(params, state, x, **kwargs):
-
+    def forward(params, state, inputs, **kwargs):
+        x = inputs['x']
         if(safe == True):
             x *= (1.0 - 2*lmbda)
             x += lmbda
@@ -119,10 +138,12 @@ def Logit(lmbda=0.05, name='unnamed'):
         if(log_det.ndim > 1):
             # Then we have an image and have to sum more
             log_det = log_det.sum(axis=(-2, -1))
-        return log_det, z, state
 
-    def inverse(params, state, z, **kwargs):
+        outputs = {'x': z, 'log_det': log_det}
+        return outputs, state
 
+    def inverse(params, state, inputs, **kwargs):
+        z = inputs['x']
         x = jax.nn.sigmoid(z)
         log_det = (jax.nn.softplus(z) + jax.nn.softplus(-z))
 
@@ -136,9 +157,19 @@ def Logit(lmbda=0.05, name='unnamed'):
             # Then we have an image and have to sum more
             log_det = log_det.sum(axis=(-2, -1))
 
-        return log_det, x, state
+        outputs = {'x': x, 'log_det': log_det}
+        return outputs, state
 
-    return init_fun, forward, inverse
+    def init_fun(key, input_shapes):
+        params, state = {}, {}
+
+        output_shapes = {}
+        output_shapes.update(input_shapes)
+        output_shapes['log_det'] = (1,)
+
+        return base.Flow(name, input_shapes, output_shapes, params, state, forward, inverse)
+
+    return init_fun, base.data_independent_init(init_fun)
 
 ################################################################################################################
 

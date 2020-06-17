@@ -4,6 +4,7 @@ import jax.numpy as jnp
 from functools import partial
 import haiku as hk
 import src.util as util
+import src.flows.base as base
 
 @partial(jit, static_argnums=(0, 3))
 def get_knot_parameters(apply_fun, params, x, K, min_width=1e-3, min_height=1e-3, min_derivative=1e-3):
@@ -136,40 +137,57 @@ def spline_inverse(knot_x, knot_y, knot_derivs, inputs):
 
     return outputs, log_det
 
+@base.auto_batch
 def NeuralSpline(K, network=None, hidden_layer_sizes=[1024]*4, name='unnamed'):
     x1_dim = None
 
-    def init_fun(key, input_shape):
+    def forward(params, state, inputs, **kwargs):
+        x = inputs['x']
+        network_params = params['hk_params']
+
+        x1, x2 = jnp.split(x, jnp.array([x1_dim]), axis=-1)
+        knot_x, knot_y, knot_derivs = get_knot_parameters(network.apply, network_params, x1, K)
+        z2, log_det = spline_forward(knot_x, knot_y, knot_derivs, x2)
+
+        z = jnp.concatenate([x1, z2], axis=-1)
+
+        outputs = {'x': z, 'log_det': log_det}
+        return outputs, state
+
+    def inverse(params, state, inputs, **kwargs):
+        z = inputs['x']
+        network_params = params['hk_params']
+
+        z1, z2 = jnp.split(z, jnp.array([x1_dim]), axis=-1)
+        knot_x, knot_y, knot_derivs = get_knot_parameters(network.apply, network_params, z1, K)
+        x2, log_det = spline_inverse(knot_x, knot_y, knot_derivs, z2)
+
+        x = jnp.concatenate([z1, x2], axis=-1)
+
+        outputs = {'x': x, 'log_det': log_det}
+        return outputs, state
+
+    def init_fun(key, input_shapes):
+        x_shape = input_shapes['x']
         nonlocal x1_dim
-        x1_dim = input_shape[-1]//2
-        x2_dim = input_shape[-1] - x1_dim
+        x1_dim = x_shape[-1]//2
+        x2_dim = x_shape[-1] - x1_dim
         network_out_shape = (x2_dim*(3*K - 1),)
 
         nonlocal network
         if(network is None):
             network = hk.transform(lambda x, **kwargs: util.SimpleMLP(network_out_shape, hidden_layer_sizes, 'affine')(x, **kwargs))
 
-        params = network.init(key, jnp.zeros((x1_dim,)))
+        params = {'hk_params': network.init(key, jnp.zeros((x1_dim,)))}
+        state = {}
 
-        return name, input_shape, params, ()
+        output_shapes = {}
+        output_shapes.update(input_shapes)
+        output_shapes['log_det'] = (1,)
 
-    def forward(params, state, x, **kwargs):
-        x1, x2 = jnp.split(x, jnp.array([x1_dim]), axis=-1)
-        knot_x, knot_y, knot_derivs = get_knot_parameters(network.apply, params, x1, K)
-        z2, log_det = spline_forward(knot_x, knot_y, knot_derivs, x2)
+        return base.Flow(name, input_shapes, output_shapes, params, state, forward, inverse)
 
-        z = jnp.concatenate([x1, z2], axis=-1)
-        return log_det, z, state
-
-    def inverse(params, state, z, **kwargs):
-        z1, z2 = jnp.split(z, jnp.array([x1_dim]), axis=-1)
-        knot_x, knot_y, knot_derivs = get_knot_parameters(network.apply, params, z1, K)
-        x2, log_det = spline_inverse(knot_x, knot_y, knot_derivs, z2)
-
-        x = jnp.concatenate([z1, x2], axis=-1)
-        return log_det, x, state
-
-    return init_fun, forward, inverse
+    return init_fun, base.data_independent_init(init_fun)
 
 ################################################################################################################
 

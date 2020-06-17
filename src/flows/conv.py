@@ -1,7 +1,8 @@
 import jax.numpy as jnp
 import jax.nn.initializers as jaxinit
-from jax import vmap
+from jax import vmap, jit
 from functools import partial
+import src.flows.base as base
 
 fft_channel_vmap = vmap(jnp.fft.fftn, in_axes=(2,), out_axes=2)
 ifft_channel_vmap = vmap(jnp.fft.ifftn, in_axes=(2,), out_axes=2)
@@ -10,29 +11,23 @@ fft_double_channel_vmap = vmap(fft_channel_vmap, in_axes=(2,), out_axes=2)
 inv_height_vmap = vmap(jnp.linalg.inv)
 inv_height_width_vmap = vmap(inv_height_vmap)
 
+@jit
 def complex_slogdet(x):
     D = jnp.block([[x.real, -x.imag], [x.imag, x.real]])
     return 0.25*jnp.linalg.slogdet(D@D.T)[1]
-slogdet_height_width_vmap = vmap(vmap(complex_slogdet))
+slogdet_height_width_vmap = jit(vmap(vmap(complex_slogdet)))
 
-def CircularConv(filter_size, kernel_init=jaxinit.glorot_normal(), name='unnamed'):
+@base.auto_batch
+def CircularConv(filter_size, kernel_init=jaxinit.glorot_normal(), name='circular_conv'):
     # language=rst
     """
     Invertible circular convolution
 
     :param filter_size: (height, width) of kernel
     """
-    def init_fun(key, input_shape):
-        height, width, channel = input_shape
-        kernel = kernel_init(key, filter_size + (channel, channel))
-        assert filter_size[0] <= height, 'filter_size: %s, input_shape: %s'%(filter_size, input_shape)
-        assert filter_size[1] <= width, 'filter_size: %s, input_shape: %s'%(filter_size, input_shape)
-        params = (kernel,)
-        state = ()
-        return name, input_shape, params, state
-
-    def forward(params, state, x, **kwargs):
-        kernel, = params
+    def forward(params, state, inputs, **kwargs):
+        x = inputs['x']
+        kernel = params['kernel']
 
         # http://developer.download.nvidia.com/compute/cuda/2_2/sdk/website/projects/convolutionFFT2D/doc/convolutionFFT2D.pdf
         x_h, x_w, x_c = x.shape
@@ -55,10 +50,12 @@ def CircularConv(filter_size, kernel_init=jaxinit.glorot_normal(), name='unnamed
         # The log determinant is the log det of the frequencies over the channel dims
         log_det = slogdet_height_width_vmap(kernel_fft).sum()
 
-        return log_det, z, state
+        outputs = {'x': z, 'log_det': log_det}
+        return outputs, state
 
-    def inverse(params, state, z, **kwargs):
-        kernel, = params
+    def inverse(params, state, inputs, **kwargs):
+        z = inputs['x']
+        kernel = params['kernel']
 
         z_h, z_w, z_c = z.shape
         kernel_h, kernel_w, kernel_c_out, kernel_c_in = kernel.shape
@@ -84,9 +81,25 @@ def CircularConv(filter_size, kernel_init=jaxinit.glorot_normal(), name='unnamed
         # The log determinant is the log det of the frequencies over the channel dims
         log_det = slogdet_height_width_vmap(kernel_fft).sum()
 
-        return log_det, x, state
+        outputs = {'x': x, 'log_det': log_det}
+        return outputs, state
 
-    return init_fun, forward, inverse
+    def init_fun(key, input_shapes):
+        x_shape = input_shapes['x']
+        height, width, channel = x_shape
+        kernel = kernel_init(key, filter_size + (channel, channel))
+        assert filter_size[0] <= height, 'filter_size: %s, x_shape: %s'%(filter_size, x_shape)
+        assert filter_size[1] <= width, 'filter_size: %s, x_shape: %s'%(filter_size, x_shape)
+        params = {'kernel': kernel}
+        state = {}
+
+        output_shapes = {}
+        output_shapes.update(input_shapes)
+        output_shapes['log_det'] = (1,)
+
+        return base.Flow(name, input_shapes, output_shapes, params, state, forward, inverse)
+
+    return init_fun, base.data_independent_init(init_fun)
 
 ################################################################################################################
 

@@ -2,55 +2,69 @@ import jax.numpy as jnp
 from jax import vmap
 from functools import partial
 import src.util as util
+import src.flows.base as base
 
 ################################################################################################################
 
-def Squeeze(name='unnamed'):
+@base.auto_batch
+def Squeeze(name='squeeze'):
     # language=rst
     """
     """
-    def init_fun(key, input_shape):
-        H, W, C = input_shape
+    def forward(params, state, inputs, **kwargs):
+        x = inputs['x']
+        z = util.dilated_squeeze(x, (2, 2), (1, 1))
+        outputs = {'x': z, 'log_det': 0.0}
+        return outputs, state
+
+    def inverse(params, state, inputs, **kwargs):
+        z = inputs['x']
+        x = util.dilated_unsqueeze(z, (2, 2), (1, 1))
+        outputs = {'x': x, 'log_det': 0.0}
+        return outputs, state
+
+    def init_fun(key, input_shapes):
+        H, W, C = input_shapes['x']
         assert H%2 == 0
         assert W%2 == 0
-        output_shape = (H//2, W//2, C*4)
-        params, state = (), ()
-        return name, output_shape, params, state
+        output_shapes = {'x': (H//2, W//2, C*4)}
+        output_shapes['log_det'] = (1,)
+        params, state = {}, {}
+        return base.Flow(name, input_shapes, output_shapes, params, state, forward, inverse)
 
-    def forward(params, state, x, **kwargs):
-        z = util.dilated_squeeze(x, (2, 2), (1, 1))
-        return 0.0, z, state
+    return init_fun, base.data_independent_init(init_fun)
 
-    def inverse(params, state, z, **kwargs):
-        x = util.dilated_unsqueeze(z, (2, 2), (1, 1))
-        return 0.0, x, state
-
-    return init_fun, forward, inverse
-
-def UnSqueeze(name='unnamed'):
+@base.auto_batch
+def UnSqueeze(name='unsqueeze'):
     # language=rst
     """
     """
-    def init_fun(key, input_shape):
-        H, W, C = input_shape
-        assert C%4 == 0
-        output_shape = (H*2, W*2, C//4)
-        params, state = (), ()
-        return name, output_shape, params, state
-
-    def forward(params, state, x, **kwargs):
+    def forward(params, state, inputs, **kwargs):
+        x = inputs['x']
         z = util.dilated_unsqueeze(x, (2, 2), (1, 1))
-        return 0.0, z, state
+        outputs = {'x': z, 'log_det': 0.0}
+        return outputs, state
 
-    def inverse(params, state, z, **kwargs):
+    def inverse(params, state, inputs, **kwargs):
+        z = inputs['x']
         x = util.dilated_squeeze(z, (2, 2), (1, 1))
-        return 0.0, x, state
+        outputs = {'x': x, 'log_det': 0.0}
+        return outputs, state
 
-    return init_fun, forward, inverse
+    def init_fun(key, input_shapes):
+        H, W, C = input_shapes['x']
+        assert C%4 == 0
+        output_shapes = {'x': (H*2, W*2, C//4)}
+        output_shapes['log_det'] = (1,)
+        params, state = {}, {}
+        return base.Flow(name, input_shapes, output_shapes, params, state, forward, inverse)
+
+    return init_fun, base.data_independent_init(init_fun)
 
 ################################################################################################################
 
-def Transpose(axis_order, name='unnamed'):
+@base.auto_batch
+def Transpose(axis_order, name='transpose'):
     # language=rst
     """
     Transpose an input
@@ -58,32 +72,39 @@ def Transpose(axis_order, name='unnamed'):
     order = None
     order_inverse = None
 
-    def init_fun(key, input_shape):
+    def forward(params, state, inputs, **kwargs):
+        x = inputs['x']
+        z = x.transpose(order)
+        outputs = {'x': z, 'log_det': 0.0}
+        return outputs, state
+
+    def inverse(params, state, inputs, **kwargs):
+        z = inputs['x']
+        x = z.transpose(order_inverse)
+        outputs = {'x': x, 'log_det': 0.0}
+        return outputs, state
+
+    def init_fun(key, input_shapes):
+        x_shape = input_shapes['x']
         nonlocal order
         order = [ax%len(axis_order) for ax in axis_order]
-        assert len(order) == len(input_shape)
+        assert len(order) == len(x_shape)
         assert len(set(order)) == len(order)
-        params, state = (), ()
-        output_shape = [input_shape[ax] for ax in order]
 
         nonlocal order_inverse
         order_inverse = [order.index(i) for i in range(len(order))]
 
-        return name, output_shape, params, state
+        output_shapes = {'x': [x_shape[ax] for ax in order]}
+        output_shapes['log_det'] = (1,)
+        params, state = {}, {}
+        return base.Flow(name, input_shapes, output_shapes, params, state, forward, inverse)
 
-    def forward(params, state, x, **kwargs):
-        z = x.transpose(order)
-        return 0.0, z, state
-
-    def inverse(params, state, z, **kwargs):
-        x = z.transpose(order_inverse)
-        return 0.0, x, state
-
-    return init_fun, forward, inverse
+    return init_fun, base.data_independent_init(init_fun)
 
 ################################################################################################################
 
-def Reshape(shape, name='unnamed'):
+@base.auto_batch
+def Reshape(shape, name='reshape'):
     # language=rst
     """
     Prior for the normalizing flow.
@@ -96,74 +117,98 @@ def Reshape(shape, name='unnamed'):
     assert len([1 for s in shape if s < 0]) < 2, 'Can only have 1 negative shape'
     has_negative1 = jnp.any(jnp.array(shape) < 0)
 
-    def init_fun(key, input_shape):
+    def forward(params, state, inputs, **kwargs):
+        x = inputs['x']
+        z = x.reshape(shape)
+        outputs = {'x': z, 'log_det': 0.0}
+        return outputs, state
+
+    def inverse(params, state, inputs, **kwargs):
+        z = inputs['x']
+        x = z.reshape(original_shape)
+        outputs = {'x': x, 'log_det': 0.0}
+        return outputs, state
+
+    def init_fun(key, input_shapes):
+        x_shape = input_shapes['x']
         # If there is a negative 1, then figure out what to do
         nonlocal shape
         if(has_negative1):
-            total_dim = jnp.prod(input_shape)
+            total_dim = jnp.prod(x_shape)
             given_dim = jnp.prod([s for s in shape if s > 0])
             remaining_dim = total_dim//given_dim
             shape = [s if s > 0 else remaining_dim for s in shape]
 
         nonlocal original_shape
-        original_shape = input_shape
-        assert jnp.prod(input_shape) == jnp.prod(shape), 'input_shape %s shape: %s'%(str(input_shape), str(shape))
-        params, state = (), ()
-        return name, shape, params, state
+        original_shape = x_shape
+        assert jnp.prod(x_shape) == jnp.prod(shape), 'x_shape %s shape: %s'%(str(x_shape), str(shape))
 
-    def forward(params, state, x, **kwargs):
-        z = x.reshape(shape)
-        return 0.0, z, state
+        output_shapes = {'x': shape}
+        output_shapes['log_det'] = (1,)
+        params, state = {}, {}
+        return base.Flow(name, input_shapes, output_shapes, params, state, forward, inverse)
 
-    def inverse(params, state, z, **kwargs):
-        x = z.reshape(original_shape)
-        return 0.0, x, state
-
-    return init_fun, forward, inverse
+    return init_fun, base.data_independent_init(init_fun)
 
 ################################################################################################################
 
-def Flatten(name='unnamed'):
+@base.auto_batch
+def Flatten(name='flatten'):
     # Need to keep track of the original shape in order to invert
     original_shape = None
     shape = None
 
-    def init_fun(key, input_shape):
-        nonlocal shape, original_shape
-        original_shape = input_shape
-        shape = (jnp.prod(input_shape),)
-        assert jnp.prod(input_shape) == jnp.prod(shape), 'input_shape %s shape: %s'%(str(input_shape), str(shape))
-        params, state = (), ()
-        return name, shape, params, state
-
-    def forward(params, state, x, **kwargs):
+    def forward(params, state, inputs, **kwargs):
+        x = inputs['x']
         z = x.reshape(shape)
-        return 0.0, z, state
+        outputs = {'x': z, 'log_det': 0.0}
+        return outputs, state
 
-    def inverse(params, state, z, **kwargs):
+    def inverse(params, state, inputs, **kwargs):
+        z = inputs['x']
         x = z.reshape(original_shape)
-        return 0.0, x, state
+        outputs = {'x': x, 'log_det': 0.0}
+        return outputs, state
 
-    return init_fun, forward, inverse
+    def init_fun(key, input_shapes):
+        x_shape = input_shapes['x']
+        nonlocal shape, original_shape
+        original_shape = x_shape
+        shape = (jnp.prod(x_shape),)
+        assert jnp.prod(x_shape) == jnp.prod(shape), 'x_shape %s shape: %s'%(str(x_shape), str(shape))
+
+        output_shapes = {'x': shape}
+        output_shapes['log_det'] = (1,)
+        params, state = {}, {}
+        return base.Flow(name, input_shapes, output_shapes, params, state, forward, inverse)
+
+    return init_fun, base.data_independent_init(init_fun)
 
 ################################################################################################################
 
-def Reverse(name='unnamed'):
+@base.auto_batch
+def Reverse(name='reverse'):
     # language=rst
     """
     Reverse an input.
     """
-    def init_fun(key, input_shape):
-        params, state = (), ()
-        return name, input_shape, params, state
+    def forward(params, state, inputs, **kwargs):
+        x = inputs['x']
+        outputs = {'x': x[...,::-1], 'log_det': 0.0}
+        return outputs, state
 
-    def forward(params, state, x, **kwargs):
-        return 0.0, x[...,::-1], state
+    def inverse(params, state, inputs, **kwargs):
+        z = inputs['x']
+        outputs = {'x': z[...,::-1], 'log_det': 0.0}
+        return outputs, state
 
-    def inverse(params, state, z, **kwargs):
-        return 0.0, z[...,::-1], state
+    def init_fun(key, input_shapes):
+        params, state = {}, {}
+        output_shapes = {}
+        output_shapes.update(input_shapes)
+        return base.Flow(name, input_shapes, output_shapes, params, state, forward, inverse)
 
-    return init_fun, forward, inverse
+    return init_fun, base.data_independent_init(init_fun)
 
 ################################################################################################################
 

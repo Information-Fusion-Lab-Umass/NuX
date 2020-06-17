@@ -3,7 +3,6 @@ import jax.nn.initializers as jaxinit
 import jax.numpy as jnp
 from jax import random
 import src.util as util
-from collections import OrderedDict
 import src.flows.base as base
 
 @base.auto_batch
@@ -20,10 +19,8 @@ def ActNorm(log_s_init=jaxinit.zeros, b_init=jaxinit.zeros, name='act_norm'):
             height, width, channel = z.shape[-3], z.shape[-2], z.shape[-1]
             log_det *= height*width
 
-        inputs['x'] = z
-        inputs['log_det'] = log_det
-
-        return inputs, state
+        outputs = {'x': z, 'log_det': log_det}
+        return outputs, state
 
     def inverse(params, state, inputs, **kwargs):
         z = inputs['x']
@@ -31,14 +28,12 @@ def ActNorm(log_s_init=jaxinit.zeros, b_init=jaxinit.zeros, name='act_norm'):
         log_det = -params['log_s'].sum()
 
         # Need to multiply by the height/width!
-        if(z.ndim == 4 or z.ndim == 3):
+        if(z.ndim == 3):
             height, width, channel = z.shape[-3], z.shape[-2], z.shape[-1]
             log_det *= height*width
 
-        inputs['x'] = x
-        inputs['log_det'] = log_det
-
-        return inputs, state
+        outputs = {'x': x, 'log_det': log_det}
+        return outputs, state
 
     def init_fun(key, input_shapes):
         x_shape = input_shapes['x']
@@ -50,7 +45,7 @@ def ActNorm(log_s_init=jaxinit.zeros, b_init=jaxinit.zeros, name='act_norm'):
 
         output_shapes = {}
         output_shapes.update(input_shapes)
-        output_shapes['log_det_shape'] = (1,)
+        output_shapes['log_det'] = (1,)
 
         return base.Flow(name, input_shapes, output_shapes, params, state, forward, inverse)
 
@@ -111,10 +106,7 @@ def BatchNorm(epsilon=1e-5, alpha=0.05, beta_init=jaxinit.zeros, gamma_init=jaxi
 
         state['running_mean'] = running_mean
         state['running_var'] = running_var
-        outputs = {}
-        outputs.update(inputs)
-        outputs['x'] = z
-        outputs['log_det'] = log_det
+        outputs = {'x': z, 'log_det': log_det}
         return outputs, state
 
     def inverse(params, state, inputs, **kwargs):
@@ -137,10 +129,7 @@ def BatchNorm(epsilon=1e-5, alpha=0.05, beta_init=jaxinit.zeros, gamma_init=jaxi
 
         state['running_mean'] = running_mean
         state['running_var'] = running_var
-        outputs = {}
-        outputs.update(inputs)
-        outputs['x'] = x
-        outputs['log_det'] = log_det
+        outputs = {'x': x, 'log_det': log_det}
         return outputs, state
 
     def init_fun(key, input_shapes):
@@ -158,7 +147,7 @@ def BatchNorm(epsilon=1e-5, alpha=0.05, beta_init=jaxinit.zeros, gamma_init=jaxi
 
         output_shapes = {}
         output_shapes.update(input_shapes)
-        output_shapes['log_det_shape'] = (1,)
+        output_shapes['log_det'] = (1,)
 
         return base.Flow(name, input_shapes, output_shapes, params, state, forward, inverse)
 

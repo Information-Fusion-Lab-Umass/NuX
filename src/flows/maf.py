@@ -3,6 +3,7 @@ import jax.numpy as jnp
 from jax import random
 import haiku as hk
 import jax
+import src.flows.base as base
 
 class GaussianMADE(hk.Module):
 
@@ -79,11 +80,12 @@ class GaussianMADE(hk.Module):
 
 ################################################################################################################
 
+@base.auto_batch
 def MAF(hidden_layer_sizes,
         reverse=False,
         method='sequential',
         key=None,
-        name='unnamed',
+        name='maf',
         **kwargs):
     # language=rst
     """
@@ -98,9 +100,43 @@ def MAF(hidden_layer_sizes,
     network = None
     input_sel = None
 
-    def init_fun(key, input_shape):
-        assert len(input_shape) == 1
-        dim = input_shape[0]
+    def forward(params, state, inputs, **kwargs):
+        x = inputs['x']
+        network_params = params['hk_params']
+
+        mu, alpha = network.apply(network_params, x)
+        z = (x - mu)*jnp.exp(-alpha)
+        log_det = -alpha.sum(axis=-1)
+
+        outputs = {'x': z, 'log_det': log_det}
+        return outputs, state
+
+    def inverse(params, state, inputs, **kwargs):
+        z = inputs['x']
+        network_params = params['hk_params']
+
+        x = jnp.zeros_like(z)
+        u = z
+
+        # For each MADE block, need to build output a dimension at a time
+        def carry_body(carry, inputs):
+            x, idx = carry, inputs
+            mu, alpha = network.apply(network_params, x)
+            w = mu + u*jnp.exp(alpha)
+            x = jax.ops.index_update(x, idx, w[idx])
+            return x, alpha[idx]
+
+        indices = jnp.nonzero(input_sel == (1 + np.arange(x.shape[0])[:,None]))[1]
+        x, alpha_diag = jax.lax.scan(carry_body, x, indices)
+        log_det = -alpha_diag.sum(axis=-1)
+
+        outputs = {'x': x, 'log_det': log_det}
+        return outputs, state
+
+    def init_fun(key, input_shapes):
+        x_shape = input_shapes['x']
+        assert len(x_shape) == 1
+        dim = x_shape[0]
 
         # We can either assign indices randomly or sequentially.  FOR LOW DIMENSIONS USE SEQUENTIAL!!!
         nonlocal input_sel
@@ -120,34 +156,15 @@ def MAF(hidden_layer_sizes,
         network = hk.transform(lambda x: GaussianMADE(input_sel, dim, hidden_layer_sizes, reverse, method, name)(x))
 
         # Initialize it.  Remember that this function expects an unbatched input
-        params = network.init(key, jnp.zeros(input_shape))
+        params = {'hk_params': network.init(key, jnp.zeros(x_shape))}
+        state = {}
 
-        return name, input_shape, params, ()
+        output_shapes = {}
+        output_shapes.update(input_shapes)
+        output_shapes['log_det'] = (1,)
 
-    def forward(params, state, x, **kwargs):
-        mu, alpha = network.apply(params, x)
-        z = (x - mu)*jnp.exp(-alpha)
-        log_det = -alpha.sum(axis=-1)
-        return log_det, z, state
+        return base.Flow(name, input_shapes, output_shapes, params, state, forward, inverse)
 
-    def inverse(params, state, z, **kwargs):
-        x = jnp.zeros_like(z)
-        u = z
-
-        # For each MADE block, need to build output a dimension at a time
-        def carry_body(carry, inputs):
-            x, idx = carry, inputs
-            mu, alpha = network.apply(params, x)
-            w = mu + u*jnp.exp(alpha)
-            x = jax.ops.index_update(x, idx, w[idx])
-            return x, alpha[idx]
-
-        indices = jnp.nonzero(input_sel == (1 + np.arange(x.shape[0])[:,None]))[1]
-        x, alpha_diag = jax.lax.scan(carry_body, x, indices)
-        log_det = -alpha_diag.sum(axis=-1)
-
-        return log_det, x, state
-
-    return init_fun, forward, inverse
+    return init_fun, base.data_independent_init(init_fun)
 
 __all__ = ['MAF']
