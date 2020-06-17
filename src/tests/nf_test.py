@@ -47,8 +47,8 @@ def flow_test(layer, inputs, key):
     outputs, _ = flow.forward(flow.params, flow.state, inputs)
     reconstr, _ = flow.inverse(flow.params, flow.state, outputs)
 
-    assert jnp.allclose(inputs['x'], reconstr['x'])
-    assert jnp.allclose(outputs['log_det'], reconstr['log_det'])
+    assert jnp.allclose(inputs['x'], reconstr['x'], atol=1e-04)
+    assert jnp.allclose(outputs['log_det'], reconstr['log_det'], atol=1e-04)
 
     # Ensure that it works with batches
     inputs_batched = tree_util.tree_map(lambda x: x[None], inputs)
@@ -66,7 +66,7 @@ def flow_test(layer, inputs, key):
         return 0.5*jnp.linalg.slogdet(jac.T@jac)[1]
 
     actual_log_det = single_elt_logdet(inputs['x'])
-    assert jnp.allclose(actual_log_det, outputs['log_det'])
+    assert jnp.allclose(actual_log_det, outputs['log_det'], atol=1e-04)
 
 def standard_layer_tests():
     layers = [affine.AffineLDU,
@@ -117,9 +117,9 @@ def image_layer_test():
 
 def unit_test():
     key = random.PRNGKey(0)
-    # x = random.normal(key, (6, 2, 4))
-    x = random.normal(key, (10,))
+    x = random.normal(key, (6, 2, 4))
+    #x = random.normal(key, (10,))
     inputs = {'x': x}
 
-    layer = normalization.BatchNorm()
+    layer = affine.LocalDense()
     flow_test(layer, inputs, key)

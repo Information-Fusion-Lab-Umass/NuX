@@ -50,7 +50,7 @@ def ActNorm(log_s_init=jaxinit.zeros, b_init=jaxinit.zeros, name='act_norm'):
 
         output_shapes = {}
         output_shapes.update(input_shapes)
-        output_shapes['log_det_shape'] = (1,)
+        output_shapes['log_det'] = (1,)
 
         return base.Flow(name, input_shapes, output_shapes, params, state, forward, inverse)
 
@@ -158,7 +158,7 @@ def BatchNorm(epsilon=1e-5, alpha=0.05, beta_init=jaxinit.zeros, gamma_init=jaxi
 
         output_shapes = {}
         output_shapes.update(input_shapes)
-        output_shapes['log_det_shape'] = (1,)
+        output_shapes['log_det'] = (1,)
 
         return base.Flow(name, input_shapes, output_shapes, params, state, forward, inverse)
 
