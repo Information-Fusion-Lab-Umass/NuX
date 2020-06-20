@@ -15,6 +15,8 @@ def auto_batch(layer):
     @wraps(layer)
     def call_layer(*args, **kwargs):
 
+        name = kwargs.get('name')
+
         _init_fun = layer(*args, **kwargs)
 
         def init_fun(key, inputs, batched=False, **kwargs):
@@ -30,7 +32,10 @@ def auto_batch(layer):
                 expected_dim = expected_input_x_dim if reverse == False else expected_output_x_dim
 
                 if(input_dim > expected_dim):
-                    return vmap(partial(apply_fun, params, state, reverse=reverse, **kwargs))(inputs)
+                    outputs, updated_state = vmap(partial(apply_fun, params, state, reverse=reverse, **kwargs))(inputs)
+                    # Because we're using auto batch, we should expect that the state update doesn't depend on the batch
+                    updated_state = jax.tree_util.tree_map(lambda x: x[0], updated_state)
+                    return outputs, updated_state
 
                 return flow.apply(params, state, inputs, reverse=reverse, **kwargs)
 
