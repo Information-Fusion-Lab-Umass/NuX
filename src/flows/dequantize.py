@@ -11,7 +11,7 @@ def UniformDequantization(noise_scale=None, scale=256.0, name='uniform_dequantiz
     :param noise_scale: An array that tells us how much noise to add to each dimension
     :param scale: What to divide the image by
     """
-    def forward(params, state, inputs, **kwargs):
+    def apply_fun(params, state, inputs, reverse=False, **kwargs):
         x = inputs['x']
 
         # Add uniform noise
@@ -25,25 +25,15 @@ def UniformDequantization(noise_scale=None, scale=256.0, name='uniform_dequantiz
         log_det = -jnp.log(scale)
         log_det *= jnp.prod(x.shape)
 
-        z = (x + noise)/scale
+        if(reverse == False):
+            z = (x + noise)/scale
+        else:
+            z = x*scale
 
         outputs = {'x': z, 'log_det': log_det}
         return outputs, state
 
-    def inverse(params, state, inputs, **kwargs):
-        z = inputs['x']
-
-        # Put the image back on the set of integers between 0 and 255
-        x = z*scale
-        # x = jnp.floor(z*scale).astype(jnp.int32)
-
-        log_det = -jnp.log(scale)
-        log_det *= jnp.prod(z.shape)
-
-        outputs = {'x': x, 'log_det': log_det}
-        return outputs, state
-
-    def init_fun(key, input_shapes):
+    def create_params_and_state(key, input_shapes):
         x_shape = input_shapes['x']
         params, state = {}, {}
 
@@ -53,13 +43,9 @@ def UniformDequantization(noise_scale=None, scale=256.0, name='uniform_dequantiz
             assert noise_scale.shape == x_shape
             state['noise_scale_array'] = noise_scale
 
-        output_shapes = {}
-        output_shapes.update(input_shapes)
-        output_shapes['log_det'] = (1,)
+        return params, state
 
-        return base.Flow(name, input_shapes, output_shapes, params, state, forward, inverse)
-
-    return init_fun, base.data_independent_init(init_fun)
+    return base.data_independent_init(name, apply_fun, create_params_and_state)
 
 ################################################################################################################
 

@@ -16,6 +16,8 @@ import src.flows.compose as compose
 import src.flows.maf as maf
 import src.flows.coupling as coupling
 import src.flows.spline as spline
+import src.flows.basic as basic
+import src.flows.base as base
 
 def flow_test(layer, inputs, key):
     # language=rst
@@ -27,37 +29,38 @@ def flow_test(layer, inputs, key):
     :param x: A batched input
     :param key: JAX random key
     """
-    init_fun, data_dependent_init_fun = layer
-
+    init_fun = layer
     input_shapes = util.tree_shapes(inputs)
 
     # Initialize the flow
-    flow = init_fun(key, input_shapes)
-    params_structure = tree_util.tree_structure(flow.params)
-    state_structure = tree_util.tree_structure(flow.state)
+    inputs_batched = tree_util.tree_map(lambda x: jnp.broadcast_to(x[None], (8,) + x.shape), inputs)
+    _, flow = init_fun(key, inputs, batched=False)
+    _, flow_batched = init_fun(key, inputs_batched, batched=True)
 
-    # Ensure that data dependent init produces the same output shapes
-    _, flow_ddi = data_dependent_init_fun(key, inputs)
-    params_structure_ddi = tree_util.tree_structure(flow_ddi.params)
-    state_structure_ddi = tree_util.tree_structure(flow_ddi.state)
+    # _, flow = init_fun(key, inputs_batched)
+    params_structure_ddi = tree_util.tree_structure(flow.params)
+    state_structure_ddi = tree_util.tree_structure(flow.state)
 
-    assert params_structure == params_structure_ddi
-    assert state_structure == state_structure_ddi
-
-    outputs, _ = flow.forward(flow.params, flow.state, inputs)
-    reconstr, _ = flow.inverse(flow.params, flow.state, outputs)
+    # Make sure the reconstructions are correct
+    outputs, _ = flow.apply(flow.params, flow.state, inputs, test=util.TEST)
+    reconstr, _ = flow.apply(flow.params, flow.state, outputs, reverse=True, test=util.TEST)
 
     assert jnp.allclose(inputs['x'], reconstr['x'], atol=1e-04)
     assert jnp.allclose(outputs['log_det'], reconstr['log_det'], atol=1e-04)
+    print('Passed reconstruction tests')
 
-    # Ensure that it works with batches
-    inputs_batched = tree_util.tree_map(lambda x: x[None], inputs)
-    flow.forward(flow.params, flow.state, inputs_batched)
+    # Make sure the batched reconstructions are correct
+    batched_outputs, _ = flow.apply(flow.params, flow.state, inputs_batched, test=util.TEST)
+    batched_reconstr, _ = flow.apply(flow.params, flow.state, batched_outputs, reverse=True, test=util.TEST)
+
+    assert jnp.allclose(inputs_batched['x'], batched_reconstr['x'], atol=1e-04)
+    assert jnp.allclose(batched_outputs['log_det'], batched_reconstr['log_det'], atol=1e-04)
+    print('Passed batched reconstruction tests')
 
     # Make sure that the log det terms are correct
     def z_from_x(unflatten, x_flat):
         x = unflatten(x_flat)
-        outputs, _ = flow.forward(flow.params, flow.state, {'x': x})
+        outputs, _ = flow.apply(flow.params, flow.state, {'x': x}, test=util.TEST)
         return ravel_pytree(outputs['x'])[0]
 
     def single_elt_logdet(x):
@@ -67,6 +70,7 @@ def flow_test(layer, inputs, key):
 
     actual_log_det = single_elt_logdet(inputs['x'])
     assert jnp.allclose(actual_log_det, outputs['log_det'], atol=1e-04)
+    print('Passed log det tests')
 
 def standard_layer_tests():
     layers = [affine.AffineLDU,
@@ -79,20 +83,20 @@ def standard_layer_tests():
               reshape.Reverse,
               dequantize.UniformDequantization,
               normalization.ActNorm,
-              normalization.BatchNorm,
-              compose.Identity,
-              compose.ReverseInputs,
+              # normalization.BatchNorm,
+              basic.Identity,
               partial(maf.MAF, [1024, 1024]),
               coupling.Coupling]
 
     key = random.PRNGKey(0)
     x = random.normal(key, (10,))
     x = jax.nn.softmax(x)
+    inputs = {'x': x}
 
     for layer in layers:
         print()
         print(layer)
-        flow_test(layer(), x, key)
+        flow_test(layer(), inputs, key)
 
 def image_layer_test():
     layers = [affine.OnebyOneConvLDU,
@@ -109,17 +113,93 @@ def image_layer_test():
 
     key = random.PRNGKey(0)
     x_img = random.normal(key, (6, 2, 4))
+    inputs = {'x': x_img}
 
     for layer in layers:
         print()
         print(layer)
-        flow_test(layer(), x_img, key)
+        flow_test(layer(), inputs, key)
 
 def unit_test():
     key = random.PRNGKey(0)
-    x = random.normal(key, (6, 2, 4))
-    #x = random.normal(key, (10,))
+    x = random.normal(key, (4, 6, 8))
+    # x = random.normal(key, (10,))
+    x = jax.nn.softmax(x)
     inputs = {'x': x}
 
-    layer = affine.LocalDense()
-    flow_test(layer, inputs, key)
+    # flow = affine.AffineDense()
+    # flow = normalization.ActNorm()
+
+    # flow = compose.sequential(affine.AffineDense())
+    # flow = compose.sequential(normalization.ActNorm())
+
+    # flow = compose.sequential(affine.AffineDense(),
+    #                   normalization.ActNorm())
+
+    # flow = compose.sequential(normalization.ActNorm(),
+    #                   affine.AffineDense())
+
+    # for flow in [flow1, flow2, flow3, flow4, flow5, flow6]:
+    #     flow_test(flow, inputs, key)
+
+    # flow = compose.sequential(compose.ChainRule(2, factor=True),
+    #                   base.Debug('a'),
+    #                   compose.ChainRule(2, factor=False))
+
+    # flow = compose.sequential(compose.ChainRule(2, factor=True),
+    #                   compose.ChainRule(2, factor=False),
+    #                   compose.sequential(affine.AffineDense(),
+    #                              normalization.ActNorm()),
+    #                   compose.sequential(affine.AffineDense(),
+    #                              normalization.ActNorm()))
+
+    # flow = compose.sequential(compose.ChainRule(2, factor=True),
+    #                   compose.factored(base.Debug('a'),
+    #                            base.Debug('b')),
+    #                   compose.ChainRule(2, factor=False))
+
+    # flow = compose.sequential(compose.ChainRule(2, factor=True),
+    #                   compose.factored(affine.AffineDense(),
+    #                            affine.AffineDense()),
+    #                   compose.ChainRule(2, factor=False))
+
+    # flow = compose.sequential(compose.ChainRule(2, factor=True),
+    #                           compose.factored(normalization.ActNorm(),
+    #                                            affine.AffineDense()),
+    #                           compose.ChainRule(2, factor=False))
+
+    # flow = compose.sequential(compose.ChainRule(2, factor=True),
+    #                           compose.factored(normalization.ActNorm(),
+    #                                            normalization.ActNorm()),
+    #                           compose.ChainRule(2, factor=False))
+
+    # flow = compose.sequential(compose.ChainRule(2, factor=True),
+    #                   compose.factored(compose.sequential(base.Debug('a'),
+    #                                       compose.ChainRule(2, factor=True),
+    #                                       compose.factored(base.Debug('b'),
+    #                                                ActNorm()),
+    #                                       compose.ChainRule(2, factor=False)),
+    #                            base.Debug('c')),
+    #                   compose.ChainRule(2, factor=False))
+
+    # flow = compose.sequential(reshape.Squeeze(),
+    #                           reshape.UnSqueeze())
+
+    # flow = compose.sequential(compose.ChainRule(2, factor=True),
+    #                           compose.factored(normalization.ActNorm(),
+    #                                            affine.LocalDense()),
+    #                           compose.ChainRule(2, factor=False))
+
+    # flow = nonlinearities.Logit()
+
+    flow = compose.sequential(compose.ChainRule(2, factor=True),
+                              compose.ChainRule(2, factor=False))
+
+    flow = compose.sequential(compose.ChainRule(2, factor=True),
+                              compose.factored(affine.OnebyOneConvLAX(),
+                                               base.Debug('b')),
+                              compose.ChainRule(2, factor=False))
+
+    # flow = compose.sequential(affine.OnebyOneConvLAX())
+
+    flow_test(flow, inputs, key)

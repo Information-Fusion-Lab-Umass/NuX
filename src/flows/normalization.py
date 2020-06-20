@@ -1,68 +1,80 @@
 import jax
 import jax.nn.initializers as jaxinit
 import jax.numpy as jnp
-from jax import random
+from jax import random, vmap, jit
+from functools import partial
 import src.util as util
 import src.flows.base as base
 
 @base.auto_batch
 def ActNorm(log_s_init=jaxinit.zeros, b_init=jaxinit.zeros, name='act_norm'):
+    # language=rst
+    """
+    Act normalization
+    """
+    multiply_by = None
 
-    def forward(params, state, inputs, **kwargs):
+    def apply_fun(params, state, inputs, reverse=False, **kwargs):
         x = inputs['x']
 
-        z = (x - params['b'])*jnp.exp(-params['log_s'])
+        if(reverse == False):
+            z = (x - params['b'])*jnp.exp(-params['log_s'])
+        else:
+            z = jnp.exp(params['log_s'])*x + params['b']
+
         log_det = -params['log_s'].sum()
 
-        # Need to multiply by the height/width!
-        if(z.ndim == 3):
-            height, width, channel = z.shape[-3], z.shape[-2], z.shape[-1]
-            log_det *= height*width
+        # Need to multiply by the height/width if we have an image
+        log_det *= multiply_by
 
         outputs = {'x': z, 'log_det': log_det}
         return outputs, state
 
-    def inverse(params, state, inputs, **kwargs):
-        z = inputs['x']
-        x = jnp.exp(params['log_s'])*z + params['b']
-        log_det = -params['log_s'].sum()
-
-        # Need to multiply by the height/width!
-        if(z.ndim == 3):
-            height, width, channel = z.shape[-3], z.shape[-2], z.shape[-1]
-            log_det *= height*width
-
-        outputs = {'x': x, 'log_det': log_det}
-        return outputs, state
-
-    def init_fun(key, input_shapes):
+    def create_params_and_state(key, input_shapes):
         x_shape = input_shapes['x']
-
         k1, k2 = random.split(key)
         params = {'b'    : b_init(k1, x_shape),
                   'log_s': log_s_init(k2, x_shape)}
         state = {}
 
-        output_shapes = {}
-        output_shapes.update(input_shapes)
-        output_shapes['log_det'] = (1,)
+        # Keep track of how much to multiply the log_det by
+        nonlocal multiply_by
+        multiply_by = jnp.prod([s for i, s in enumerate(x_shape) if i < len(x_shape) - 1])
 
-        return base.Flow(name, input_shapes, output_shapes, params, state, forward, inverse)
+        return params, state
 
-    def data_dependent_init_fun(key, inputs, **kwargs):
+    def init_fun(key, inputs, batched=False, **kwargs):
+        if(batched == False):
+            inputs = jax.tree_util.tree_map(lambda x: x[None], inputs)
+
         x = inputs['x']
+
+        # Create the parameters
         axes = tuple(jnp.arange(len(x.shape) - 1))
         params = {'b'    : jnp.mean(x, axis=axes),
                   'log_s': jnp.log(jnp.std(x, axis=axes) + 1e-5)}
         state = {}
 
-        input_shapes = util.tree_shapes(inputs)
-        outputs, state = forward(params, state, inputs)
-        output_shapes = util.tree_shapes(outputs)
+        # Keep track of how much to multiply the log_det by
+        nonlocal multiply_by
+        multiply_by = jnp.prod([s for i, s in enumerate(x.shape) if i > 0 and i < len(x.shape) - 1])
 
-        return outputs, base.Flow(name, input_shapes, output_shapes, params, state, forward, inverse)
+        # Pass the inputs through
+        unbatched_inputs = jax.tree_util.tree_map(lambda x: x[0], inputs)
+        input_shapes = util.tree_shapes(unbatched_inputs)
 
-    return init_fun, data_dependent_init_fun
+        outputs, _ = vmap(partial(apply_fun, params, state))(inputs)
+
+        # Need to unbatch in order to get the output shapes
+        unbatched_outputs = jax.tree_util.tree_map(lambda x: x[0], outputs)
+        output_shapes = util.tree_shapes(unbatched_outputs)
+
+        if(batched == False):
+            outputs = unbatched_outputs
+
+        return outputs, base.Flow(name, input_shapes, output_shapes, params, state, apply_fun)
+
+    return init_fun
 
 # Don't use autobatching!
 def BatchNorm(epsilon=1e-5, alpha=0.05, beta_init=jaxinit.zeros, gamma_init=jaxinit.zeros, name='batch_norm'):
@@ -74,6 +86,8 @@ def BatchNorm(epsilon=1e-5, alpha=0.05, beta_init=jaxinit.zeros, gamma_init=jaxi
     :param epsilon: Constant for numerical stability
     :param alpha: Parameter for exponential moving average of population parameters
     """
+    expected_dim = None
+
     def get_bn_params(x, test, running_mean, running_var):
         """ Update the batch norm statistics """
         if(util.is_testing(test)):
@@ -86,58 +100,51 @@ def BatchNorm(epsilon=1e-5, alpha=0.05, beta_init=jaxinit.zeros, gamma_init=jaxi
 
         return (mean, var), (running_mean, running_var)
 
-    def forward(params, state, inputs, **kwargs):
+    def apply_fun(params, state, inputs, reverse=False, **kwargs):
         x = inputs['x']
+        not_batched = x.ndim == expected_dim
+        if(not_batched):
+            x = x[None]
+
         beta, log_gamma = params['beta'], params['log_gamma']
         running_mean, running_var = state['running_mean'], state['running_var']
 
         # Check if we're training or testing
-        test = kwargs['test'] if 'test' in kwargs else util.TRAIN
+        test = kwargs.get('test', util.TRAIN)
 
         # Update the running population parameters
         (mean, var), (running_mean, running_var) = get_bn_params(x, test, running_mean, running_var)
 
-        # Normalize the inputs
-        x_hat = (x - mean) / jnp.sqrt(var)
-        z = jnp.exp(log_gamma)*x_hat + beta
+        if(reverse == False):
+            x_hat = (x - mean) / jnp.sqrt(var)
+            z = jnp.exp(log_gamma)*x_hat + beta
+        else:
+            x_hat = (x - beta)*jnp.exp(-log_gamma)
+            z = x_hat*jnp.sqrt(var) + mean
 
         log_det = log_gamma.sum()
         log_det += -0.5*jnp.log(var).sum()
 
-        state['running_mean'] = running_mean
-        state['running_var'] = running_var
+        updated_state = {}
+        updated_state['running_mean'] = running_mean
+        updated_state['running_var'] = running_var
+
+        if(not_batched):
+            z = z[0]
+
         outputs = {'x': z, 'log_det': log_det}
-        return outputs, state
 
-    def inverse(params, state, inputs, **kwargs):
-        z = inputs['x']
-        beta, log_gamma = params['beta'], params['log_gamma']
-        running_mean, running_var = state['running_mean'], state['running_var']
+        return outputs, updated_state
 
-        # Check if we're training or testing
-        test = kwargs['test'] if 'test' in kwargs else util.TRAIN
-
-        # Update the running population parameters
-        (mean, var), (running_mean, running_var) = get_bn_params(z, test, running_mean, running_var)
-
-        # Normalize the inputs
-        z_hat = (z - beta)*jnp.exp(-log_gamma)
-        x = z_hat*jnp.sqrt(var) + mean
-
-        log_det = log_gamma.sum()
-        log_det += -0.5*jnp.log(var).sum()
-
-        state['running_mean'] = running_mean
-        state['running_var'] = running_var
-        outputs = {'x': x, 'log_det': log_det}
-        return outputs, state
-
-    def init_fun(key, input_shapes):
+    def create_params_and_state(key, input_shapes):
         x_shape = input_shapes['x']
         k1, k2 = random.split(key)
         beta, log_gamma = beta_init(k1, x_shape), gamma_init(k2, x_shape)
         running_mean = jnp.zeros(x_shape)
         running_var = jnp.ones(x_shape)
+
+        nonlocal expected_dim
+        expected_dim = len(x_shape)
 
         params = {'beta': beta,
                   'log_gamma': log_gamma}
@@ -145,13 +152,9 @@ def BatchNorm(epsilon=1e-5, alpha=0.05, beta_init=jaxinit.zeros, gamma_init=jaxi
         state = {'running_mean': running_mean,
                  'running_var': running_var}
 
-        output_shapes = {}
-        output_shapes.update(input_shapes)
-        output_shapes['log_det'] = (1,)
+        return params, state
 
-        return base.Flow(name, input_shapes, output_shapes, params, state, forward, inverse)
-
-    return init_fun, base.data_independent_init(init_fun)
+    return base.data_independent_init(name, apply_fun, create_params_and_state)
 
 ################################################################################################################
 

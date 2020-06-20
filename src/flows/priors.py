@@ -16,33 +16,20 @@ def UnitGaussianPrior(name='unit_gaussian_prior'):
     """
     dim = None
 
-    def forward(params, state, inputs, **kwargs):
+    def apply_fun(params, state, inputs, reverse=False, **kwargs):
         x = inputs['x']
-        inputs['log_det'] = -0.5*jnp.sum(x**2) + -0.5*dim*jnp.log(2*jnp.pi)
-        return inputs, state
+        outputs = {'x': x}
+        outputs['log_det'] = -0.5*jnp.sum(x**2) + -0.5*dim*jnp.log(2*jnp.pi)
+        return outputs, state
 
-    def inverse(params, state, inputs, **kwargs):
-        # Usually we're sampling z from a Gaussian, so if we want to do Monte Carlo
-        # estimation, ignore the value of N(z|0,I).
-        x = inputs['x']
-        if(kwargs.get('sample', False)):
-            inputs['log_det'] = 0.0
-        else:
-            inputs['log_det'] = -0.5*jnp.sum(x**2) + -0.5*dim*jnp.log(2*jnp.pi)
-        return inputs, state
-
-    def init_fun(key, input_shapes):
+    def create_params_and_state(key, input_shapes):
         x_shape = input_shapes['x']
         nonlocal dim
         dim = jnp.prod(x_shape)
         params, state = {}, {}
+        return params, state
 
-        output_shapes = {}
-        output_shapes.update(input_shapes)
-        output_shapes['log_det_shape'] = (1,)
-        return base.Flow(name, input_shapes, output_shapes, params, state, forward, inverse)
-
-    return init_fun, base.data_independent_init(init_fun)
+    return base.data_independent_init(name, apply_fun, create_params_and_state)
 
 ################################################################################################################
 

@@ -138,6 +138,7 @@ def spline_inverse(knot_x, knot_y, knot_derivs, inputs):
     return outputs, log_det
 
 @base.auto_batch
+@base.ensure_dictionaries
 def NeuralSpline(K, network=None, hidden_layer_sizes=[1024]*4, name='unnamed'):
     x1_dim = None
 

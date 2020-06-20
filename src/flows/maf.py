@@ -64,7 +64,7 @@ class GaussianMADE(hk.Module):
             w_masked = w*mask
             x = jnp.dot(x, w_masked) + b
 
-        # # Skip connection
+        # # Skip connection # Implemented this wrong probably
         # w_skip = hk.get_parameter('w_skip', [self.dim, self.dim], jnp.float32, init=w_init)
         # x += jnp.dot(x, w_skip*self.skip_mask)
 
@@ -133,7 +133,12 @@ def MAF(hidden_layer_sizes,
         outputs = {'x': x, 'log_det': log_det}
         return outputs, state
 
-    def init_fun(key, input_shapes):
+    def apply_fun(params, state, inputs, reverse=False, **kwargs):
+        if(reverse == False):
+            return forward(params, state, inputs, **kwargs)
+        return inverse(params, state, inputs, **kwargs)
+
+    def create_params_and_state(key, input_shapes):
         x_shape = input_shapes['x']
         assert len(x_shape) == 1
         dim = x_shape[0]
@@ -158,13 +163,8 @@ def MAF(hidden_layer_sizes,
         # Initialize it.  Remember that this function expects an unbatched input
         params = {'hk_params': network.init(key, jnp.zeros(x_shape))}
         state = {}
+        return params, state
 
-        output_shapes = {}
-        output_shapes.update(input_shapes)
-        output_shapes['log_det'] = (1,)
-
-        return base.Flow(name, input_shapes, output_shapes, params, state, forward, inverse)
-
-    return init_fun, base.data_independent_init(init_fun)
+    return base.data_independent_init(name, apply_fun, create_params_and_state)
 
 __all__ = ['MAF']

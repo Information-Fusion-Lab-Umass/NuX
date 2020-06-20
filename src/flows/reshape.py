@@ -10,56 +10,48 @@ import src.flows.base as base
 def Squeeze(name='squeeze'):
     # language=rst
     """
+    Squeeze transformation
     """
-    def forward(params, state, inputs, **kwargs):
+    def apply_fun(params, state, inputs, reverse=False, **kwargs):
         x = inputs['x']
-        z = util.dilated_squeeze(x, (2, 2), (1, 1))
+        if(reverse == False):
+            z = util.dilated_squeeze(x, (2, 2), (1, 1))
+        else:
+            z = util.dilated_unsqueeze(x, (2, 2), (1, 1))
         outputs = {'x': z, 'log_det': 0.0}
         return outputs, state
 
-    def inverse(params, state, inputs, **kwargs):
-        z = inputs['x']
-        x = util.dilated_unsqueeze(z, (2, 2), (1, 1))
-        outputs = {'x': x, 'log_det': 0.0}
-        return outputs, state
-
-    def init_fun(key, input_shapes):
+    def create_params_and_state(key, input_shapes):
         H, W, C = input_shapes['x']
         assert H%2 == 0
         assert W%2 == 0
-        output_shapes = {'x': (H//2, W//2, C*4)}
-        output_shapes['log_det'] = (1,)
         params, state = {}, {}
-        return base.Flow(name, input_shapes, output_shapes, params, state, forward, inverse)
+        return params, state
 
-    return init_fun, base.data_independent_init(init_fun)
+    return base.data_independent_init(name, apply_fun, create_params_and_state)
 
 @base.auto_batch
 def UnSqueeze(name='unsqueeze'):
     # language=rst
     """
+    Squeeze transformation
     """
-    def forward(params, state, inputs, **kwargs):
+    def apply_fun(params, state, inputs, reverse=False, **kwargs):
         x = inputs['x']
-        z = util.dilated_unsqueeze(x, (2, 2), (1, 1))
+        if(reverse == True):
+            z = util.dilated_squeeze(x, (2, 2), (1, 1))
+        else:
+            z = util.dilated_unsqueeze(x, (2, 2), (1, 1))
         outputs = {'x': z, 'log_det': 0.0}
         return outputs, state
 
-    def inverse(params, state, inputs, **kwargs):
-        z = inputs['x']
-        x = util.dilated_squeeze(z, (2, 2), (1, 1))
-        outputs = {'x': x, 'log_det': 0.0}
-        return outputs, state
-
-    def init_fun(key, input_shapes):
+    def create_params_and_state(key, input_shapes):
         H, W, C = input_shapes['x']
         assert C%4 == 0
-        output_shapes = {'x': (H*2, W*2, C//4)}
-        output_shapes['log_det'] = (1,)
         params, state = {}, {}
-        return base.Flow(name, input_shapes, output_shapes, params, state, forward, inverse)
+        return params, state
 
-    return init_fun, base.data_independent_init(init_fun)
+    return base.data_independent_init(name, apply_fun, create_params_and_state)
 
 ################################################################################################################
 
@@ -72,19 +64,16 @@ def Transpose(axis_order, name='transpose'):
     order = None
     order_inverse = None
 
-    def forward(params, state, inputs, **kwargs):
+    def apply_fun(params, state, inputs, reverse=False, **kwargs):
         x = inputs['x']
-        z = x.transpose(order)
+        if(reverse == False):
+            z = x.transpose(order)
+        else:
+            z = x.transpose(order_inverse)
         outputs = {'x': z, 'log_det': 0.0}
         return outputs, state
 
-    def inverse(params, state, inputs, **kwargs):
-        z = inputs['x']
-        x = z.transpose(order_inverse)
-        outputs = {'x': x, 'log_det': 0.0}
-        return outputs, state
-
-    def init_fun(key, input_shapes):
+    def create_params_and_state(key, input_shapes):
         x_shape = input_shapes['x']
         nonlocal order
         order = [ax%len(axis_order) for ax in axis_order]
@@ -93,13 +82,10 @@ def Transpose(axis_order, name='transpose'):
 
         nonlocal order_inverse
         order_inverse = [order.index(i) for i in range(len(order))]
-
-        output_shapes = {'x': [x_shape[ax] for ax in order]}
-        output_shapes['log_det'] = (1,)
         params, state = {}, {}
-        return base.Flow(name, input_shapes, output_shapes, params, state, forward, inverse)
+        return params, state
 
-    return init_fun, base.data_independent_init(init_fun)
+    return base.data_independent_init(name, apply_fun, create_params_and_state)
 
 ################################################################################################################
 
@@ -117,19 +103,16 @@ def Reshape(shape, name='reshape'):
     assert len([1 for s in shape if s < 0]) < 2, 'Can only have 1 negative shape'
     has_negative1 = jnp.any(jnp.array(shape) < 0)
 
-    def forward(params, state, inputs, **kwargs):
+    def apply_fun(params, state, inputs, reverse=False, **kwargs):
         x = inputs['x']
-        z = x.reshape(shape)
+        if(reverse == False):
+            z = x.reshape(shape)
+        else:
+            z = x.reshape(original_shape)
         outputs = {'x': z, 'log_det': 0.0}
         return outputs, state
 
-    def inverse(params, state, inputs, **kwargs):
-        z = inputs['x']
-        x = z.reshape(original_shape)
-        outputs = {'x': x, 'log_det': 0.0}
-        return outputs, state
-
-    def init_fun(key, input_shapes):
+    def create_params_and_state(key, input_shapes):
         x_shape = input_shapes['x']
         # If there is a negative 1, then figure out what to do
         nonlocal shape
@@ -143,12 +126,10 @@ def Reshape(shape, name='reshape'):
         original_shape = x_shape
         assert jnp.prod(x_shape) == jnp.prod(shape), 'x_shape %s shape: %s'%(str(x_shape), str(shape))
 
-        output_shapes = {'x': shape}
-        output_shapes['log_det'] = (1,)
         params, state = {}, {}
-        return base.Flow(name, input_shapes, output_shapes, params, state, forward, inverse)
+        return params, state
 
-    return init_fun, base.data_independent_init(init_fun)
+    return base.data_independent_init(name, apply_fun, create_params_and_state)
 
 ################################################################################################################
 
@@ -158,31 +139,27 @@ def Flatten(name='flatten'):
     original_shape = None
     shape = None
 
-    def forward(params, state, inputs, **kwargs):
+    def apply_fun(params, state, inputs, reverse=False, **kwargs):
         x = inputs['x']
-        z = x.reshape(shape)
+        if(reverse == False):
+            z = x.reshape(shape)
+        else:
+            z = x.reshape(original_shape)
+
         outputs = {'x': z, 'log_det': 0.0}
         return outputs, state
 
-    def inverse(params, state, inputs, **kwargs):
-        z = inputs['x']
-        x = z.reshape(original_shape)
-        outputs = {'x': x, 'log_det': 0.0}
-        return outputs, state
-
-    def init_fun(key, input_shapes):
+    def create_params_and_state(key, input_shapes):
         x_shape = input_shapes['x']
         nonlocal shape, original_shape
         original_shape = x_shape
         shape = (jnp.prod(x_shape),)
         assert jnp.prod(x_shape) == jnp.prod(shape), 'x_shape %s shape: %s'%(str(x_shape), str(shape))
 
-        output_shapes = {'x': shape}
-        output_shapes['log_det'] = (1,)
         params, state = {}, {}
-        return base.Flow(name, input_shapes, output_shapes, params, state, forward, inverse)
+        return params, state
 
-    return init_fun, base.data_independent_init(init_fun)
+    return base.data_independent_init(name, apply_fun, create_params_and_state)
 
 ################################################################################################################
 
@@ -192,23 +169,17 @@ def Reverse(name='reverse'):
     """
     Reverse an input.
     """
-    def forward(params, state, inputs, **kwargs):
+    def apply_fun(params, state, inputs, reverse=False, **kwargs):
         x = inputs['x']
-        outputs = {'x': x[...,::-1], 'log_det': 0.0}
+        z = x[...,::-1]
+        outputs = {'x': z, 'log_det': 0.0}
         return outputs, state
 
-    def inverse(params, state, inputs, **kwargs):
-        z = inputs['x']
-        outputs = {'x': z[...,::-1], 'log_det': 0.0}
-        return outputs, state
-
-    def init_fun(key, input_shapes):
+    def create_params_and_state(key, input_shapes):
         params, state = {}, {}
-        output_shapes = {}
-        output_shapes.update(input_shapes)
-        return base.Flow(name, input_shapes, output_shapes, params, state, forward, inverse)
+        return params, state
 
-    return init_fun, base.data_independent_init(init_fun)
+    return base.data_independent_init(name, apply_fun, create_params_and_state)
 
 ################################################################################################################
 

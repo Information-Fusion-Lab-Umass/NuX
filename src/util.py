@@ -14,6 +14,15 @@ import pathlib
 TEST = jnp.ones((0, 0))
 TRAIN = jnp.ones((0,))
 
+def is_testing(x):
+    return x.ndim == 2
+
+# TEST = True
+# TRAIN = False
+
+# def is_testing(x):
+#     return x == TEST
+
 ################################################################################################################
 
 @jit
@@ -391,12 +400,6 @@ def load_pytree_from_file(pytree, path):
         numpy_tree = data['flat_tree']
 
     return unflatten(numpy_tree)
-
-################################################################################################################
-
-@jit
-def is_testing(x):
-    return x.ndim == 2
 
 ################################################################################################################
 
