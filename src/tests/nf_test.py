@@ -24,22 +24,27 @@ def flow_test(layer, inputs, key):
     """
     Test if a flow implementation is correct.  Checks if the forward and inverse functions are consistent and
     compares the jacobian determinant calculation against an autograd calculation.
-
-    :param flow: A normalizing flow
-    :param x: A batched input
-    :param key: JAX random key
     """
     init_fun = layer
     input_shapes = util.tree_shapes(inputs)
 
     # Initialize the flow
-    inputs_batched = tree_util.tree_map(lambda x: jnp.broadcast_to(x[None], (8,) + x.shape), inputs)
+    inputs_batched = tree_util.tree_map(lambda x: jnp.broadcast_to(x[None], (3,) + x.shape), inputs)
+    inputs_doubly_batched = tree_util.tree_map(lambda x: jnp.broadcast_to(x[None], (3,) + x.shape), inputs_batched)
     _, flow = init_fun(key, inputs, batched=False)
     _, flow_batched = init_fun(key, inputs_batched, batched=True)
+    _, flow_doubly_batched = init_fun(key, inputs_doubly_batched, batched=True, batch_depth=2)
 
-    # _, flow = init_fun(key, inputs_batched)
-    params_structure_ddi = tree_util.tree_structure(flow.params)
-    state_structure_ddi = tree_util.tree_structure(flow.state)
+    # Ensure that the parameters are the same
+    params_structure, state_structure = tree_util.tree_structure(flow.params), tree_util.tree_structure(flow.state)
+    params_structure_batched, state_structure_batched = tree_util.tree_structure(flow_batched.params), tree_util.tree_structure(flow_batched.state)
+    params_structure_doubly_batched, state_structure_doubly_batched = tree_util.tree_structure(flow_doubly_batched.params), tree_util.tree_structure(flow_doubly_batched.state)
+
+    assert params_structure == params_structure_batched
+    assert state_structure == state_structure_batched
+    assert params_structure == params_structure_doubly_batched
+    assert state_structure == state_structure_doubly_batched
+    print('Passed parameter and state construction tests')
 
     # Make sure the reconstructions are correct
     outputs, _ = flow.apply(flow.params, flow.state, inputs, test=util.TEST)
@@ -56,6 +61,14 @@ def flow_test(layer, inputs, key):
     assert jnp.allclose(inputs_batched['x'], batched_reconstr['x'], atol=1e-04)
     assert jnp.allclose(batched_outputs['log_det'], batched_reconstr['log_det'], atol=1e-04)
     print('Passed batched reconstruction tests')
+
+    # Make sure the doubly batched reconstructions are correct
+    doubly_batched_outputs, _ = flow.apply(flow.params, flow.state, inputs_doubly_batched, test=util.TEST)
+    doubly_batched_reconstr, _ = flow.apply(flow.params, flow.state, doubly_batched_outputs, reverse=True, test=util.TEST)
+
+    assert jnp.allclose(inputs_doubly_batched['x'], doubly_batched_reconstr['x'], atol=1e-04)
+    assert jnp.allclose(doubly_batched_outputs['log_det'], doubly_batched_reconstr['log_det'], atol=1e-04)
+    print('Passed doubly batched reconstruction tests')
 
     # Make sure that the log det terms are correct
     def z_from_x(unflatten, x_flat):
@@ -86,7 +99,8 @@ def standard_layer_tests():
               # normalization.BatchNorm,
               basic.Identity,
               partial(maf.MAF, [1024, 1024]),
-              coupling.Coupling]
+              coupling.Coupling,
+              partial(spline.NeuralSpline, 4)]
 
     key = random.PRNGKey(0)
     x = random.normal(key, (10,))
@@ -173,14 +187,23 @@ def unit_test():
     #                                            normalization.ActNorm()),
     #                           compose.ChainRule(2, factor=False))
 
+    flow = compose.sequential(compose.ChainRule(2, factor=True),
+                              compose.factored(compose.sequential(base.Debug('a'),
+                                                                  compose.ChainRule(2, factor=True),
+                                                                  compose.factored(base.Debug('b'),
+                                                                                   normalization.ActNorm()),
+                                                                  compose.ChainRule(2, factor=False)),
+                                               base.Debug('c')),
+                              compose.ChainRule(2, factor=False))
+
     # flow = compose.sequential(compose.ChainRule(2, factor=True),
-    #                   compose.factored(compose.sequential(base.Debug('a'),
-    #                                       compose.ChainRule(2, factor=True),
-    #                                       compose.factored(base.Debug('b'),
-    #                                                ActNorm()),
-    #                                       compose.ChainRule(2, factor=False)),
-    #                            base.Debug('c')),
-    #                   compose.ChainRule(2, factor=False))
+    #                           compose.factored(compose.sequential(basic.Identity(),
+    #                                                               compose.ChainRule(2, factor=True),
+    #                                                               compose.factored(basic.Identity(),
+    #                                                                                normalization.ActNorm()),
+    #                                                               compose.ChainRule(2, factor=False)),
+    #                                            basic.Identity()),
+    #                           compose.ChainRule(2, factor=False))
 
     # flow = compose.sequential(reshape.Squeeze(),
     #                           reshape.UnSqueeze())
@@ -192,13 +215,13 @@ def unit_test():
 
     # flow = nonlinearities.Logit()
 
-    flow = compose.sequential(compose.ChainRule(2, factor=True),
-                              compose.ChainRule(2, factor=False))
+    # flow = compose.sequential(compose.ChainRule(2, factor=True),
+    #                           compose.ChainRule(2, factor=False))
 
-    flow = compose.sequential(compose.ChainRule(2, factor=True),
-                              compose.factored(affine.OnebyOneConvLAX(),
-                                               base.Debug('b')),
-                              compose.ChainRule(2, factor=False))
+    # flow = compose.sequential(compose.ChainRule(2, factor=True),
+    #                           compose.factored(affine.OnebyOneConvLAX(),
+    #                                            base.Debug('b')),
+    #                           compose.ChainRule(2, factor=False))
 
     # flow = compose.sequential(affine.OnebyOneConvLAX())
 

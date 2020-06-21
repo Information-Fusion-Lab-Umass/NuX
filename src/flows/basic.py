@@ -6,6 +6,7 @@ import src.flows.base as base
 
 ################################################################################################################
 
+@base.auto_batch
 def Identity(name='Identity'):
     # language=rst
     """

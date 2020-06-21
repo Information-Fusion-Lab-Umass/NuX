@@ -12,7 +12,7 @@ from collections import OrderedDict
 def sequential(*init_funs, name='sequential'):
     n_layers = len(init_funs)
 
-    def init_fun(key, original_inputs, batched=False, **kwargs):
+    def init_fun(key, original_inputs, batched=False, batch_depth=1, **kwargs):
         # Use a new dictionary so that we don't modify the existing one
         inputs = {}
         inputs.update(original_inputs)
@@ -21,10 +21,14 @@ def sequential(*init_funs, name='sequential'):
 
         # Retrieve the shape of the inputs
         if(batched == True):
-            unbatched_inputs = jax.tree_util.tree_map(lambda x: x[0], inputs)
+            unbatched_inputs = inputs
+            for i in range(batch_depth):
+                unbatched_inputs = jax.tree_util.tree_map(lambda x: x[0], unbatched_inputs)
             actual_input_shape = util.tree_shapes(unbatched_inputs)
+            input_ndims = util.tree_ndims(unbatched_inputs)
         else:
             actual_input_shape = util.tree_shapes(inputs)
+            input_ndims = util.tree_ndims(inputs)
 
         # Initialize each function
         params, state = OrderedDict(), OrderedDict()
@@ -34,7 +38,7 @@ def sequential(*init_funs, name='sequential'):
         for key, init_fun in zip(keys, init_funs):
 
             # Initialize the flow and handle passing the inputs to the next flow accordingly
-            outputs, flow = init_fun(key, inputs, batched=batched, **kwargs)
+            outputs, flow = init_fun(key, inputs, batched=batched, batch_depth=batch_depth, **kwargs)
             log_det += outputs['log_det']
             inputs.update(outputs)
 
@@ -53,6 +57,7 @@ def sequential(*init_funs, name='sequential'):
 
         # Finalize the things we need in the flow
         output_shapes = flow.output_shapes
+        output_ndims = flow.output_ndims
         outputs['log_det'] = log_det
 
         def apply_fun(params, state, original_inputs, reverse=False, **kwargs):
@@ -84,7 +89,7 @@ def sequential(*init_funs, name='sequential'):
             inputs['log_det'] = log_det
             return inputs, updated_state
 
-        flow = base.Flow(name, actual_input_shape, output_shapes, params, state, apply_fun)
+        flow = base.Flow(name, actual_input_shape, output_shapes, input_ndims, output_ndims, params, state, apply_fun)
         return outputs, flow
 
     return init_fun
@@ -94,15 +99,19 @@ def sequential(*init_funs, name='sequential'):
 def factored(*init_funs, name='factored'):
     n_factors = len(init_funs)
 
-    def init_fun(key, inputs, batched=False, **kwargs):
+    def init_fun(key, inputs, batched=False, batch_depth=1, **kwargs):
         keys = random.split(key, n_factors)
 
         # Retrieve the shape of the inputs
         if(batched == True):
-            unbatched_inputs = jax.tree_util.tree_map(lambda x: x[0], inputs)
+            unbatched_inputs = inputs
+            for i in range(batch_depth):
+                unbatched_inputs = jax.tree_util.tree_map(lambda x: x[0], unbatched_inputs)
             actual_input_shape = util.tree_shapes(unbatched_inputs)
+            input_ndims = util.tree_ndims(unbatched_inputs)
         else:
             actual_input_shape = util.tree_shapes(inputs)
+            input_ndims = util.tree_ndims(inputs)
 
         # Initialize each function
         params, state = OrderedDict(), OrderedDict()
@@ -117,7 +126,7 @@ def factored(*init_funs, name='factored'):
             single_input['x'] = x
 
             # Initialize the flow
-            outputs, flow = init_fun(key, single_input, batched=batched, **kwargs)
+            outputs, flow = init_fun(key, single_input, batched=batched, batch_depth=batch_depth, **kwargs)
             log_det += outputs['log_det']
             xs.append(outputs['x'])
 
@@ -138,7 +147,18 @@ def factored(*init_funs, name='factored'):
         outputs = inputs.copy()
         outputs['x'] = xs
         outputs['log_det'] = log_det
-        output_shapes = util.tree_shapes(outputs)
+
+        # Need to unbatch the outputs
+        if(batched == True):
+            unbatched_outputs = inputs
+            for i in range(batch_depth):
+                unbatched_outputs = jax.tree_util.tree_map(lambda x: x[0], unbatched_outputs)
+            output_shapes = util.tree_shapes(unbatched_outputs)
+            output_ndims = util.tree_ndims(unbatched_outputs)
+        else:
+            output_shapes = util.tree_shapes(outputs)
+            output_ndims = util.tree_ndims(outputs)
+        # output_shapes = util.tree_shapes(outputs)
 
         def apply_fun(params, state, original_inputs, reverse=False, **kwargs):
             # Use a new dictionary so that we don't modify the existing one
@@ -181,20 +201,19 @@ def factored(*init_funs, name='factored'):
             outputs['log_det'] = log_det
             return outputs, updated_state
 
-        flow = base.Flow(name, actual_input_shape, output_shapes, params, state, apply_fun)
+        flow = base.Flow(name, actual_input_shape, output_shapes, input_ndims, output_ndims, params, state, apply_fun)
         return outputs, flow
 
     return init_fun
 
 ################################################################################################################
 
+@base.auto_batch
 def ChainRule(split_idx, axis=-1, factor=True, name='chain_rule'):
     # language=rst
     """
     Split/recombine a vector.  Use this to set up chain rule
     """
-    n_dims = None
-
     def apply_fun(params, state, inputs, reverse=False, **kwargs):
         x = inputs['x']
         if(reverse != factor):
@@ -206,10 +225,7 @@ def ChainRule(split_idx, axis=-1, factor=True, name='chain_rule'):
             dims = z.ndim
             batch_size = z.shape[0]
 
-        if(dims > n_dims):
-            log_det = jnp.zeros(batch_size)
-        else:
-            log_det = 0.0
+        log_det = 0.0
 
         outputs = {'x': z, 'log_det': log_det}
         return outputs, state
@@ -218,37 +234,15 @@ def ChainRule(split_idx, axis=-1, factor=True, name='chain_rule'):
         params, state = {}, {}
         return params, state
 
-    def init_fun(key, inputs, batched=False, **kwargs):
+    return base.data_independent_init(name, apply_fun, create_params_and_state)
 
-        if(batched == False):
-            inputs = jax.tree_util.tree_map(lambda x: x[None], inputs)
+################################################################################################################
+# Things that are not auto batched
 
-        nonlocal n_dims
-        n_dims = jax.tree_util.tree_leaves(inputs['x'])[0].ndim - 1
-
-        # Retrieve the shapes of the inputs
-        unbatched_inputs = jax.tree_util.tree_map(lambda x: x[0], inputs)
-        input_shapes = util.tree_shapes(unbatched_inputs)
-
-        # Initialize the parameters and state
-        params, state = create_params_and_state(key, input_shapes)
-
-        # Pass the dummy inputs to forward
-        outputs, _ = vmap(partial(apply_fun, params, state, **kwargs))(inputs)
-
-        # Retrieve the output shapes
-        unbatched_outputs = jax.tree_util.tree_map(lambda x: x[0], outputs)
-        output_shapes = util.tree_shapes(unbatched_outputs)
-
-        # Get the flow instance
-        flow = base.Flow(name, input_shapes, output_shapes, params, state, apply_fun)
-
-        if(batched == False):
-            outputs = jax.tree_util.tree_map(lambda x: x[0], outputs)
-
-        return outputs, flow
-
-    return init_fun
+# sequential *
+# factored *
+# Debug
+# ActNorm *
 
 ################################################################################################################
 
@@ -262,24 +256,6 @@ def multi_scale(flow, existing_flow):
                       factored(existing_flow, Identity()),
                       ChainRule(2, factor=False),
                       UnSqueeze())
-
-        # def multi_scale(i, flow):
-        #     if(isinstance(self.n_filters, int)):
-        #         n_filters = self.n_filters
-        #     else:
-        #         n_filters = self.n_filters[i]
-
-        #     if(isinstance(self.n_blocks, int)):
-        #         n_blocks  = self.n_blocks
-        #     else:
-        #         n_blocks  = self.n_blocks[i]
-
-        #     return nf.sequential_flow(nf.Squeeze(),
-        #                               GLOWComponent(name_iter, n_filters, n_blocks),
-        #                               nf.FactorOut(2),
-        #                               nf.factored_flow(flow, nf.Identity()),
-        #                               nf.FanInConcat(2),
-        #                               nf.UnSqueeze())
 
 ################################################################################################################
 

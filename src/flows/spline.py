@@ -138,37 +138,26 @@ def spline_inverse(knot_x, knot_y, knot_derivs, inputs):
     return outputs, log_det
 
 @base.auto_batch
-@base.ensure_dictionaries
 def NeuralSpline(K, network=None, hidden_layer_sizes=[1024]*4, name='unnamed'):
     x1_dim = None
 
-    def forward(params, state, inputs, **kwargs):
+    def apply_fun(params, state, inputs, reverse=False, **kwargs):
         x = inputs['x']
         network_params = params['hk_params']
 
         x1, x2 = jnp.split(x, jnp.array([x1_dim]), axis=-1)
         knot_x, knot_y, knot_derivs = get_knot_parameters(network.apply, network_params, x1, K)
-        z2, log_det = spline_forward(knot_x, knot_y, knot_derivs, x2)
+        if(reverse == False):
+            z2, log_det = spline_forward(knot_x, knot_y, knot_derivs, x2)
+        else:
+            z2, log_det = spline_inverse(knot_x, knot_y, knot_derivs, x2)
 
         z = jnp.concatenate([x1, z2], axis=-1)
 
         outputs = {'x': z, 'log_det': log_det}
         return outputs, state
 
-    def inverse(params, state, inputs, **kwargs):
-        z = inputs['x']
-        network_params = params['hk_params']
-
-        z1, z2 = jnp.split(z, jnp.array([x1_dim]), axis=-1)
-        knot_x, knot_y, knot_derivs = get_knot_parameters(network.apply, network_params, z1, K)
-        x2, log_det = spline_inverse(knot_x, knot_y, knot_derivs, z2)
-
-        x = jnp.concatenate([z1, x2], axis=-1)
-
-        outputs = {'x': x, 'log_det': log_det}
-        return outputs, state
-
-    def init_fun(key, input_shapes):
+    def create_params_and_state(key, input_shapes):
         x_shape = input_shapes['x']
         nonlocal x1_dim
         x1_dim = x_shape[-1]//2
@@ -181,14 +170,9 @@ def NeuralSpline(K, network=None, hidden_layer_sizes=[1024]*4, name='unnamed'):
 
         params = {'hk_params': network.init(key, jnp.zeros((x1_dim,)))}
         state = {}
+        return params, state
 
-        output_shapes = {}
-        output_shapes.update(input_shapes)
-        output_shapes['log_det'] = (1,)
-
-        return base.Flow(name, input_shapes, output_shapes, params, state, forward, inverse)
-
-    return init_fun, base.data_independent_init(init_fun)
+    return base.data_independent_init(name, apply_fun, create_params_and_state)
 
 ################################################################################################################
 

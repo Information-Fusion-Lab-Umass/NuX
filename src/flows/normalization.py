@@ -30,22 +30,10 @@ def ActNorm(log_s_init=jaxinit.zeros, b_init=jaxinit.zeros, name='act_norm'):
         outputs = {'x': z, 'log_det': log_det}
         return outputs, state
 
-    def create_params_and_state(key, input_shapes):
-        x_shape = input_shapes['x']
-        k1, k2 = random.split(key)
-        params = {'b'    : b_init(k1, x_shape),
-                  'log_s': log_s_init(k2, x_shape)}
-        state = {}
-
-        # Keep track of how much to multiply the log_det by
-        nonlocal multiply_by
-        multiply_by = jnp.prod([s for i, s in enumerate(x_shape) if i < len(x_shape) - 1])
-
-        return params, state
-
-    def init_fun(key, inputs, batched=False, **kwargs):
+    def init_fun(key, inputs, batched=False, batch_depth=1, **kwargs):
         if(batched == False):
-            inputs = jax.tree_util.tree_map(lambda x: x[None], inputs)
+            for i in range(batch_depth):
+                inputs = jax.tree_util.tree_map(lambda x: x[None], inputs)
 
         x = inputs['x']
 
@@ -57,22 +45,32 @@ def ActNorm(log_s_init=jaxinit.zeros, b_init=jaxinit.zeros, name='act_norm'):
 
         # Keep track of how much to multiply the log_det by
         nonlocal multiply_by
-        multiply_by = jnp.prod([s for i, s in enumerate(x.shape) if i > 0 and i < len(x.shape) - 1])
+        multiply_by = jnp.prod([s for i, s in enumerate(x.shape) if i >= batch_depth and i < len(x.shape) - 1])
 
         # Pass the inputs through
-        unbatched_inputs = jax.tree_util.tree_map(lambda x: x[0], inputs)
+        unbatched_inputs = inputs
+        for i in range(batch_depth):
+            unbatched_inputs = jax.tree_util.tree_map(lambda x: x[0], unbatched_inputs)
         input_shapes = util.tree_shapes(unbatched_inputs)
+        input_ndims = util.tree_ndims(unbatched_inputs)
 
-        outputs, _ = vmap(partial(apply_fun, params, state))(inputs)
+        # Pass the inputs to forward
+        vmapped_fun = partial(apply_fun, params, state, **kwargs)
+        for i in range(batch_depth):
+            vmapped_fun = vmap(vmapped_fun)
+        outputs, _ = vmapped_fun(inputs)
 
         # Need to unbatch in order to get the output shapes
-        unbatched_outputs = jax.tree_util.tree_map(lambda x: x[0], outputs)
+        unbatched_outputs = outputs
+        for i in range(batch_depth):
+            unbatched_outputs = jax.tree_util.tree_map(lambda x: x[0], unbatched_outputs)
         output_shapes = util.tree_shapes(unbatched_outputs)
+        output_ndims = util.tree_ndims(unbatched_outputs)
 
         if(batched == False):
             outputs = unbatched_outputs
 
-        return outputs, base.Flow(name, input_shapes, output_shapes, params, state, apply_fun)
+        return outputs, base.Flow(name, input_shapes, output_shapes, input_ndims, output_ndims, params, state, apply_fun)
 
     return init_fun
 
@@ -86,6 +84,7 @@ def BatchNorm(epsilon=1e-5, alpha=0.05, beta_init=jaxinit.zeros, gamma_init=jaxi
     :param epsilon: Constant for numerical stability
     :param alpha: Parameter for exponential moving average of population parameters
     """
+    assert 0, 'Haven\'t tested this yet with more than 1 batch.  Use ActNorm instead.'
     expected_dim = None
 
     def get_bn_params(x, test, running_mean, running_var):

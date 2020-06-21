@@ -1,5 +1,6 @@
 import src.flows as flows
 from src.tests.nf_test import standard_layer_tests, image_layer_test, unit_test, flow_test
+from src.tests.nif_test import nif_test
 import jax.numpy as jnp
 from debug import *
 
@@ -112,3 +113,12 @@ if(__name__ == '__main__'):
     standard_layer_tests()
     image_layer_test()
     unit_test()
+
+
+    # key = random.PRNGKey(0)
+    # x = random.normal(key, (10,))
+    # inputs = {'x': x}
+
+    # prior_flow = nux.UnitGaussianPrior()
+    # flow = nux.TallAffineDiagCov(prior_flow, 2)
+    # nif_test(flow, inputs, key)

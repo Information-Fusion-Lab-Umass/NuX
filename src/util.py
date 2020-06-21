@@ -29,6 +29,10 @@ def is_testing(x):
 def tree_shapes(pytree):
     return jax.tree_util.tree_map(lambda x:x.shape, pytree)
 
+@jit
+def tree_ndims(pytree):
+    return jax.tree_util.tree_map(lambda x:x.ndim, pytree)
+
 ################################################################################################################
 
 class SimpleMLP(hk.Module):
@@ -403,12 +407,17 @@ def load_pytree_from_file(pytree, path):
 
 ################################################################################################################
 
-def gaussian_logpdf(x, mean, cov):
+def gaussian_chol_cov_logpdf(x, mean, cov_chol):
+    pass
+
+@jit
+def gaussian_full_cov_logpdf(x, mean, cov):
     dx = x - mean
     cov_inv = jnp.linalg.inv(cov)
     log_px = -0.5*jnp.sum(jnp.dot(dx, cov_inv.T)*dx, axis=-1)
     return log_px - 0.5*jnp.linalg.slogdet(cov)[1] - 0.5*x.shape[-1]*jnp.log(2*jnp.pi)
 
+@jit
 def gaussian_diag_cov_logpdf(x, mean, log_diag_cov):
     dx = x - mean
     log_px = -0.5*jnp.sum(dx*jnp.exp(-log_diag_cov)*dx, axis=-1)

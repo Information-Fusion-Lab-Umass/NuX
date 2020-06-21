@@ -11,3 +11,4 @@ from src.flows.spline import *
 from src.flows.priors import *
 from src.flows.base import *
 from src.flows.basic import *
+from src.flows.nif import *

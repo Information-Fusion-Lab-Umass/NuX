@@ -6,12 +6,22 @@ import jax
 from jax import random, jit, vmap
 import src.util as util
 
-Flow = namedtuple('Flow', ['name', 'input_shapes', 'output_shapes', 'params', 'state', 'apply'])
+Flow = namedtuple('Flow', ['name',
+                           'input_shapes',
+                           'output_shapes',
+                           'input_ndims', # Include ndims because cannot get this easily for all shapes.
+                           'output_ndims', # Include ndims because cannot get this easily for all shapes.
+                           'params',
+                           'state',
+                           'apply'])
 
 ################################################################################################################
 
 def auto_batch(layer):
-
+    # language=rst
+    """
+    Automatically handle extra leading dimensions on an input.
+    """
     @wraps(layer)
     def call_layer(*args, **kwargs):
 
@@ -19,27 +29,28 @@ def auto_batch(layer):
 
         _init_fun = layer(*args, **kwargs)
 
-        def init_fun(key, inputs, batched=False, **kwargs):
+        def init_fun(key, inputs, batched=False, batch_depth=1, **kwargs):
             # Initialize the flow layer
-            outputs, flow = _init_fun(key, inputs, batched=batched, **kwargs)
+            outputs, flow = _init_fun(key, inputs, batched=batched, batch_depth=batch_depth, **kwargs)
 
             # Keep track of the expected dimensions
-            expected_input_x_dim  = len(flow.input_shapes['x'])
-            expected_output_x_dim = len(flow.output_shapes['x'])
+            expected_input_x_dim = jax.tree_util.tree_leaves(flow.input_ndims['x'])[0]
+            expected_output_x_dim = jax.tree_util.tree_leaves(flow.output_ndims['x'])[0]
 
+            # The new apply fun will vmap when needed
             def apply_fun(params, state, inputs, reverse=False, **kwargs):
-                input_dim = jax.tree_util.tree_leaves(inputs['x'])[0].ndim
+                input_dim = jax.tree_util.tree_leaves(inputs['x'])[0].ndim # Assume all inputs are batched the same!!
                 expected_dim = expected_input_x_dim if reverse == False else expected_output_x_dim
 
+                # Recursively vmap
                 if(input_dim > expected_dim):
                     outputs, updated_state = vmap(partial(apply_fun, params, state, reverse=reverse, **kwargs))(inputs)
-                    # Because we're using auto batch, we should expect that the state update doesn't depend on the batch
-                    updated_state = jax.tree_util.tree_map(lambda x: x[0], updated_state)
+                    updated_state = jax.tree_util.tree_map(lambda x: x.mean(axis=0), updated_state)
                     return outputs, updated_state
 
                 return flow.apply(params, state, inputs, reverse=reverse, **kwargs)
 
-            new_flow = Flow(flow.name, flow.input_shapes, flow.output_shapes, flow.params, flow.state, apply_fun)
+            new_flow = Flow(flow.name, flow.input_shapes, flow.output_shapes, flow.input_ndims, flow.output_ndims, flow.params, flow.state, apply_fun)
             return outputs, new_flow
 
         return init_fun
@@ -53,29 +64,39 @@ def data_independent_init(name, apply_fun, create_params_and_state):
     """
     Data dependent init function that does not do any special initialization using data.
     """
-    def init_fun(key, inputs, batched=False, **kwargs):
+    def init_fun(key, inputs, batched=False, batch_depth=1, **kwargs):
         if(batched == False):
-            inputs = jax.tree_util.tree_map(lambda x: x[None], inputs)
+            for i in range(batch_depth):
+                inputs = jax.tree_util.tree_map(lambda x: x[None], inputs)
 
         # Retrieve the shapes of the inputs
-        unbatched_inputs = jax.tree_util.tree_map(lambda x: x[0], inputs)
+        unbatched_inputs = inputs
+        for i in range(batch_depth):
+            unbatched_inputs = jax.tree_util.tree_map(lambda x: x[0], unbatched_inputs)
         input_shapes = util.tree_shapes(unbatched_inputs)
+        input_ndims = util.tree_ndims(unbatched_inputs)
 
         # Initialize the parameters and state
         params, state = create_params_and_state(key, input_shapes)
 
-        # Pass the dummy inputs to forward
-        outputs, _ = vmap(partial(apply_fun, params, state, **kwargs))(inputs)
+        # Pass the inputs to forward
+        vmapped_fun = partial(apply_fun, params, state, **kwargs)
+        for i in range(batch_depth):
+            vmapped_fun = vmap(vmapped_fun)
+        outputs, _ = vmapped_fun(inputs)
 
         # Retrieve the output shapes
-        unbatched_outputs = jax.tree_util.tree_map(lambda x: x[0], outputs)
+        unbatched_outputs = outputs
+        for i in range(batch_depth):
+            unbatched_outputs = jax.tree_util.tree_map(lambda x: x[0], unbatched_outputs)
         output_shapes = util.tree_shapes(unbatched_outputs)
+        output_ndims = util.tree_ndims(unbatched_outputs)
 
         # Get the flow instance
-        flow = Flow(name, input_shapes, output_shapes, params, state, apply_fun)
+        flow = Flow(name, input_shapes, output_shapes, input_ndims, output_ndims, params, state, apply_fun)
 
         if(batched == False):
-            outputs = jax.tree_util.tree_map(lambda x: x[0], outputs)
+            outputs = unbatched_outputs
 
         return outputs, flow
 
@@ -86,7 +107,7 @@ def data_independent_init(name, apply_fun, create_params_and_state):
 def Debug(message='', name='debug'):
     # language=rst
     """
-    Debug by looking at shapes
+    Debug by looking at input shapes
     """
     n_dims = None
 
@@ -94,57 +115,55 @@ def Debug(message='', name='debug'):
         x = inputs['x']
         dims = x.ndim
 
+        inputs_shapes = util.tree_shapes(inputs)
+        print(message, 'inputs_shapes', inputs_shapes)
+
         if(dims > n_dims):
-            log_det = jnp.zeros(x.shape[0])
+            log_det = jnp.zeros(x.shape[:dims - n_dims])
         else:
             log_det = 0.0
 
         outputs = {'x': x, 'log_det': log_det}
-        inputs_shapes = util.tree_shapes(inputs)
-        print(message, 'inputs_shapes', inputs_shapes)
+
         return outputs, state
 
-    def create_params_and_state(key, input_shapes):
+    def init_fun(key, inputs, batched=False, batch_depth=1, **kwargs):
+        if(batched == False):
+            for i in range(batch_depth):
+                inputs = jax.tree_util.tree_map(lambda x: x[None], inputs)
+
+        # Retrieve the shapes of the inputs
+        unbatched_inputs = inputs
+        for i in range(batch_depth):
+            unbatched_inputs = jax.tree_util.tree_map(lambda x: x[0], unbatched_inputs)
+        input_shapes = util.tree_shapes(unbatched_inputs)
+        input_ndims = util.tree_ndims(unbatched_inputs)
+
         nonlocal n_dims
-        n_dims = len(input_shapes['x'])
+        n_dims = input_ndims['x']
 
-        params = {}
-        state = {}
-        return params, state
+        # Initialize the parameters and state
+        params, state = {}, {}
 
-    return data_independent_init(name, apply_fun, create_params_and_state)
+        # Pass the inputs to forward
+        vmapped_fun = partial(apply_fun, params, state, **kwargs)
+        for i in range(batch_depth):
+            vmapped_fun = vmap(vmapped_fun)
+        outputs, _ = vmapped_fun(inputs)
 
-################################################################################################################
+        # Retrieve the output shapes
+        unbatched_outputs = outputs
+        for i in range(batch_depth):
+            unbatched_outputs = jax.tree_util.tree_map(lambda x: x[0], unbatched_outputs)
+        output_shapes = util.tree_shapes(unbatched_outputs)
+        output_ndims = util.tree_ndims(unbatched_outputs)
 
-def ensure_dictionaries(layer):
+        # Get the flow instance
+        flow = Flow(name, input_shapes, output_shapes, input_ndims, output_ndims, params, state, apply_fun)
 
-    @wraps(layer)
-    def call_layer(*args, **kwargs):
+        if(batched == False):
+            outputs = unbatched_outputs
 
-        _init_fun, data_dependent_init_fun = layer(*args, **kwargs)
-        original_input_shape = None
+        return outputs, flow
 
-        def init_fun(key, input_shapes):
-            assert 'x' in input_shapes
-            assert len(input_shapes.keys()) == 1
-
-            # Initialize the flow layer
-            flow = _init_fun(key, input_shapes)
-
-            def forward(params, state, inputs, **kwargs):
-                assert 'x' in inputs
-                assert len(input_shapes.keys()) == 1
-
-                return flow.forward(params, state, inputs, **kwargs)
-
-            def inverse(params, state, inputs, **kwargs):
-                assert 'x' in inputs
-                assert len(input_shapes.keys()) == 1
-
-                return flow.inverse(params, state, inputs, **kwargs)
-
-            return Flow(flow.name, flow.input_shapes, flow.output_shapes, flow.params, flow.state, forward, inverse)
-
-        return init_fun, data_dependent_init_fun
-
-    return call_layer
+    return init_fun
