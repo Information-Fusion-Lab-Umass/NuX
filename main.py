@@ -110,15 +110,8 @@ if(__name__ == '__main__'):
     # flow_test(MultiscaleGLOW(), {'x': x[0]}, key)
 
 
-    standard_layer_tests()
-    image_layer_test()
-    unit_test()
+    # standard_layer_tests()
+    # image_layer_test()
+    # unit_test()
 
-
-    # key = random.PRNGKey(0)
-    # x = random.normal(key, (10,))
-    # inputs = {'x': x}
-
-    # prior_flow = nux.UnitGaussianPrior()
-    # flow = nux.TallAffineDiagCov(prior_flow, 2)
-    # nif_test(flow, inputs, key)
+    nif_test()

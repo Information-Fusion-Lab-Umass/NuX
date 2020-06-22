@@ -75,7 +75,7 @@ def noisy_injective_flow_test(layer, inputs, key, n_keys=128, n_z=128):
 
     # Get an estimate of log E_{q(z|x)}[p(z)] + log int p(x|z)dz
     def forward_estimate(key):
-        outputs, _ = flow.apply(flow.params, flow.state, inputs, key=key)
+        outputs, _ = flow.apply(flow.params, flow.state, inputs, n_importance_samples=32, key=key)
         return logsumexp(outputs['log_det']) - jnp.log(outputs['log_det'].shape[0])
 
     keys = random.split(key, n_keys*n_z)

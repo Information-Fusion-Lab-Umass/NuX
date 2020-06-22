@@ -12,7 +12,6 @@ import src.flows.base as base
 
 @base.auto_batch
 def TallAffineDiagCov(out_dim, A_init=jaxinit.glorot_normal(), b_init=jaxinit.normal(), name='tall_affine_diag_cov'):
-# def TallAffineDiagCov(out_dim, n_importance_samples=32, A_init=jaxinit.glorot_normal(), b_init=jaxinit.normal(), name='tall_affine_diag_cov'):
     """ Affine function to go up a dimension
 
         Args:
@@ -30,9 +29,10 @@ def TallAffineDiagCov(out_dim, A_init=jaxinit.glorot_normal(), b_init=jaxinit.no
             n_importance_samples = kwargs.get('n_importance_samples', None)
             if(n_importance_samples is None):
                 noise = random.normal(key, z.shape)
+                z += sigma_ATA_chol@noise
             else:
                 noise = random.normal(key, (n_importance_samples,) + z.shape)
-            z += jnp.einsum('ij,bj->bi', sigma_ATA_chol, noise)
+                z += jnp.einsum('ij,bj->bi', sigma_ATA_chol, noise)
 
             # This is an NIF, so use the manifold penalty
             log_det = log_hx
@@ -104,72 +104,6 @@ def TallAffineDiagCov(out_dim, A_init=jaxinit.glorot_normal(), b_init=jaxinit.no
         return params, state
 
     return base.data_independent_init(name, apply_fun, create_params_and_state)
-
-
-################################################################################################################
-
-def importance_weighted(nif, prior, n_importance_samples=32, name='importance_weight'):
-    # language=rst
-    """
-    Custom gradient for the forward function of an NIF
-    """
-    nif_apply, prior_apply = None, None
-
-    @jax.custom_vjp
-    def forward(params, state, inputs, **kwargs):
-        key = kwargs.pop('key', None)
-        k1, k2 = random.split(key, 2) if key is not None else (None, None)
-        outputs, updated_nif_state = nif_apply(params['nif'], state['nif'], inputs, reverse=False, key=k1, n_importance_samples=n_importance_samples, **kwargs)
-        outputs, updated_prior_state = prior_apply(params['prior'], state['prior'], outputs, reverse=False, key=k2, **kwargs)
-
-        updated_state = {'nif': updated_nif_state, 'prior': updated_prior_state}
-        return outputs, updated_state
-
-    def forward_fwd(params, state, inputs, **kwargs):
-        outputs, updated_state = forward(params, state, inputs, **kwargs)
-
-        # Compute the importance weights
-        w = logsumexp(outputs['log_det']) - np.log(n_importance_samples)
-        w = np.exp(w)
-
-        return (outputs, updated_states), (zs, w)
-
-    def forward_bwd(res, g):
-        zs, w = res
-        g_outputs, g_states = g
-
-        # Importance sample
-
-    forward.defvjp(forward_fwd, forward_bwd)
-
-    def inverse(params, state, inputs, **kwargs):
-        key = kwargs.pop('key', None)
-        k1, k2 = random.split(key, 2) if key is not None else (None, None)
-        outputs, updated_prior_state = prior_apply(params['prior'], state['prior'], inputs, reverse=True, key=k1, **kwargs)
-        outputs, updated_nif_state = nif_apply(params['nif'], state['nif'], outputs, reverse=True, key=k2, n_importance_samples=n_importance_samples, **kwargs)
-
-        updated_state = {'nif': updated_nif_state, 'prior': updated_prior_state}
-        return outputs, updated_state
-
-    def apply_fun(params, state, inputs, reverse=False, **kwargs):
-        if(reverse == False):
-            return forward(params, state, inputs, **kwargs)
-        return inverse(params, state, inputs, **kwargs)
-
-    def init_fun(key, inputs, batched=False, batch_depth=1, **kwargs):
-        k1, k2 = random.split(key, 2)
-        outputs, ni_flow = nif(k1, inputs, batched=batched, batch_depth=batch_depth, **kwargs)
-        outputs, prior_flow = prior(k2, outputs, batched=batched, batch_depth=batch_depth, **kwargs)
-
-        nonlocal nif_apply, prior_apply
-        nif_apply, prior_apply = ni_flow.apply, prior_flow.apply
-
-        params = {'nif': ni_flow.params, 'prior': prior_flow.params}
-        state = {'nif': ni_flow.state, 'prior': prior_flow.state}
-
-        return base.Flow(name, ni_flow.input_shapes, prior_flow.output_shape, ni_flow.input_ndims, prior_flow.output_ndims, params, state, apply_fun)
-
-    return init_fun
 
 ################################################################################################################
 
