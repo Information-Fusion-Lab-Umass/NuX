@@ -30,17 +30,30 @@ def TallAffineDiagCov(out_dim, A_init=jaxinit.glorot_normal(), b_init=jaxinit.no
             if(n_importance_samples is None):
                 noise = random.normal(key, z.shape)
                 z += sigma_ATA_chol@noise
+                log_det = log_hx
             else:
                 noise = random.normal(key, (n_importance_samples,) + z.shape)
                 z += jnp.einsum('ij,bj->bi', sigma_ATA_chol, noise)
-
-            # This is an NIF, so use the manifold penalty
-            log_det = log_hx
+                log_det = jnp.broadcast_to(log_hx, (n_importance_samples,))
         else:
             # Treat this as an injective flow and use the log determinant
             log_det = -0.5*jnp.linalg.slogdet(A.T@A)[1]
 
-        outputs = {'x': z, 'log_det': log_det}
+        # Compute the reconstruction error and stochastic inverse likelihood
+        if(key is not None):
+            if(n_importance_samples is not None):
+                mean = jnp.einsum('ij,bj->bi', A, z) + b
+                log_pxgz = vmap(util.gaussian_diag_cov_logpdf, in_axes=(None, 0, None))(x, mean, log_diag_cov)
+                log_qzgx = vmap(util.gaussian_chol_cov_logpdf, in_axes=(0, 0, None))(noise, jnp.zeros_like(noise), sigma_ATA_chol)
+            else:
+                mean = A@z + b
+                log_pxgz = util.gaussian_diag_cov_logpdf(x, mean, log_diag_cov)
+                log_qzgx = util.gaussian_chol_cov_logpdf(noise, jnp.zeros_like(noise), sigma_ATA_chol)
+        else:
+            log_pxgz = 0.0
+            log_qzgx = 0.0
+
+        outputs = {'x': z, 'log_det': log_det, 'log_pxgz': log_pxgz, 'log_qzgx': log_qzgx}
         return outputs, state
 
     def inverse(params, state, inputs, **kwargs):
@@ -54,16 +67,12 @@ def TallAffineDiagCov(out_dim, A_init=jaxinit.glorot_normal(), b_init=jaxinit.no
 
         # This is used for testing!
         injected_x = kwargs.get('injected_x', None)
-        if(injected_x is None):
+        if(injected_x is not None):
             key = None
 
         # Sample from N(x|Az + b, Sigma)
         if(key is not None):
-            n_importance_samples = kwargs.get('n_importance_samples', None)
-            if(n_importance_samples is None):
-                noise = random.normal(key, x.shape)
-            else:
-                noise = random.normal(key, (n_importance_samples,) + x.shape)
+            noise = random.normal(key, x.shape)
             x += noise*jnp.exp(0.5*log_diag_cov)*sigma
 
             # Compute the likelihood p(x|z)
@@ -103,7 +112,7 @@ def TallAffineDiagCov(out_dim, A_init=jaxinit.glorot_normal(), b_init=jaxinit.no
         state = {'sigma': 1.0}
         return params, state
 
-    return base.data_independent_init(name, apply_fun, create_params_and_state)
+    return base.initialize(name, apply_fun, create_params_and_state)
 
 ################################################################################################################
 

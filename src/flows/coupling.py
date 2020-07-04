@@ -30,16 +30,16 @@ def Coupling(haiku_network=None, hidden_layer_sizes=[1024]*4, kind='affine', axi
         if(kind == 'affine'):
             t, log_s = network.apply(network_params, xb, **kwargs)
             if(reverse == False):
-                za = xa*jnp.exp(log_s) + t
-            else:
                 za = (xa - t)*jnp.exp(-log_s)
-            log_det = jnp.sum(log_s)
+            else:
+                za = xa*jnp.exp(log_s) + t
+            log_det = -jnp.sum(log_s)
         else:
             t = network.apply(network_params, xb, **kwargs)
             if(reverse == False):
-                za = xa + t
-            else:
                 za = xa - t
+            else:
+                za = xa + t
             log_det = 0.0
 
         # Recombine
@@ -71,7 +71,7 @@ def Coupling(haiku_network=None, hidden_layer_sizes=[1024]*4, kind='affine', axi
         state = {}
         return params, state
 
-    return base.data_independent_init(name, apply_fun, create_params_and_state)
+    return base.initialize(name, apply_fun, create_params_and_state)
 
 ################################################################################################################
 

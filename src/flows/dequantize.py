@@ -15,8 +15,10 @@ def UniformDequantization(noise_scale=None, scale=256.0, name='uniform_dequantiz
         x = inputs['x']
 
         # Add uniform noise
-        key_name = '%s_key'%name if name != 'unnamed' else 'key'
-        key = kwargs.pop(key_name, None)
+        # key_name = '%s_key'%name if name != 'unnamed' else 'key'
+        key = kwargs.pop('key', None)
+        if(reverse == False):
+            assert key is not None
         if(key is None):
             noise = jnp.zeros_like(x)
         else:
@@ -45,7 +47,7 @@ def UniformDequantization(noise_scale=None, scale=256.0, name='uniform_dequantiz
 
         return params, state
 
-    return base.data_independent_init(name, apply_fun, create_params_and_state)
+    return base.initialize(name, apply_fun, create_params_and_state)
 
 ################################################################################################################
 

@@ -5,7 +5,6 @@ import jax.numpy as jnp
 from debug import *
 
 import src.flows as nux
-from src.data_dependent_init import multistep_data_init
 import jax
 from jax import jit, vmap, random
 import haiku as hk
@@ -64,8 +63,8 @@ def MultiscaleGLOW(quantize_bits=3):
                           nux.Logit(),
                           nux.Squeeze(), # So that the channel is divisible by 2
                           flow,
-                          nux.Flatten(),
-                          nux.UnitGaussianPrior())
+                          nux.Flatten())#,
+                          # nux.UnitGaussianPrior())
                           # nux.AffineGaussianPriorDiagCov(128))
     return flow
 
@@ -99,7 +98,15 @@ if(__name__ == '__main__'):
     # ds = load_dataset(quantize_bits=3)
 
     # x = next(ds)['image']*1.0
+
+    # key = random.PRNGKey(0)
+    # x = jnp.arange(16).reshape((8, 2))
     # inputs = {'x': x}
+
+    # init_fun = nux.Reverse()
+    # outputs, flow = init_fun(key, inputs, batched=True)
+
+    # assert 0
 
     # key = random.PRNGKey(0)
     # quantize_bits = 3
@@ -109,9 +116,8 @@ if(__name__ == '__main__'):
 
     # flow_test(MultiscaleGLOW(), {'x': x[0]}, key)
 
-
-    # standard_layer_tests()
-    # image_layer_test()
-    # unit_test()
+    standard_layer_tests()
+    image_layer_test()
+    unit_test()
 
     nif_test()

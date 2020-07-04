@@ -28,7 +28,7 @@ def Squeeze(name='squeeze'):
         params, state = {}, {}
         return params, state
 
-    return base.data_independent_init(name, apply_fun, create_params_and_state)
+    return base.initialize(name, apply_fun, create_params_and_state)
 
 @base.auto_batch
 def UnSqueeze(name='unsqueeze'):
@@ -51,7 +51,7 @@ def UnSqueeze(name='unsqueeze'):
         params, state = {}, {}
         return params, state
 
-    return base.data_independent_init(name, apply_fun, create_params_and_state)
+    return base.initialize(name, apply_fun, create_params_and_state)
 
 ################################################################################################################
 
@@ -85,7 +85,7 @@ def Transpose(axis_order, name='transpose'):
         params, state = {}, {}
         return params, state
 
-    return base.data_independent_init(name, apply_fun, create_params_and_state)
+    return base.initialize(name, apply_fun, create_params_and_state)
 
 ################################################################################################################
 
@@ -129,7 +129,7 @@ def Reshape(shape, name='reshape'):
         params, state = {}, {}
         return params, state
 
-    return base.data_independent_init(name, apply_fun, create_params_and_state)
+    return base.initialize(name, apply_fun, create_params_and_state)
 
 ################################################################################################################
 
@@ -159,7 +159,7 @@ def Flatten(name='flatten'):
         params, state = {}, {}
         return params, state
 
-    return base.data_independent_init(name, apply_fun, create_params_and_state)
+    return base.initialize(name, apply_fun, create_params_and_state)
 
 ################################################################################################################
 
@@ -179,7 +179,7 @@ def Reverse(name='reverse'):
         params, state = {}, {}
         return params, state
 
-    return base.data_independent_init(name, apply_fun, create_params_and_state)
+    return base.initialize(name, apply_fun, create_params_and_state)
 
 ################################################################################################################
 

@@ -21,6 +21,6 @@ def Identity(name='Identity'):
         state = {}
         return params, state
 
-    return base.data_independent_init(name, apply_fun, create_params_and_state)
+    return base.initialize(name, apply_fun, create_params_and_state)
 
 __all__ = ['Identity']

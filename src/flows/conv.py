@@ -71,7 +71,7 @@ def CircularConv(filter_size, kernel_init=jaxinit.glorot_normal(), name='circula
         state = {}
         return params, state
 
-    return base.data_independent_init(name, apply_fun, create_params_and_state)
+    return base.initialize(name, apply_fun, create_params_and_state)
 
 ################################################################################################################
 

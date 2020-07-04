@@ -16,13 +16,11 @@ def UnitGaussianPrior(name='unit_gaussian_prior'):
     """
     dim = None
 
-    def apply_fun(params, state, inputs, reverse=False, mcmc=False, **kwargs):
+    def apply_fun(params, state, inputs, reverse=False, compute_base=False, t=1.0, **kwargs):
         x = inputs['x']
         outputs = {'x': x}
-        if(reverse == False):
-            outputs['log_det'] = -0.5*jnp.sum(x**2) + -0.5*dim*jnp.log(2*jnp.pi)
-        else:
-            outputs['log_det'] = 0.0
+        if(reverse == False or compute_base == True):
+            outputs['log_det'] = -0.5*jnp.sum(x**2, axis=-1)/t + -0.5*dim*jnp.log(2*jnp.pi)
         return outputs, state
 
     def create_params_and_state(key, input_shapes):
@@ -32,7 +30,7 @@ def UnitGaussianPrior(name='unit_gaussian_prior'):
         params, state = {}, {}
         return params, state
 
-    return base.data_independent_init(name, apply_fun, create_params_and_state)
+    return base.initialize(name, apply_fun, create_params_and_state)
 
 ################################################################################################################
 
@@ -56,7 +54,7 @@ def AffineGaussianPriorFullCov(out_dim, A_init=jaxinit.glorot_normal(), Sigma_ch
         Sigma_chol = Sigma_chol_flat[triangular_indices]
 
         diag = jnp.diag(Sigma_chol)
-        Sigma_chol = index_update(Sigma_chol, jnp.diag_indices(Sigma_chol.shape[0]), jnp.exp(diag))
+        Sigma_chol = jax.ops.index_update(Sigma_chol, jnp.diag_indices(Sigma_chol.shape[0]), jnp.exp(diag))
 
         # In case we want to change the noise model
         sigma = state['sigma']
@@ -133,7 +131,7 @@ def AffineGaussianPriorFullCov(out_dim, A_init=jaxinit.glorot_normal(), Sigma_ch
         state = {'sigma': 1.0}
         return params, state
 
-    return base.data_independent_init(name, apply_fun, create_params_and_state)
+    return base.initialize(name, apply_fun, create_params_and_state)
 
 ################################################################################################################
 
@@ -144,15 +142,15 @@ def AffineGaussianPriorDiagCov(out_dim, A_init=jaxinit.glorot_normal(), name='af
 
         Args:
     """
-    def forward(params, state, inputs, **kwargs):
+    def forward(params, state, inputs, s=1.0, **kwargs):
         x = inputs['x']
         assert x.ndim == 1
         A, log_diag_cov = params['A'], params['log_diag_cov']
 
         # In case we want to change the noise model.  This equation corresponds
         # to how we are changing noise in the inverse section
-        sigma = state['sigma']
-        log_diag_cov = log_diag_cov + 2*jnp.log(sigma)
+        # s = state['s']
+        log_diag_cov = log_diag_cov + 2*jnp.log(s)
         diag_cov = jnp.exp(log_diag_cov)
 
         # I+Lambda
@@ -163,10 +161,10 @@ def AffineGaussianPriorDiagCov(out_dim, A_init=jaxinit.glorot_normal(), name='af
         IpL_inv = jnp.linalg.inv(IpL)
 
         # Compute everything else
-        z = jnp.einsum('ij,j->i', IpL_inv@A.T/diag_cov, x)
+        z = (IpL_inv@A.T/diag_cov)@x
         x_proj = A@z/diag_cov
 
-            # Manifold penalty term
+        # Manifold penalty term
         log_hx = -0.5*jnp.sum(x*(x/diag_cov - x_proj), axis=-1)
         log_hx -= 0.5*jnp.linalg.slogdet(IpL)[1]
         log_hx -= 0.5*log_diag_cov.sum()
@@ -177,7 +175,7 @@ def AffineGaussianPriorDiagCov(out_dim, A_init=jaxinit.glorot_normal(), name='af
         outputs['log_det'] = log_hx
         return outputs, state
 
-    def inverse(params, state, inputs, **kwargs):
+    def inverse(params, state, inputs, s=1.0, t=1.0, compute_base=False, **kwargs):
         # Passing back through the network, we just need to sample from N(x|Az,Sigma).
         # Assume we have already sampled z ~ N(0,I)
         z = inputs['x']
@@ -185,20 +183,25 @@ def AffineGaussianPriorDiagCov(out_dim, A_init=jaxinit.glorot_normal(), name='af
         A, log_diag_cov = params['A'], params['log_diag_cov']
 
         # Compute Az
-        x = jnp.einsum('ij,j->i', A, z)
+        Az = A@z
 
         key = kwargs.pop('key', None)
         if(key is not None):
             # Sample from N(x|Az,Sigma)
-            sigma = state['sigma']
-            noise = random.normal(key, x.shape)*jnp.exp(0.5*log_diag_cov)*sigma
-            x += noise
+            # s = state['s']
+            noise = random.normal(key, Az.shape)*jnp.exp(0.5*log_diag_cov)*s
+            x = Az + noise
 
             # Compute N(x|Az+b, Sigma)
-            log_px = util.gaussian_diag_cov_logpdf(noise, jnp.zeros_like(noise), log_diag_cov)
+            log_px = util.gaussian_diag_cov_logpdf(x, Az, log_diag_cov)
         else:
+            x = Az
+
             # Otherwise we're just using an injective flow
             log_px = -0.5*jnp.linalg.slogdet(A.T@A)[1]
+
+        if(compute_base == True):
+            log_px += -0.5*jnp.sum(z**2, axis=-1)/t + -0.5*z.shape[-1]*jnp.log(2*jnp.pi)
 
         outputs = {}
         outputs['x'] = x
@@ -214,13 +217,13 @@ def AffineGaussianPriorDiagCov(out_dim, A_init=jaxinit.glorot_normal(), name='af
         x_shape = input_shapes['x']
         output_shape = x_shape[:-1] + (out_dim,)
         A = A_init(key, (x_shape[-1], out_dim))
-        log_diag_cov = jnp.zeros(x_shape[-1])
+        log_diag_cov = jnp.ones(x_shape[-1])
 
         params = {'A': A, 'log_diag_cov': log_diag_cov}
-        state = {'sigma': 1.0}
+        state = {'s': 1.0}
         return params, state
 
-    return base.data_independent_init(name, apply_fun, create_params_and_state)
+    return base.initialize(name, apply_fun, create_params_and_state)
 
 ################################################################################################################
 

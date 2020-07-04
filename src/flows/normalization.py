@@ -30,49 +30,20 @@ def ActNorm(log_s_init=jaxinit.zeros, b_init=jaxinit.zeros, name='act_norm'):
         outputs = {'x': z, 'log_det': log_det}
         return outputs, state
 
-    def init_fun(key, inputs, batched=False, batch_depth=1, **kwargs):
-        if(batched == False):
-            for i in range(batch_depth):
-                inputs = jax.tree_util.tree_map(lambda x: x[None], inputs)
-
+    def create_params_and_state(key, inputs, batch_depth):
         x = inputs['x']
+
+        nonlocal multiply_by
+        multiply_by = jnp.prod([s for i, s in enumerate(x.shape) if i >= batch_depth and i < len(x.shape) - 1])
 
         # Create the parameters
         axes = tuple(jnp.arange(len(x.shape) - 1))
         params = {'b'    : jnp.mean(x, axis=axes),
                   'log_s': jnp.log(jnp.std(x, axis=axes) + 1e-5)}
         state = {}
+        return params, state
 
-        # Keep track of how much to multiply the log_det by
-        nonlocal multiply_by
-        multiply_by = jnp.prod([s for i, s in enumerate(x.shape) if i >= batch_depth and i < len(x.shape) - 1])
-
-        # Pass the inputs through
-        unbatched_inputs = inputs
-        for i in range(batch_depth):
-            unbatched_inputs = jax.tree_util.tree_map(lambda x: x[0], unbatched_inputs)
-        input_shapes = util.tree_shapes(unbatched_inputs)
-        input_ndims = util.tree_ndims(unbatched_inputs)
-
-        # Pass the inputs to forward
-        vmapped_fun = partial(apply_fun, params, state, **kwargs)
-        for i in range(batch_depth):
-            vmapped_fun = vmap(vmapped_fun)
-        outputs, _ = vmapped_fun(inputs)
-
-        # Need to unbatch in order to get the output shapes
-        unbatched_outputs = outputs
-        for i in range(batch_depth):
-            unbatched_outputs = jax.tree_util.tree_map(lambda x: x[0], unbatched_outputs)
-        output_shapes = util.tree_shapes(unbatched_outputs)
-        output_ndims = util.tree_ndims(unbatched_outputs)
-
-        if(batched == False):
-            outputs = unbatched_outputs
-
-        return outputs, base.Flow(name, input_shapes, output_shapes, input_ndims, output_ndims, params, state, apply_fun)
-
-    return init_fun
+    return base.initialize(name, apply_fun, create_params_and_state, data_dependent=True)
 
 # Don't use autobatching!
 def BatchNorm(epsilon=1e-5, alpha=0.05, beta_init=jaxinit.zeros, gamma_init=jaxinit.zeros, name='batch_norm'):
@@ -153,7 +124,7 @@ def BatchNorm(epsilon=1e-5, alpha=0.05, beta_init=jaxinit.zeros, gamma_init=jaxi
 
         return params, state
 
-    return base.data_independent_init(name, apply_fun, create_params_and_state)
+    return base.initialize(name, apply_fun, create_params_and_state)
 
 ################################################################################################################
 

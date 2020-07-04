@@ -52,6 +52,8 @@ def injective_flow_test(layer, inputs, key):
     assert jnp.allclose(batched_outputs['log_det'], batched_reconstr['log_det'], atol=1e-04)
     print('Passed batched reconstruction tests')
 
+################################################################################################################
+
 def noisy_injective_flow_test(layer, inputs, key, n_keys=128, n_z=128):
     # language=rst
     """
@@ -83,18 +85,36 @@ def noisy_injective_flow_test(layer, inputs, key, n_keys=128, n_z=128):
     forward_mean, forward_std = forward_estimates.mean(), forward_estimates.std()
     print('%5.3f +- %5.3f'%(forward_mean, forward_std))
 
+################################################################################################################
+
 def nif_test():
     # language=rst
     """
     Check that a prior is correct and works with MCMC
     """
     key = random.PRNGKey(0)
-    x = random.normal(key, (10,))
+    # x = random.normal(key, (3, 4, 6, 8))
+    # x = jax.nn.softmax(x)
+    x = random.normal(key, (5, 10))
     inputs = {'x': x}
 
-    flow = nux.sequential(nux.TallAffineDiagCov(2),
-                          nux.Debug(),
-                          nux.UnitGaussianPrior())
+    # flow = nux.sequential(nux.TallAffineDiagCov(2),
+    #                       nux.Debug(),
+    #                       nux.UnitGaussianPrior())
 
-    # injective_flow_test(flow, inputs, key)
-    noisy_injective_flow_test(flow, inputs, key)
+    # # injective_flow_test(flow, inputs, key)
+    # noisy_injective_flow_test(flow, inputs, key)
+
+
+    layers = [nux.Coupling(), nux.ActNorm(), nux.Reverse()]*1
+    prior = nux.sequential(*layers, nux.UnitGaussianPrior())
+    flow = nux.importance_weighted(nux.TallAffineDiagCov(6), prior)
+
+    flow = nux.sequential(nux.Debug('c'),
+                          flow,
+                          nux.Debug('i'))
+
+    outputs, flow = flow(key, inputs, batched=True)
+
+    outputs, _ = flow.apply(flow.params, flow.state, inputs, key=key)
+    flow.apply(flow.params, flow.state, outputs, key=key, reverse=True)

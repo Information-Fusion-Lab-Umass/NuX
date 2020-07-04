@@ -18,6 +18,8 @@ import src.flows.coupling as coupling
 import src.flows.spline as spline
 import src.flows.basic as basic
 import src.flows.base as base
+import src.flows.gamma_softmax as gamma_softmax
+import src.flows.igr as igr
 
 def flow_test(layer, inputs, key):
     # language=rst
@@ -82,7 +84,7 @@ def flow_test(layer, inputs, key):
         return 0.5*jnp.linalg.slogdet(jac.T@jac)[1]
 
     actual_log_det = single_elt_logdet(inputs['x'])
-    assert jnp.allclose(actual_log_det, outputs['log_det'], atol=1e-04)
+    assert jnp.allclose(actual_log_det, outputs['log_det'], atol=1e-04), 'actual_log_det: %5.3f, outputs["log_det"]: %5.3f'%(actual_log_det, outputs['log_det'])
     print('Passed log det tests')
 
 def standard_layer_tests():
@@ -94,7 +96,7 @@ def standard_layer_tests():
               nonlinearities.Sigmoid,
               nonlinearities.Logit,
               reshape.Reverse,
-              dequantize.UniformDequantization,
+              # dequantize.UniformDequantization,
               normalization.ActNorm,
               # normalization.BatchNorm,
               basic.Identity,
@@ -136,9 +138,9 @@ def image_layer_test():
 
 def unit_test():
     key = random.PRNGKey(0)
-    x = random.normal(key, (4, 6, 8))
-    # x = random.normal(key, (10,))
-    x = jax.nn.softmax(x)
+    # x = random.normal(key, (4, 6, 8))
+    x = random.normal(key, (10,))
+    x = jax.nn.softmax(x)[:-1]
     inputs = {'x': x}
 
     # flow = affine.AffineDense()
@@ -187,14 +189,14 @@ def unit_test():
     #                                            normalization.ActNorm()),
     #                           compose.ChainRule(2, factor=False))
 
-    flow = compose.sequential(compose.ChainRule(2, factor=True),
-                              compose.factored(compose.sequential(base.Debug('a'),
-                                                                  compose.ChainRule(2, factor=True),
-                                                                  compose.factored(base.Debug('b'),
-                                                                                   normalization.ActNorm()),
-                                                                  compose.ChainRule(2, factor=False)),
-                                               base.Debug('c')),
-                              compose.ChainRule(2, factor=False))
+    # flow = compose.sequential(compose.ChainRule(2, factor=True),
+    #                           compose.factored(compose.sequential(base.Debug('a'),
+    #                                                               compose.ChainRule(2, factor=True),
+    #                                                               compose.factored(base.Debug('b'),
+    #                                                                                normalization.ActNorm()),
+    #                                                               compose.ChainRule(2, factor=False)),
+    #                                            base.Debug('c')),
+    #                           compose.ChainRule(2, factor=False))
 
     # flow = compose.sequential(compose.ChainRule(2, factor=True),
     #                           compose.factored(compose.sequential(basic.Identity(),
@@ -224,5 +226,7 @@ def unit_test():
     #                           compose.ChainRule(2, factor=False))
 
     # flow = compose.sequential(affine.OnebyOneConvLAX())
+
+    flow = igr.SoftmaxPP()
 
     flow_test(flow, inputs, key)

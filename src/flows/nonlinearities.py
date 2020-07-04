@@ -32,7 +32,7 @@ def LeakyReLU(alpha=0.01, name='leaky_relu'):
         params, state = {}, {}
         return params, state
 
-    return base.data_independent_init(name, apply_fun, create_params_and_state)
+    return base.initialize(name, apply_fun, create_params_and_state)
 
 ################################################################################################################
 
@@ -81,7 +81,7 @@ def Sigmoid(lmbda=None, name='sigmoid'):
         params, state = {}, {}
         return params, state
 
-    return base.data_independent_init(name, apply_fun, create_params_and_state)
+    return base.initialize(name, apply_fun, create_params_and_state)
 
 ################################################################################################################
 
@@ -128,7 +128,7 @@ def Logit(lmbda=0.05, name='logit'):
         params, state = {}, {}
         return params, state
 
-    return base.data_independent_init(name, apply_fun, create_params_and_state)
+    return base.initialize(name, apply_fun, create_params_and_state)
 
 ################################################################################################################
 

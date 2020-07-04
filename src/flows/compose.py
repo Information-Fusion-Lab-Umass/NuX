@@ -35,12 +35,14 @@ def sequential(*init_funs, name='sequential'):
         apply_funs = []
         log_det = 0.0
         used_names = {}
+        misc_outputs = {}
         for key, init_fun in zip(keys, init_funs):
 
             # Initialize the flow and handle passing the inputs to the next flow accordingly
             outputs, flow = init_fun(key, inputs, batched=batched, batch_depth=batch_depth, **kwargs)
-            log_det += outputs['log_det']
+            log_det = log_det + outputs['log_det']
             inputs.update(outputs)
+            misc_outputs.update(outputs)
 
             # Can't repeat names!
             if(flow.name in used_names):
@@ -58,6 +60,7 @@ def sequential(*init_funs, name='sequential'):
         # Finalize the things we need in the flow
         output_shapes = flow.output_shapes
         output_ndims = flow.output_ndims
+        outputs.update(misc_outputs)
         outputs['log_det'] = log_det
 
         def apply_fun(params, state, original_inputs, reverse=False, **kwargs):
@@ -80,7 +83,7 @@ def sequential(*init_funs, name='sequential'):
                 # Run the function
                 outputs, uptd_state = fun(params[name], state[name], inputs, key=key, reverse=reverse, **kwargs)
                 # Update the log determinant and state
-                log_det += outputs['log_det']
+                log_det = log_det + outputs['log_det']
                 updated_state[name] = uptd_state
 
                 # Update the input for the next iteration
@@ -119,6 +122,7 @@ def factored(*init_funs, name='factored'):
         log_det = 0.0
         xs = []
         used_names = {}
+        misc_outputs = {}
         for key, init_fun, x in zip(keys, init_funs, inputs['x']):
 
             # Create a new input dictionary
@@ -127,6 +131,7 @@ def factored(*init_funs, name='factored'):
 
             # Initialize the flow
             outputs, flow = init_fun(key, single_input, batched=batched, batch_depth=batch_depth, **kwargs)
+            misc_outputs.update(outputs)
             log_det += outputs['log_det']
             xs.append(outputs['x'])
 
@@ -145,6 +150,7 @@ def factored(*init_funs, name='factored'):
 
         # Finalize the things we need in the flow
         outputs = inputs.copy()
+        outputs.update(misc_outputs)
         outputs['x'] = xs
         outputs['log_det'] = log_det
 
@@ -158,7 +164,6 @@ def factored(*init_funs, name='factored'):
         else:
             output_shapes = util.tree_shapes(outputs)
             output_ndims = util.tree_ndims(outputs)
-        # output_shapes = util.tree_shapes(outputs)
 
         def apply_fun(params, state, original_inputs, reverse=False, **kwargs):
             # Use a new dictionary so that we don't modify the existing one
@@ -178,6 +183,7 @@ def factored(*init_funs, name='factored'):
             log_det = 0.0
             xs = []
             updated_state = OrderedDict()
+            misc_outputs = {}
 
             for fun, name, key, x in zip(funs, names, keys, input_xs):
 
@@ -192,11 +198,13 @@ def factored(*init_funs, name='factored'):
                 log_det += outputs['log_det']
                 xs.append(outputs['x'])
                 updated_state[name] = uptd_state
+                misc_outputs.update(outputs)
 
             if(reverse):
                 xs = xs[::-1]
 
             outputs = inputs.copy()
+            outputs.update(misc_outputs)
             outputs['x'] = xs
             outputs['log_det'] = log_det
             return outputs, updated_state
@@ -234,7 +242,7 @@ def ChainRule(split_idx, axis=-1, factor=True, name='chain_rule'):
         params, state = {}, {}
         return params, state
 
-    return base.data_independent_init(name, apply_fun, create_params_and_state)
+    return base.initialize(name, apply_fun, create_params_and_state)
 
 ################################################################################################################
 # Things that are not auto batched
@@ -309,4 +317,4 @@ __all__ = ['sequential',
 #         return _init_fun(key, {'x': augmented_input_shape})
 
 
-#     return init_fun, base.data_independent_init(init_fun)
+#     return init_fun, base.initialize(init_fun)

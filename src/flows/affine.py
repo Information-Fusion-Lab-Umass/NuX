@@ -62,7 +62,7 @@ def AffineLDU(L_init=jaxinit.normal(), d_init=jaxinit.ones, U_init=jaxinit.norma
         state = {}
         return params, state
 
-    return base.data_independent_init(name, apply_fun, create_params_and_state)
+    return base.initialize(name, apply_fun, create_params_and_state)
 
 @base.auto_batch
 def AffineSVD(n_householders, U_init=jaxinit.glorot_normal(), log_s_init=jaxinit.normal(), VT_init=jaxinit.glorot_normal(), name='affine_svd'):
@@ -102,7 +102,7 @@ def AffineSVD(n_householders, U_init=jaxinit.glorot_normal(), log_s_init=jaxinit
         state = {}
         return params, state
 
-    return base.data_independent_init(name, apply_fun, create_params_and_state)
+    return base.initialize(name, apply_fun, create_params_and_state)
 
 @base.auto_batch
 def AffineDense(W_init=jaxinit.glorot_normal(), name='affine_dense'):
@@ -113,7 +113,7 @@ def AffineDense(W_init=jaxinit.glorot_normal(), name='affine_dense'):
     def apply_fun(params, state, inputs, reverse=False, **kwargs):
         x = inputs['x']
         W = params['W']
-        W = W/jnp.sqrt(jnp.sum(W**2, axis=0) + 1e-5)
+        # W = W/jnp.sqrt(jnp.sum(W**2, axis=0) + 1e-5)
         assert x.ndim == 1
 
         if(reverse == False):
@@ -133,7 +133,7 @@ def AffineDense(W_init=jaxinit.glorot_normal(), name='affine_dense'):
         state = {}
         return params, state
 
-    return base.data_independent_init(name, apply_fun, create_params_and_state)
+    return base.initialize(name, apply_fun, create_params_and_state)
 
 def Affine(*args, mode='dense', **kwargs):
     # language=rst
@@ -184,7 +184,7 @@ def OnebyOneConvLDU(name='1x1conv_ldu'):
         affine_apply = LDU_flow.apply
         return LDU_flow.params, LDU_flow.state
 
-    return base.data_independent_init(name, apply_fun, create_params_and_state)
+    return base.initialize(name, apply_fun, create_params_and_state)
 
 @base.auto_batch
 def OnebyOneConv(W_init=jaxinit.glorot_normal(), name='1x1conv'):
@@ -220,7 +220,7 @@ def OnebyOneConv(W_init=jaxinit.glorot_normal(), name='1x1conv'):
         state = {}
         return params, state
 
-    return base.data_independent_init(name, apply_fun, create_params_and_state)
+    return base.initialize(name, apply_fun, create_params_and_state)
 
 @base.auto_batch
 def OnebyOneConvLAX(weight_norm=False, W_init=jaxinit.glorot_normal(), name='1x1conv_lax'):
@@ -277,7 +277,7 @@ def OnebyOneConvLAX(weight_norm=False, W_init=jaxinit.glorot_normal(), name='1x1
         state = {}
         return params, state
 
-    return base.data_independent_init(name, apply_fun, create_params_and_state)
+    return base.initialize(name, apply_fun, create_params_and_state)
 
 ################################################################################################################
 
@@ -350,7 +350,7 @@ def LocalDense(filter_shape=(2, 2), dilation=(1, 1), W_init=jaxinit.glorot_norma
         state = {}
         return params, state
 
-    return base.data_independent_init(name, apply_fun, create_params_and_state)
+    return base.initialize(name, apply_fun, create_params_and_state)
 
 ################################################################################################################
 

@@ -172,7 +172,7 @@ def NeuralSpline(K, network=None, hidden_layer_sizes=[1024]*4, name='unnamed'):
         state = {}
         return params, state
 
-    return base.data_independent_init(name, apply_fun, create_params_and_state)
+    return base.initialize(name, apply_fun, create_params_and_state)
 
 ################################################################################################################
 
