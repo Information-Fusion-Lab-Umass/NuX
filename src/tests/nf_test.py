@@ -227,6 +227,6 @@ def unit_test():
 
     # flow = compose.sequential(affine.OnebyOneConvLAX())
 
-    flow = igr.SoftmaxPP()
+    # flow = igr.SoftmaxPP()
 
     flow_test(flow, inputs, key)

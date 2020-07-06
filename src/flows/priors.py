@@ -16,18 +16,22 @@ def UnitGaussianPrior(name='unit_gaussian_prior'):
     """
     dim = None
 
-    def apply_fun(params, state, inputs, reverse=False, compute_base=False, t=1.0, **kwargs):
+    def apply_fun(params, state, inputs, reverse=False, compute_base=False, **kwargs):
         x = inputs['x']
+        t = state['t']
         outputs = {'x': x}
         if(reverse == False or compute_base == True):
-            outputs['log_det'] = -0.5*jnp.sum(x**2, axis=-1)/t + -0.5*dim*jnp.log(2*jnp.pi)
+            outputs['log_pz'] = -0.5*jnp.sum(x**2)/t + -0.5*dim*jnp.log(2*jnp.pi)
+            # outputs['log_pz'] = -0.5*jnp.sum(x**2, axis=-1)/t + -0.5*dim*jnp.log(2*jnp.pi)
+        else:
+            outputs['log_pz'] = 0.0
         return outputs, state
 
     def create_params_and_state(key, input_shapes):
         x_shape = input_shapes['x']
         nonlocal dim
         dim = jnp.prod(x_shape)
-        params, state = {}, {}
+        params, state = {}, {'t': 1.0}
         return params, state
 
     return base.initialize(name, apply_fun, create_params_and_state)
@@ -74,7 +78,7 @@ def AffineGaussianPriorFullCov(out_dim, A_init=jaxinit.glorot_normal(), Sigma_ch
         log_hx -= 0.5*x_dim*jnp.log(2*jnp.pi)
 
         outputs['x'] = z
-        outputs['log_det'] = log_hx
+        outputs['log_pz'] = log_hx
         return outputs, state
 
     def inverse(params, state, inputs, **kwargs):
@@ -104,7 +108,7 @@ def AffineGaussianPriorFullCov(out_dim, A_init=jaxinit.glorot_normal(), Sigma_ch
         log_px = util.gaussian_chol_cov_logpdf(noise, jnp.zeros_like(noise), log_diag_cov)
 
         outputs['x'] = x
-        outputs['log_det'] = log_px
+        outputs['log_pz'] = log_px
         return outputs, state
 
     def apply_fun(params, state, inputs, reverse=False, **kwargs):
@@ -172,7 +176,7 @@ def AffineGaussianPriorDiagCov(out_dim, A_init=jaxinit.glorot_normal(), name='af
 
         outputs = {}
         outputs['x'] = z
-        outputs['log_det'] = log_hx
+        outputs['log_pz'] = log_hx
         return outputs, state
 
     def inverse(params, state, inputs, s=1.0, t=1.0, compute_base=False, **kwargs):
@@ -205,7 +209,7 @@ def AffineGaussianPriorDiagCov(out_dim, A_init=jaxinit.glorot_normal(), name='af
 
         outputs = {}
         outputs['x'] = x
-        outputs['log_det'] = log_px
+        outputs['log_pz'] = log_px
         return outputs, state
 
     def apply_fun(params, state, inputs, reverse=False, **kwargs):

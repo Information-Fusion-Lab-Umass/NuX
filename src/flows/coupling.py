@@ -9,7 +9,7 @@ import src.flows.base as base
 ################################################################################################################
 
 @base.auto_batch
-def Coupling(haiku_network=None, hidden_layer_sizes=[1024]*4, kind='affine', axis=-1, name='coupling'):
+def Coupling(haiku_network=None, hidden_layer_sizes=[1024]*4, kind='affine', axis=-1, name='coupling', n_channels=256):
     # language=rst
     """
     Apply an arbitrary transform to half of the input vector.
@@ -61,7 +61,7 @@ def Coupling(haiku_network=None, hidden_layer_sizes=[1024]*4, kind='affine', axi
         nonlocal network
         if(haiku_network is None):
             if(len(x_shape) == 3):
-                network = hk.transform(lambda x, **kwargs: util.SimpleConv(split_input_shape, 256, kind=='additive')(x, **kwargs))
+                network = hk.transform(lambda x, **kwargs: util.SimpleConv(split_input_shape, n_channels, kind=='additive')(x, **kwargs))
             else:
                 network = hk.transform(lambda x, **kwargs: util.SimpleMLP(split_input_shape, hidden_layer_sizes, kind=='additive')(x, **kwargs))
         else:

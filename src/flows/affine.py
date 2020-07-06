@@ -259,8 +259,8 @@ def OnebyOneConvLAX(weight_norm=False, W_init=jaxinit.glorot_normal(), name='1x1
         height, width, channel = input_shapes['x']
 
         W = W_init(key, (channel, channel))
-        # U, s, VT = jnp.linalg.svd(W, full_matrices=False)
-        # W = jnp.dot(U, VT)
+        U, s, VT = jnp.linalg.svd(W, full_matrices=False)
+        W = jnp.dot(U, VT)
 
         # JAX conv is weird with batch dims
         assert len(input_shapes['x']) == 3

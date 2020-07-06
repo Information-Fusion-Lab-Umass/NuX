@@ -65,6 +65,10 @@ def CircularConv(filter_size, kernel_init=jaxinit.glorot_normal(), name='circula
         x_shape = input_shapes['x']
         height, width, channel = x_shape
         kernel = kernel_init(key, filter_size + (channel, channel))
+        kernel = vmap(vmap(util.whiten))(kernel)
+
+        assert kernel.shape == filter_size + (channel, channel)
+
         assert filter_size[0] <= height, 'filter_size: %s, x_shape: %s'%(filter_size, x_shape)
         assert filter_size[1] <= width, 'filter_size: %s, x_shape: %s'%(filter_size, x_shape)
         params = {'kernel': kernel}

@@ -12,6 +12,7 @@ from src.flows.priors import *
 from src.flows.base import *
 from src.flows.basic import *
 from src.flows.nif import *
+from src.flows.upsample_nif import *
 from src.flows.importance_weighted import *
 from src.flows.gamma_softmax import *
 from src.flows.igr import *

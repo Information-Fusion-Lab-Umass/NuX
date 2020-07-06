@@ -40,7 +40,7 @@ def sequential(*init_funs, name='sequential'):
 
             # Initialize the flow and handle passing the inputs to the next flow accordingly
             outputs, flow = init_fun(key, inputs, batched=batched, batch_depth=batch_depth, **kwargs)
-            log_det = log_det + outputs['log_det']
+            log_det += outputs.get('log_det', 0.0)
             inputs.update(outputs)
             misc_outputs.update(outputs)
 
@@ -83,7 +83,7 @@ def sequential(*init_funs, name='sequential'):
                 # Run the function
                 outputs, uptd_state = fun(params[name], state[name], inputs, key=key, reverse=reverse, **kwargs)
                 # Update the log determinant and state
-                log_det = log_det + outputs['log_det']
+                log_det += outputs.get('log_det', 0.0)
                 updated_state[name] = uptd_state
 
                 # Update the input for the next iteration
@@ -132,7 +132,7 @@ def factored(*init_funs, name='factored'):
             # Initialize the flow
             outputs, flow = init_fun(key, single_input, batched=batched, batch_depth=batch_depth, **kwargs)
             misc_outputs.update(outputs)
-            log_det += outputs['log_det']
+            log_det += outputs.get('log_det', 0.0)
             xs.append(outputs['x'])
 
             # Can't repeat names!
@@ -195,7 +195,7 @@ def factored(*init_funs, name='factored'):
                 outputs, uptd_state = fun(params[name], state[name], single_input, key=key, reverse=reverse, **kwargs)
 
                 # Update the log determinant and state
-                log_det += outputs['log_det']
+                log_det += outputs.get('log_det', 0.0)
                 xs.append(outputs['x'])
                 updated_state[name] = uptd_state
                 misc_outputs.update(outputs)
@@ -245,14 +245,6 @@ def ChainRule(split_idx, axis=-1, factor=True, name='chain_rule'):
     return base.initialize(name, apply_fun, create_params_and_state)
 
 ################################################################################################################
-# Things that are not auto batched
-
-# sequential *
-# factored *
-# Debug
-# ActNorm *
-
-################################################################################################################
 
 from src.flows.reshape import Squeeze, UnSqueeze
 from src.flows.basic import Identity
@@ -270,7 +262,6 @@ def multi_scale(flow, existing_flow):
 __all__ = ['sequential',
            'factored',
            'ChainRule',
-           # 'Augment',
            'multi_scale']
 
 # @base.auto_batch

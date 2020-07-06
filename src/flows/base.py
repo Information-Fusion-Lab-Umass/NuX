@@ -67,46 +67,6 @@ def auto_batch(layer):
 
     return call_layer
 
-# def auto_batch(layer):
-#     # language=rst
-#     """
-#     Automatically handle extra leading dimensions on an input.
-#     """
-#     @wraps(layer)
-#     def call_layer(*args, **kwargs):
-
-#         name = kwargs.get('name')
-
-#         _init_fun = layer(*args, **kwargs)
-
-#         def init_fun(key, inputs, batched=False, batch_depth=1, **kwargs):
-#             # Initialize the flow layer
-#             outputs, flow = _init_fun(key, inputs, batched=batched, batch_depth=batch_depth, **kwargs)
-
-#             # Keep track of the expected dimensions
-#             expected_input_x_dim = jax.tree_util.tree_leaves(flow.input_ndims['x'])[0]
-#             expected_output_x_dim = jax.tree_util.tree_leaves(flow.output_ndims['x'])[0]
-
-#             # The new apply fun will vmap when needed
-#             def apply_fun(params, state, inputs, reverse=False, **kwargs):
-#                 input_dim = jax.tree_util.tree_leaves(inputs['x'])[0].ndim # Assume all inputs are batched the same!!
-#                 expected_dim = expected_input_x_dim if reverse == False else expected_output_x_dim
-
-#                 # Recursively vmap
-#                 if(input_dim > expected_dim):
-#                     outputs, updated_state = vmap(partial(apply_fun, params, state, reverse=reverse, **kwargs))(inputs)
-#                     updated_state = jax.tree_util.tree_map(lambda x: x.mean(axis=0), updated_state)
-#                     return outputs, updated_state
-
-#                 return flow.apply(params, state, inputs, reverse=reverse, **kwargs)
-
-#             new_flow = Flow(flow.name, flow.input_shapes, flow.output_shapes, flow.input_ndims, flow.output_ndims, flow.params, flow.state, apply_fun)
-#             return outputs, new_flow
-
-#         return init_fun
-
-#     return call_layer
-
 ################################################################################################################
 
 def initialize(name, apply_fun, create_params_and_state, data_dependent=False, start_hook=None, end_hook=None):
