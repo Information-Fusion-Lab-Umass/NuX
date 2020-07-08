@@ -3,8 +3,8 @@ from jax import random, jit, vmap
 import jax.numpy as jnp
 from functools import partial
 from jax.ops import index, index_add, index_update
-import src.util as util
-import src.flows.base as base
+import nux.util as util
+import nux.flows.base as base
 from collections import OrderedDict
 
 ################################################################################################################
@@ -246,8 +246,8 @@ def ChainRule(split_idx, axis=-1, factor=True, name='chain_rule'):
 
 ################################################################################################################
 
-from src.flows.bijective.reshape import Squeeze, UnSqueeze
-from src.flows.bijective.affine import Identity
+from nux.flows.bijective.reshape import Squeeze, UnSqueeze
+from nux.flows.bijective.affine import Identity
 
 def multi_scale(flow, existing_flow):
     return sequential(flow,

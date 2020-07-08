@@ -1,6 +1,6 @@
 import jax.numpy as jnp
 import jax
-import src.flows.base as base
+import nux.flows.base as base
 
 @base.auto_batch
 def LeakyReLU(alpha=0.01, name='leaky_relu'):

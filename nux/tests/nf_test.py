@@ -3,20 +3,20 @@ import jax.numpy as jnp
 from jax import random
 from jax.flatten_util import ravel_pytree
 from functools import partial
-import src.util as util
+import nux.util as util
 import jax.tree_util as tree_util
 
-import src.flows.bijective.affine as affine
-import src.flows.bijective.nonlinearities as nonlinearities
-import src.flows.bijective.reshape as reshape
-import src.flows.bijective.normalization as normalization
-import src.flows.bijective.conv as conv
-import src.flows.compose as compose
-import src.flows.bijective.maf as maf
-import src.flows.bijective.coupling as coupling
-import src.flows.bijective.spline as spline
-import src.flows.base as base
-import src.flows.bijective.igr as igr
+import nux.flows.bijective.affine as affine
+import nux.flows.bijective.nonlinearities as nonlinearities
+import nux.flows.bijective.reshape as reshape
+import nux.flows.bijective.normalization as normalization
+import nux.flows.bijective.conv as conv
+import nux.flows.compose as compose
+import nux.flows.bijective.maf as maf
+import nux.flows.bijective.coupling as coupling
+import nux.flows.bijective.spline as spline
+import nux.flows.base as base
+import nux.flows.bijective.igr as igr
 
 def flow_test(layer, inputs, key):
     # language=rst

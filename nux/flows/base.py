@@ -4,7 +4,7 @@ import jax.nn.initializers as jaxinit
 import jax.numpy as jnp
 import jax
 from jax import random, jit, vmap
-import src.util as util
+import nux.util as util
 fast_tree_leaves = jit(jax.tree_util.tree_leaves)
 
 Flow = namedtuple('Flow', ['name',

@@ -1,8 +1,8 @@
 import jax.numpy as jnp
 from jax import vmap
 from functools import partial
-import src.util as util
-import src.flows.base as base
+import nux.util as util
+import nux.flows.base as base
 
 ################################################################################################################
 

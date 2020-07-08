@@ -7,7 +7,7 @@ NuX is a library for building [normalizing flows](https://arxiv.org/pdf/1912.027
 NuX has many normalizing flow layers implemented with an easy to use interface.
 
 ```python
-import src.flows as nux
+import nux.flows as nux
 import jax
 import jax.numpy as jnp
 key = random.PRNGKey(0)

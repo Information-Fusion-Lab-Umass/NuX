@@ -1,6 +1,6 @@
 import jax.numpy as jnp
 from jax import random
-import src.flows.base as base
+import nux.flows.base as base
 
 @base.auto_batch
 def UniformDequantization(noise_scale=None, scale=256.0, name='uniform_dequantization'):

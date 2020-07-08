@@ -5,8 +5,8 @@ import jax.numpy as jnp
 from functools import partial, reduce
 from jax.tree_util import tree_map
 from jax.scipy.special import logsumexp
-import src.util as util
-import src.flows.base as base
+import nux.util as util
+import nux.flows.base as base
 import haiku as hk
 
 ################################################################################################################

@@ -1,10 +1,10 @@
 import jax
 import jax.numpy as jnp
 import jax.nn.initializers as jaxinit
-import src.util as util
+import nux.util as util
 from jax import random, vmap
 from functools import partial
-import src.flows.base as base
+import nux.flows.base as base
 from jax.scipy.special import logsumexp
 
 @base.auto_batch

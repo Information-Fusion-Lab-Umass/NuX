@@ -2,8 +2,8 @@ import jax.numpy as jnp
 import jax.nn.initializers as jaxinit
 from jax import vmap, jit
 from functools import partial
-import src.flows.base as base
-import src.util as util
+import nux.flows.base as base
+import nux.util as util
 
 fft_channel_vmap = vmap(jnp.fft.fftn, in_axes=(2,), out_axes=2)
 ifft_channel_vmap = vmap(jnp.fft.ifftn, in_axes=(2,), out_axes=2)

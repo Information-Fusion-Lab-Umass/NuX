@@ -3,8 +3,8 @@ import jax.numpy as jnp
 from jax import vmap, random, jit
 import jax.nn.initializers as jaxinit
 from functools import partial
-import src.util as util
-import src.flows.base as base
+import nux.util as util
+import nux.flows.base as base
 
 @base.auto_batch
 def UnitGaussianPrior(name='unit_gaussian_prior'):

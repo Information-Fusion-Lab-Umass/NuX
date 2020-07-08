@@ -3,8 +3,8 @@ import jax.nn.initializers as jaxinit
 import jax.numpy as jnp
 from jax import random, vmap, jit
 from functools import partial
-import src.util as util
-import src.flows.base as base
+import nux.util as util
+import nux.flows.base as base
 
 @base.auto_batch
 def ActNorm(log_s_init=jaxinit.zeros, b_init=jaxinit.zeros, name='act_norm'):

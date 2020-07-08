@@ -3,10 +3,10 @@ import jax.numpy as jnp
 from jax import random, vmap
 from jax.flatten_util import ravel_pytree
 from functools import partial
-import src.util as util
+import nux.util as util
 import jax.tree_util as tree_util
 from jax.scipy.special import logsumexp
-import src.flows as nux
+import nux.flows as nux
 
 def injective_flow_test(layer, inputs, key):
     # language=rst

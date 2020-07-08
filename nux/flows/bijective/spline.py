@@ -3,8 +3,8 @@ from jax import vmap, jit
 import jax.numpy as jnp
 from functools import partial
 import haiku as hk
-import src.util as util
-import src.flows.base as base
+import nux.util as util
+import nux.flows.base as base
 
 @partial(jit, static_argnums=(0, 3))
 def get_knot_parameters(apply_fun, params, x, K, min_width=1e-3, min_height=1e-3, min_derivative=1e-3):
