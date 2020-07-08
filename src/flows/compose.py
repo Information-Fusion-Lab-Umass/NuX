@@ -246,8 +246,8 @@ def ChainRule(split_idx, axis=-1, factor=True, name='chain_rule'):
 
 ################################################################################################################
 
-from src.flows.reshape import Squeeze, UnSqueeze
-from src.flows.basic import Identity
+from src.flows.bijective.reshape import Squeeze, UnSqueeze
+from src.flows.bijective.affine import Identity
 
 def multi_scale(flow, existing_flow):
     return sequential(flow,

@@ -6,20 +6,17 @@ from functools import partial
 import src.util as util
 import jax.tree_util as tree_util
 
-import src.flows.affine as affine
-import src.flows.nonlinearities as nonlinearities
-import src.flows.reshape as reshape
-import src.flows.dequantize as dequantize
-import src.flows.normalization as normalization
-import src.flows.conv as conv
+import src.flows.bijective.affine as affine
+import src.flows.bijective.nonlinearities as nonlinearities
+import src.flows.bijective.reshape as reshape
+import src.flows.bijective.normalization as normalization
+import src.flows.bijective.conv as conv
 import src.flows.compose as compose
-import src.flows.maf as maf
-import src.flows.coupling as coupling
-import src.flows.spline as spline
-import src.flows.basic as basic
+import src.flows.bijective.maf as maf
+import src.flows.bijective.coupling as coupling
+import src.flows.bijective.spline as spline
 import src.flows.base as base
-import src.flows.gamma_softmax as gamma_softmax
-import src.flows.igr as igr
+import src.flows.bijective.igr as igr
 
 def flow_test(layer, inputs, key):
     # language=rst
@@ -96,10 +93,9 @@ def standard_layer_tests():
               nonlinearities.Sigmoid,
               nonlinearities.Logit,
               reshape.Reverse,
-              # dequantize.UniformDequantization,
               normalization.ActNorm,
               # normalization.BatchNorm,
-              basic.Identity,
+              affine.Identity,
               partial(maf.MAF, [1024, 1024]),
               coupling.Coupling,
               partial(spline.NeuralSpline, 4)]
@@ -199,12 +195,12 @@ def unit_test():
     #                           compose.ChainRule(2, factor=False))
 
     # flow = compose.sequential(compose.ChainRule(2, factor=True),
-    #                           compose.factored(compose.sequential(basic.Identity(),
+    #                           compose.factored(compose.sequential(affine.Identity(),
     #                                                               compose.ChainRule(2, factor=True),
-    #                                                               compose.factored(basic.Identity(),
+    #                                                               compose.factored(affine.Identity(),
     #                                                                                normalization.ActNorm()),
     #                                                               compose.ChainRule(2, factor=False)),
-    #                                            basic.Identity()),
+    #                                            affine.Identity()),
     #                           compose.ChainRule(2, factor=False))
 
     # flow = compose.sequential(reshape.Squeeze(),

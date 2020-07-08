@@ -7,6 +7,25 @@ from functools import partial
 import src.flows.base as base
 
 @base.auto_batch
+def Identity(name='Identity'):
+    # language=rst
+    """
+    Identity transformation
+    """
+    def apply_fun(params, state, inputs, reverse=False, **kwargs):
+        outputs = {'x': inputs['x'], 'log_det': 0.0}
+        return outputs, state
+
+    def create_params_and_state(key, input_shapes):
+        params = {}
+        state = {}
+        return params, state
+
+    return base.initialize(name, apply_fun, create_params_and_state)
+
+################################################################################################################
+
+@base.auto_batch
 def AffineLDU(L_init=jaxinit.normal(), d_init=jaxinit.ones, U_init=jaxinit.normal(), name='affine_ldu'):
     # language=rst
     """
@@ -259,8 +278,7 @@ def OnebyOneConvLAX(weight_norm=False, W_init=jaxinit.glorot_normal(), name='1x1
         height, width, channel = input_shapes['x']
 
         W = W_init(key, (channel, channel))
-        U, s, VT = jnp.linalg.svd(W, full_matrices=False)
-        W = jnp.dot(U, VT)
+        W = util.whiten(W)
 
         # JAX conv is weird with batch dims
         assert len(input_shapes['x']) == 3
@@ -287,7 +305,6 @@ def LocalDense(filter_shape=(2, 2), dilation=(1, 1), W_init=jaxinit.glorot_norma
     """
     Dense matrix that gets multiplied by partitioned sections of an image.
     Works by applying dilated_squeeze, 1x1 conv, then undilated_squeeze.
-
     """
     dimension_numbers = ('NHWC', 'HWIO', 'NHWC')
 
@@ -354,7 +371,8 @@ def LocalDense(filter_shape=(2, 2), dilation=(1, 1), W_init=jaxinit.glorot_norma
 
 ################################################################################################################
 
-__all__ = ['AffineLDU',
+__all__ = ['Identity',
+           'AffineLDU',
            'AffineSVD',
            'AffineDense',
            'Affine',
