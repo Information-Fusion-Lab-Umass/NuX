@@ -34,3 +34,9 @@ reconst, _ = flow.apply(flow.params, flow.state, {'x': z}, reverse=True)
 
 assert jnp.allclose(x_test, reconst['x'])
 ```
+## Intallation
+For the moment, NuX only works with python 3.7.  The steps to install are:
+    - pip install nux
+    - pip install git+https://github.com/deepmind/dm-haiku
+
+If you want GPU support for JAX, follow the intructions here https://github.com/google/jax#installation
