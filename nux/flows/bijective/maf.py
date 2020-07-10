@@ -104,7 +104,7 @@ def MAF(hidden_layer_sizes,
         x = inputs['x']
         network_params = params['hk_params']
 
-        mu, alpha = network.apply(network_params, x)
+        mu, alpha = network.apply(network_params, None, x)
         z = (x - mu)*jnp.exp(-alpha)
         log_det = -alpha.sum(axis=-1)
 
@@ -121,7 +121,7 @@ def MAF(hidden_layer_sizes,
         # For each MADE block, need to build output a dimension at a time
         def carry_body(carry, inputs):
             x, idx = carry, inputs
-            mu, alpha = network.apply(network_params, x)
+            mu, alpha = network.apply(network_params, None, x)
             w = mu + u*jnp.exp(alpha)
             x = jax.ops.index_update(x, idx, w[idx])
             return x, alpha[idx]
@@ -158,7 +158,7 @@ def MAF(hidden_layer_sizes,
 
         # Create the network
         nonlocal network
-        network = hk.transform(lambda x: GaussianMADE(input_sel, dim, hidden_layer_sizes, reverse, method, name)(x))
+        network = hk.transform(lambda x: GaussianMADE(input_sel, dim, hidden_layer_sizes, reverse, method, name)(x), apply_rng=True)
 
         # Initialize it.  Remember that this function expects an unbatched input
         params = {'hk_params': network.init(key, jnp.zeros(x_shape))}

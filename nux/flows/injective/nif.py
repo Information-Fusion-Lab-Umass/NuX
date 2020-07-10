@@ -211,12 +211,12 @@ def CouplingTallAffineDiagCov(out_dim,
                 x1, x2 = jnp.split(x, jnp.array([dims['x1_dim']]), axis=-1)
 
             # Compute the bias and covariance conditioned on x2
-            b1, log_diag_cov1 = network1.apply(network_params1, x2, **kwargs)
+            b1, log_diag_cov1 = network1.apply(network_params1, None, x2, **kwargs)
             outputs1 = sample_stochastic_inverse(x1, A1, b1, log_diag_cov1, s, k1)
             z1 = outputs1.pop('x')
 
             # Compute the bias and covariance conditioned on z1
-            b2, log_diag_cov2 = network2.apply(network_params2, z1, **kwargs)
+            b2, log_diag_cov2 = network2.apply(network_params2, None, z1, **kwargs)
             outputs2 = sample_stochastic_inverse(x2, A2, b2, log_diag_cov2, s, k2)
             z2 = outputs2.pop('x')
 
@@ -248,7 +248,7 @@ def CouplingTallAffineDiagCov(out_dim,
                 z1, z2 = jnp.split(z, jnp.array([dims['z1_dim']]), axis=-1)
 
             # Compute the bias and covariance conditioned on z1
-            b2, log_diag_cov2 = network2.apply(network_params2, z1, **kwargs)
+            b2, log_diag_cov2 = network2.apply(network_params2, None, z1, **kwargs)
 
             if(forward_monte_carlo):
                 outputs2 = forward_mc(z2, target_x2, A2, b2, log_diag_cov2, s)
@@ -257,7 +257,7 @@ def CouplingTallAffineDiagCov(out_dim,
             x2 = outputs2.pop('x')
 
             # Compute the bias and covariance conditioned on x2
-            b1, log_diag_cov1 = network1.apply(network_params1, x2, **kwargs)
+            b1, log_diag_cov1 = network1.apply(network_params1, None, x2, **kwargs)
             if(forward_monte_carlo):
                 outputs1 = forward_mc(z1, target_x1, A1, b1, log_diag_cov1, s)
             else:
@@ -314,18 +314,18 @@ def CouplingTallAffineDiagCov(out_dim,
         input_shape1 = (dims['x2_dim'],)
         output_shape1 = (dims['x1_dim'],)
         if(haiku_network1 is None):
-            network1 = hk.transform(lambda x, **kwargs: util.SimpleMLP(output_shape1, hidden_layer_sizes, is_additive=False)(x, **kwargs))
+            network1 = hk.transform(lambda x, **kwargs: util.SimpleMLP(output_shape1, hidden_layer_sizes, is_additive=False)(x, **kwargs), apply_rng=True)
         else:
-            network1 = hk.transform(lambda x, **kwargs: haiku_network(output_shape1)(x, **kwargs))
+            network1 = hk.transform(lambda x, **kwargs: haiku_network(output_shape1)(x, **kwargs), apply_rng=True)
         hk_params1 = network1.init(keys[2], jnp.zeros(input_shape1))
 
         nonlocal network2
         input_shape2 = (dims['z1_dim'],)
         output_shape2 = (dims['x2_dim'],)
         if(haiku_network2 is None):
-            network2 = hk.transform(lambda x, **kwargs: util.SimpleMLP(output_shape2, hidden_layer_sizes, is_additive=False)(x, **kwargs))
+            network2 = hk.transform(lambda x, **kwargs: util.SimpleMLP(output_shape2, hidden_layer_sizes, is_additive=False)(x, **kwargs), apply_rng=True)
         else:
-            network2 = hk.transform(lambda x, **kwargs: haiku_network(output_shape2)(x, **kwargs))
+            network2 = hk.transform(lambda x, **kwargs: haiku_network(output_shape2)(x, **kwargs), apply_rng=True)
         hk_params2 = network2.init(keys[2], jnp.zeros(input_shape2))
 
         # Compile the parameters and state

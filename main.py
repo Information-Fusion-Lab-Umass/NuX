@@ -14,7 +14,4 @@ if(__name__ == '__main__'):
 
     standard_layer_tests()
     image_layer_test()
-    unit_test()
-
-
     nif_test()

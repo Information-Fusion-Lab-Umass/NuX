@@ -206,12 +206,12 @@ def CouplingUpSample(repeats=(2, 2, 1),
             x1, x2 = jnp.split(x_squeezed, 2, axis=-1)
 
             # Compute the bias and covariance conditioned on x2
-            b1, log_diag_cov1 = network1.apply(network_params1, x2, **kwargs)
+            b1, log_diag_cov1 = network1.apply(network_params1, None, x2, **kwargs)
             outputs1 = sample_stochastic_inverse(x1, full_repeats, b1, log_diag_cov1, s, k1)
             z1 = outputs1.pop('x')
 
             # Compute the bias and covariance conditioned on z1.  Upsample so that the shapes work out
-            b2, log_diag_cov2 = network2.apply(network_params2, upsample(z1, full_repeats), **kwargs)
+            b2, log_diag_cov2 = network2.apply(network_params2, None, upsample(z1, full_repeats), **kwargs)
             outputs2 = sample_stochastic_inverse(x2, full_repeats, b2, log_diag_cov2, s, k2)
             z2 = outputs2.pop('x')
 
@@ -236,7 +236,7 @@ def CouplingUpSample(repeats=(2, 2, 1),
             z1, z2 = jnp.split(z_squeezed, 2, axis=-1)
 
             # Compute the bias and covariance conditioned on z1.  Upsample so that the shapes work out
-            b2, log_diag_cov2 = network2.apply(network_params2, upsample(z1, full_repeats), **kwargs)
+            b2, log_diag_cov2 = network2.apply(network_params2, None, upsample(z1, full_repeats), **kwargs)
 
             if(forward_monte_carlo):
                 outputs2 = forward_mc(z2, target_x2, full_repeats, b2, log_diag_cov2, s)
@@ -245,7 +245,7 @@ def CouplingUpSample(repeats=(2, 2, 1),
             x2 = outputs2.pop('x')
 
             # Compute the bias and covariance conditioned on x2
-            b1, log_diag_cov1 = network1.apply(network_params1, x2, **kwargs)
+            b1, log_diag_cov1 = network1.apply(network_params1, None, x2, **kwargs)
             if(forward_monte_carlo):
                 outputs1 = forward_mc(z1, target_x1, full_repeats, b1, log_diag_cov1, s)
             else:
@@ -288,18 +288,18 @@ def CouplingUpSample(repeats=(2, 2, 1),
         input_shape1 = sq_x2_shape
         output_shape1 = sq_x1_shape
         if(haiku_network1 is None):
-            network1 = hk.transform(lambda x, **kwargs: util.SimpleConv(output_shape1, n_channels, is_additive=False)(x, **kwargs))
+            network1 = hk.transform(lambda x, **kwargs: util.SimpleConv(output_shape1, n_channels, is_additive=False)(x, **kwargs), apply_rng=True)
         else:
-            network1 = hk.transform(lambda x, **kwargs: haiku_network(output_shape1)(x, **kwargs))
+            network1 = hk.transform(lambda x, **kwargs: haiku_network(output_shape1)(x, **kwargs), apply_rng=True)
         hk_params1 = network1.init(keys[2], jnp.zeros(input_shape1))
 
         nonlocal network2
         input_shape2 = sq_z1_shape
         output_shape2 = sq_x2_shape
         if(haiku_network2 is None):
-            network2 = hk.transform(lambda x, **kwargs: util.SimpleConv(output_shape2, n_channels, is_additive=False)(x, **kwargs))
+            network2 = hk.transform(lambda x, **kwargs: util.SimpleConv(output_shape2, n_channels, is_additive=False)(x, **kwargs), apply_rng=True)
         else:
-            network2 = hk.transform(lambda x, **kwargs: haiku_network(output_shape2)(x, **kwargs))
+            network2 = hk.transform(lambda x, **kwargs: haiku_network(output_shape2)(x, **kwargs), apply_rng=True)
         hk_params2 = network2.init(keys[2], jnp.zeros(input_shape2))
 
         # Compile the parameters and state

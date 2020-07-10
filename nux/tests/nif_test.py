@@ -108,26 +108,35 @@ def nif_test():
     Check that a prior is correct and works with MCMC
     """
     key = random.PRNGKey(0)
-    x = random.normal(key, (4, 4, 2))
-    # x = jax.nn.softmax(x)
-    # x = random.normal(key, (3,))
+    x = random.normal(key, (3,))
     inputs = {'x': x}
 
-    # flow = nux.sequential(nux.TallAffineDiagCov(2),
-    #                       nux.UnitGaussianPrior())
+    flow = nux.sequential(nux.TallAffineDiagCov(2),
+                          nux.UnitGaussianPrior())
 
-    # flow = nux.sequential(nux.CouplingTallAffineDiagCov(2, kind='blah', hidden_layer_sizes=[16]),
-    #                       nux.UnitGaussianPrior())
+    injective_flow_test(flow, inputs, key)
+    noisy_injective_flow_test(flow, inputs, key)
 
-    # flow = nux.sequential(nux.UpSample(),
-    #                       nux.UnitGaussianPrior())
+    flow = nux.sequential(nux.CouplingTallAffineDiagCov(2, hidden_layer_sizes=[16]),
+                          nux.UnitGaussianPrior())
+
+    injective_flow_test(flow, inputs, key)
+    noisy_injective_flow_test(flow, inputs, key)
+
+    x = random.normal(key, (4, 4, 2))
+    inputs = {'x': x}
+
+    flow = nux.sequential(nux.UpSample(),
+                          nux.UnitGaussianPrior())
+
+    injective_flow_test(flow, inputs, key)
+    noisy_injective_flow_test(flow, inputs, key)
 
 
     flow = nux.sequential(nux.CouplingUpSample(n_channels=2),
                           nux.UnitGaussianPrior())
 
-
-    # injective_flow_test(flow, inputs, key)
+    injective_flow_test(flow, inputs, key)
     noisy_injective_flow_test(flow, inputs, key)
 
 

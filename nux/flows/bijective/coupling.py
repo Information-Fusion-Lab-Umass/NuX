@@ -28,14 +28,14 @@ def Coupling(haiku_network=None, hidden_layer_sizes=[1024]*4, kind='affine', axi
 
         # Apply the transformation
         if(kind == 'affine'):
-            t, log_s = network.apply(network_params, xb, **kwargs)
+            t, log_s = network.apply(network_params, None, xb, **kwargs)
             if(reverse == False):
                 za = (xa - t)*jnp.exp(-log_s)
             else:
                 za = xa*jnp.exp(log_s) + t
             log_det = -jnp.sum(log_s)
         else:
-            t = network.apply(network_params, xb, **kwargs)
+            t = network.apply(network_params, None, xb, **kwargs)
             if(reverse == False):
                 za = xa - t
             else:
@@ -61,11 +61,11 @@ def Coupling(haiku_network=None, hidden_layer_sizes=[1024]*4, kind='affine', axi
         nonlocal network
         if(haiku_network is None):
             if(len(x_shape) == 3):
-                network = hk.transform(lambda x, **kwargs: util.SimpleConv(split_input_shape, n_channels, kind=='additive')(x, **kwargs))
+                network = hk.transform(lambda x, **kwargs: util.SimpleConv(split_input_shape, n_channels, kind=='additive')(x, **kwargs), apply_rng=True)
             else:
-                network = hk.transform(lambda x, **kwargs: util.SimpleMLP(split_input_shape, hidden_layer_sizes, kind=='additive')(x, **kwargs))
+                network = hk.transform(lambda x, **kwargs: util.SimpleMLP(split_input_shape, hidden_layer_sizes, kind=='additive')(x, **kwargs), apply_rng=True)
         else:
-            network = hk.transform(lambda x, **kwargs: haiku_network(split_input_shape)(x, **kwargs))
+            network = hk.transform(lambda x, **kwargs: haiku_network(split_input_shape)(x, **kwargs), apply_rng=True)
 
         params = {'hk_params': network.init(key, jnp.zeros(split_input_shape))}
         state = {}

@@ -9,7 +9,7 @@ import nux.flows.base as base
 @partial(jit, static_argnums=(0, 3))
 def get_knot_parameters(apply_fun, params, x, K, min_width=1e-3, min_height=1e-3, min_derivative=1e-3):
     # Create the entire set of parameters
-    theta = apply_fun(params, x)
+    theta = apply_fun(params, None, x)
     theta = theta.reshape((-1, 3*K - 1))
 
     # Get the individual parameters
@@ -166,7 +166,7 @@ def NeuralSpline(K, network=None, hidden_layer_sizes=[1024]*4, name='unnamed'):
 
         nonlocal network
         if(network is None):
-            network = hk.transform(lambda x, **kwargs: util.SimpleMLP(network_out_shape, hidden_layer_sizes, 'affine')(x, **kwargs))
+            network = hk.transform(lambda x, **kwargs: util.SimpleMLP(network_out_shape, hidden_layer_sizes, 'affine')(x, **kwargs), apply_rng=True)
 
         params = {'hk_params': network.init(key, jnp.zeros((x1_dim,)))}
         state = {}
