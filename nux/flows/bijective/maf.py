@@ -3,6 +3,7 @@ import jax.numpy as jnp
 from jax import random
 import haiku as hk
 import jax
+import nux.flows
 import nux.flows.base as base
 
 class GaussianMADE(hk.Module):

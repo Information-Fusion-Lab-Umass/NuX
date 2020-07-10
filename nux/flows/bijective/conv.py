@@ -2,6 +2,7 @@ import jax.numpy as jnp
 import jax.nn.initializers as jaxinit
 from jax import vmap, jit
 from functools import partial
+import nux.flows
 import nux.flows.base as base
 import nux.util as util
 

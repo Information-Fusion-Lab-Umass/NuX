@@ -4,6 +4,7 @@ import jax.numpy as jnp
 from functools import partial
 import haiku as hk
 import nux.util as util
+import nux.flows
 import nux.flows.base as base
 
 @partial(jit, static_argnums=(0, 3))

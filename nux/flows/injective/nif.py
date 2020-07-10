@@ -6,6 +6,7 @@ from functools import partial, reduce
 from jax.tree_util import tree_map
 from jax.scipy.special import logsumexp
 import nux.util as util
+import nux.flows
 import nux.flows.base as base
 import haiku as hk
 

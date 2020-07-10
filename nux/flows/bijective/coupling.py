@@ -4,6 +4,7 @@ from jax import vmap
 from functools import partial
 import haiku as hk
 import nux.util as util
+import nux.flows
 import nux.flows.base as base
 
 ################################################################################################################

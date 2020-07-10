@@ -2,6 +2,7 @@ import jax.numpy as jnp
 from jax import vmap
 from functools import partial
 import nux.util as util
+import nux.flows
 import nux.flows.base as base
 
 ################################################################################################################

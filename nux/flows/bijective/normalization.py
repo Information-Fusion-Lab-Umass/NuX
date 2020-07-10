@@ -4,6 +4,7 @@ import jax.numpy as jnp
 from jax import random, vmap, jit
 from functools import partial
 import nux.util as util
+import nux.flows
 import nux.flows.base as base
 
 @base.auto_batch

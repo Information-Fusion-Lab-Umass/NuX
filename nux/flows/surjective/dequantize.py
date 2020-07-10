@@ -1,5 +1,6 @@
 import jax.numpy as jnp
 from jax import random
+import nux.flows
 import nux.flows.base as base
 
 @base.auto_batch

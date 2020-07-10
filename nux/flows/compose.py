@@ -4,6 +4,7 @@ import jax.numpy as jnp
 from functools import partial
 from jax.ops import index, index_add, index_update
 import nux.util as util
+import nux.flows
 import nux.flows.base as base
 from collections import OrderedDict
 
