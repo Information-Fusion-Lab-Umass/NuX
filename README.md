@@ -9,6 +9,7 @@ NuX has many normalizing flow layers implemented with an easy to use interface.
 ```python
 import nux.flows as nux
 import jax
+from jax import random
 import jax.numpy as jnp
 key = random.PRNGKey(0)
 
