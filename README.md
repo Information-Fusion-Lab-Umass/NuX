@@ -4,7 +4,7 @@
 NuX is a library for building [normalizing flows](https://arxiv.org/pdf/1912.02762.pdf) using [JAX](https://github.com/google/jax).
 
 ## What are normalizing flows?
-Normalizing flows learn a parametric model over an unknown probability density function using data.  We assume that data points, {x<sub>i</sub>}<sub>1..N</sub>, are sampled i.i.d. from an unknown distribution p(x).  Normalizing flows learn a parametric approximation, q(x), using maximum likelihood learning.  The resulting q(x) can be efficiently sampled from and evaluated exactly.
+Normalizing flows learn a parametric model over an unknown probability density function using data.  We assume that data points are sampled i.i.d. from an unknown distribution p(x).  Normalizing flows learn a parametric approximation of the true data distribution, q(x), using maximum likelihood learning.  The resulting q(x) can be efficiently sampled from and evaluated exactly.
 
 ## Why use NuX?
 NuX has many normalizing flow layers implemented with an easy to use interface.
