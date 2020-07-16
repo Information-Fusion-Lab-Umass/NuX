@@ -74,7 +74,11 @@ def initialize(name, apply_fun, create_params_and_state, data_dependent=False, s
     """
     Data dependent init function that does not do any special initialization using data.
     """
-    def init_fun(key, inputs, batched=False, batch_depth=1, **kwargs):
+    def init_fun(key, inputs, batched=None, batch_depth=1, **kwargs):
+        # Must specify if input is batched!
+        assert batched is not None
+        assert (batched is True) or (batched is False)
+
         k1, k2 = random.split(key, 2)
         if(batched == False):
             for i in range(batch_depth):

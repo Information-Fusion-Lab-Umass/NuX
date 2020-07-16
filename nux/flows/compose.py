@@ -249,10 +249,11 @@ def ChainRule(split_idx, axis=-1, factor=True, name='chain_rule'):
 
 from nux.flows.bijective.reshape import Squeeze, UnSqueeze
 from nux.flows.bijective.affine import Identity
+from nux.flows.base import Debug
 
 def multi_scale(flow, existing_flow):
-    return sequential(flow,
-                      Squeeze(),
+    return sequential(Squeeze(),
+                      flow,
                       ChainRule(2, factor=True),
                       factored(existing_flow, Identity()),
                       ChainRule(2, factor=False),
@@ -264,49 +265,3 @@ __all__ = ['sequential',
            'factored',
            'ChainRule',
            'multi_scale']
-
-# @base.auto_batch
-# @base.ensure_dictionaries
-# def Augment(flow, sampler, name='augment'):
-#     # language=rst
-#     """
-#     Run a normalizing flow in an augmented space https://arxiv.org/pdf/2002.07101.pdf
-
-#     :param flow: The normalizing flow
-#     :param sampler: Function to sample from the convolving distribution
-#     """
-#     _init_fun, _data_dependent_init = flow
-#     # _init_fun, _forward, _inverse = flow
-
-#     def forward(params, state, inputs, **kwargs):
-#         x = inputs['x']
-#         key = kwargs.pop('key', None)
-#         if(key is None):
-#             assert 0, 'Need a key for this'
-#         k1, k2 = random.split(key, 2)
-
-#         # Sample e and concatenate it to x
-#         e = random.normal(k1, x.shape)
-#         xe = jnp.concatenate([x, e], axis=-1)
-
-#         return _forward(params, state, xe, key=k2, **kwargs)
-
-#     def inverse(params, state, inputs, **kwargs):
-#         z = inputs['x']
-#         key = kwargs.pop('key', None)
-#         if(key is None):
-#             assert 0, 'Need a key for this'
-#         k1, k2 = random.split(key, 2)
-
-#         x, e = jnp.split(z, axis=-1)
-
-#         return _inverse(params, state, x, key=k2, **kwargs)
-
-#     def init_fun(key, input_shapes):
-#         x_shape = input_shapes['x']
-#         augmented_input_shape = x_shape[:-1] + (2*x_shape[-1],)
-
-#         return _init_fun(key, {'x': augmented_input_shape})
-
-
-#     return init_fun, base.initialize(init_fun)

@@ -35,7 +35,7 @@ def ActNorm(log_s_init=jaxinit.zeros, b_init=jaxinit.zeros, name='act_norm'):
         x = inputs['x']
 
         nonlocal multiply_by
-        multiply_by = jnp.prod([s for i, s in enumerate(x.shape) if i >= batch_depth and i < len(x.shape) - 1])
+        multiply_by = jnp.prod(jnp.array([s for i, s in enumerate(x.shape) if i >= batch_depth and i < len(x.shape) - 1]))
 
         # Create the parameters
         axes = tuple(jnp.arange(len(x.shape) - 1))

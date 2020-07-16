@@ -118,14 +118,14 @@ def Reshape(shape, name='reshape'):
         # If there is a negative 1, then figure out what to do
         nonlocal shape
         if(has_negative1):
-            total_dim = jnp.prod(x_shape)
-            given_dim = jnp.prod([s for s in shape if s > 0])
+            total_dim = jnp.prod(jnp.array(x_shape))
+            given_dim = jnp.prod(jnp.array([s for s in shape if s > 0]))
             remaining_dim = total_dim//given_dim
             shape = [s if s > 0 else remaining_dim for s in shape]
 
         nonlocal original_shape
         original_shape = x_shape
-        assert jnp.prod(x_shape) == jnp.prod(shape), 'x_shape %s shape: %s'%(str(x_shape), str(shape))
+        assert jnp.prod(jnp.array(x_shape)) == jnp.prod(jnp.array(shape)), 'x_shape %s shape: %s'%(str(x_shape), str(shape))
 
         params, state = {}, {}
         return params, state
@@ -154,8 +154,8 @@ def Flatten(name='flatten'):
         x_shape = input_shapes['x']
         nonlocal shape, original_shape
         original_shape = x_shape
-        shape = (jnp.prod(x_shape),)
-        assert jnp.prod(x_shape) == jnp.prod(shape), 'x_shape %s shape: %s'%(str(x_shape), str(shape))
+        shape = (jnp.prod(jnp.array(x_shape)),)
+        assert jnp.prod(jnp.array(x_shape)) == jnp.prod(jnp.array(shape)), 'x_shape %s shape: %s'%(str(x_shape), str(shape))
 
         params, state = {}, {}
         return params, state

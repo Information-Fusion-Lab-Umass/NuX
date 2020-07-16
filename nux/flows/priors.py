@@ -23,7 +23,6 @@ def UnitGaussianPrior(name='unit_gaussian_prior'):
         outputs = {'x': x}
         if(reverse == False or compute_base == True):
             outputs['log_pz'] = -0.5*jnp.sum(x**2)/t + -0.5*dim*jnp.log(2*jnp.pi)
-            # outputs['log_pz'] = -0.5*jnp.sum(x**2, axis=-1)/t + -0.5*dim*jnp.log(2*jnp.pi)
         else:
             outputs['log_pz'] = 0.0
         return outputs, state
@@ -31,7 +30,7 @@ def UnitGaussianPrior(name='unit_gaussian_prior'):
     def create_params_and_state(key, input_shapes):
         x_shape = input_shapes['x']
         nonlocal dim
-        dim = jnp.prod(x_shape)
+        dim = jnp.prod(jnp.array(x_shape))
         params, state = {}, {'t': 1.0}
         return params, state
 
@@ -222,7 +221,8 @@ def AffineGaussianPriorDiagCov(out_dim, A_init=jaxinit.glorot_normal(), name='af
         x_shape = input_shapes['x']
         output_shape = x_shape[:-1] + (out_dim,)
         A = A_init(key, (x_shape[-1], out_dim))
-        log_diag_cov = jnp.ones(x_shape[-1])
+        A = util.whiten(A)
+        log_diag_cov = jnp.zeros(x_shape[-1])
 
         params = {'A': A, 'log_diag_cov': log_diag_cov}
         state = {'s': 1.0}

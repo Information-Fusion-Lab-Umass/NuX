@@ -49,8 +49,8 @@ def stochastic_inverse(x, repeats, b, log_diag_cov):
     # Compute the mean of z
     z_mean = magic(xmb*one_over_diag_cov, repeats)/rm_diag
     x_proj = upsample(z_mean, repeats)*one_over_diag_cov
-    dim_x = jnp.prod(x.shape)
-    dim_z = jnp.prod(z_mean.shape)
+    dim_x = jnp.prod(jnp.array(x.shape))
+    dim_z = jnp.prod(jnp.array(z_mean.shape))
 
     # Compute the manifold error term
     log_hx = -0.5*jnp.sum(xmb*(xmb*one_over_diag_cov - x_proj))
@@ -79,7 +79,7 @@ def sample_stochastic_inverse(x, repeats, b, log_diag_cov, s, key):
         log_det = log_hx
     else:
         # Treat this as an injective flow and use the log determinant
-        log_det = jnp.prod(z.shape)/jnp.prod(repeats)
+        log_det = jnp.prod(jnp.array(z.shape))/jnp.prod(jnp.array(repeats))
 
     # Compute the reconstruction error and stochastic inverse likelihood
     if(key is not None):
@@ -112,7 +112,7 @@ def generate(z, repeats, b, log_diag_cov, s, key):
         log_det = util.gaussian_diag_cov_logpdf(noise.ravel(), jnp.zeros_like(noise.ravel()), log_diag_cov.ravel())
     else:
         # Treat this as an injective flow and use the log determinant
-        log_det = jnp.prod(z.shape)/jnp.prod(repeats)
+        log_det = jnp.prod(jnp.array(z.shape))/jnp.prod(jnp.array(repeats))
 
     outputs = {'x': x, 'log_det': log_det}
 

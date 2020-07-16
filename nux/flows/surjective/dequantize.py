@@ -16,7 +16,6 @@ def UniformDequantization(noise_scale=None, scale=256.0, name='uniform_dequantiz
         x = inputs['x']
 
         # Add uniform noise
-        # key_name = '%s_key'%name if name != 'unnamed' else 'key'
         key = kwargs.pop('key', None)
         if(reverse == False):
             assert key is not None
@@ -26,7 +25,7 @@ def UniformDequantization(noise_scale=None, scale=256.0, name='uniform_dequantiz
             noise = random.uniform(key, x.shape)*state['noise_scale_array']
 
         log_det = -jnp.log(scale)
-        log_det *= jnp.prod(x.shape)
+        log_det *= jnp.prod(jnp.array(x.shape))
 
         if(reverse == False):
             z = (x + noise)/scale

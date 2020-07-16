@@ -95,11 +95,13 @@ class SimpleConv(hk.Module):
 
         x = hk.Conv2D(output_channels=self.n_hidden_channels,
                       kernel_shape=(3, 3),
-                      stride=(1, 1))(x[None])[0]
+                      stride=(1, 1),
+                      w_init=hk.initializers.VarianceScaling(1.0, 'fan_avg', 'truncated_normal'))(x[None])[0]
         x = jax.nn.relu(x)
         x = hk.Conv2D(output_channels=self.n_hidden_channels,
                       kernel_shape=(1, 1),
-                      stride=(1, 1))(x[None])[0]
+                      stride=(1, 1),
+                      w_init=hk.initializers.VarianceScaling(1.0, 'fan_avg', 'truncated_normal'))(x[None])[0]
         x = jax.nn.relu(x)
         x = hk.Conv2D(output_channels=self.last_channels,
                       kernel_shape=(3, 3),

@@ -207,7 +207,7 @@ def OnebyOneConvLDU(name='1x1conv_ldu'):
     return base.initialize(name, apply_fun, create_params_and_state)
 
 @base.auto_batch
-def OnebyOneConv(W_init=jaxinit.glorot_normal(), name='1x1conv'):
+def OnebyOneConvDense(W_init=jaxinit.glorot_normal(), name='1x1conv_dense'):
     # language=rst
     """
     Invertible 1x1 convolution.  Implemented as matrix multiplication over the channel dimension.
@@ -243,7 +243,7 @@ def OnebyOneConv(W_init=jaxinit.glorot_normal(), name='1x1conv'):
     return base.initialize(name, apply_fun, create_params_and_state)
 
 @base.auto_batch
-def OnebyOneConvLAX(weight_norm=False, W_init=jaxinit.glorot_normal(), name='1x1conv_lax'):
+def OnebyOneConv(weight_norm=True, W_init=jaxinit.glorot_normal(), name='1x1conv'):
     # language=rst
     """
     Invertible 1x1 convolution.
@@ -280,6 +280,7 @@ def OnebyOneConvLAX(weight_norm=False, W_init=jaxinit.glorot_normal(), name='1x1
 
         W = W_init(key, (channel, channel))
         W = util.whiten(W)
+        W = jnp.eye(channel)
 
         # JAX conv is weird with batch dims
         assert len(input_shapes['x']) == 3
@@ -378,6 +379,6 @@ __all__ = ['Identity',
            'AffineDense',
            'Affine',
            'OnebyOneConvLDU',
+           'OnebyOneConvDense',
            'OnebyOneConv',
-           'OnebyOneConvLAX',
            'LocalDense']
