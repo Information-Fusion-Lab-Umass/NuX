@@ -241,6 +241,14 @@ def ActNorm(log_s_init=jaxinit.zeros, b_init=jaxinit.zeros, name='act_norm'):
     return base.initialize(name, apply_fun, create_params_and_state, data_dependent=True)
 ```
 
+### Testing a custom flow
+```nux.tests.nf_test.flow_test``` is a simple function to test the correctness of a flow.  It checks unbatched/batched/doubly-batched reconstructions by running a flow forwards then in reverse and checks the log Jacobian determinant against the brute force solution computed using ```jax.jacobian```.
+```python
+init_fun = Flow()
+unbatched_inputs = {'x': data}
+flow_test(init_fun, unbatched_inputs, key)
+```
+
 ## Installation
 For the moment, NuX only works with python 3.7.  The steps to install are:
 
