@@ -5,7 +5,7 @@ with open("README.md", "r") as fh:
 
 setuptools.setup(
     name="nux", # Replace with your own username
-    version="1.0.0",
+    version="1.0.2",
     author="Information Fusion Lab",
     author_email="rzabounidis@cs.umass.edu",
     description="Normalizing Flows using Jax",
