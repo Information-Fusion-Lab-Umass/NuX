@@ -21,10 +21,11 @@ def Coupling(haiku_network=None, hidden_layer_sizes=[1024]*4, kind='affine', axi
     """
     assert kind == 'affine' or kind == 'additive'
     network = None
+    split_index = None
 
     def apply_fun(params, state, inputs, reverse=False, **kwargs):
         x = inputs['x']
-        xa, xb = jnp.split(x, 2, axis=axis)
+        xa, xb = jnp.split(x, indices_or_sections=jnp.array([split_index]), axis=axis)
         network_params = params['hk_params']
 
         # Apply the transformation
@@ -52,21 +53,22 @@ def Coupling(haiku_network=None, hidden_layer_sizes=[1024]*4, kind='affine', axi
     def create_params_and_state(key, input_shapes):
         x_shape = input_shapes['x']
         ax = axis % len(x_shape)
-        assert x_shape[-1]%2 == 0
-        half_split_dim = x_shape[ax]//2
+        nonlocal split_index
+        split_index = x_shape[ax]//2
 
         # Find the split shape
-        split_input_shape = x_shape[:ax] + (half_split_dim,) + x_shape[ax + 1:]
+        split_input_shape = x_shape[:ax] + (x_shape[ax] - split_index,) + x_shape[ax + 1:]
+        split_output_shape = x_shape[:ax] + (split_index,) + x_shape[ax + 1:]
 
         # Build the network if it isn't passed in
         nonlocal network
         if(haiku_network is None):
             if(len(x_shape) == 3):
-                network = hk.transform(lambda x, **kwargs: util.SimpleConv(split_input_shape, n_channels, kind=='additive')(x, **kwargs), apply_rng=True)
+                network = hk.transform(lambda x, **kwargs: util.SimpleConv(split_output_shape, n_channels, kind=='additive')(x, **kwargs), apply_rng=True)
             else:
-                network = hk.transform(lambda x, **kwargs: util.SimpleMLP(split_input_shape, hidden_layer_sizes, kind=='additive')(x, **kwargs), apply_rng=True)
+                network = hk.transform(lambda x, **kwargs: util.SimpleMLP(split_output_shape, hidden_layer_sizes, kind=='additive')(x, **kwargs), apply_rng=True)
         else:
-            network = hk.transform(lambda x, **kwargs: haiku_network(split_input_shape)(x, **kwargs), apply_rng=True)
+            network = hk.transform(lambda x, **kwargs: haiku_network(split_output_shape)(x, **kwargs), apply_rng=True)
 
         params = {'hk_params': network.init(key, jnp.zeros(split_input_shape))}
         state = {}
