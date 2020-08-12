@@ -6,6 +6,7 @@ from functools import partial
 import nux.util as util
 import nux.flows
 import nux.flows.base as base
+from jax.scipy.special import gammaln
 
 @base.auto_batch
 def UnitGaussianPrior(name='unit_gaussian_prior'):
@@ -17,21 +18,85 @@ def UnitGaussianPrior(name='unit_gaussian_prior'):
     """
     dim = None
 
-    def apply_fun(params, state, inputs, reverse=False, compute_base=False, **kwargs):
+    def apply_fun(params,
+                  state,
+                  inputs,
+                  reverse=False,
+                  compute_base=False,
+                  prior_sample=False,
+                  negative_entropy=False,
+                  key=None,
+                  t=1.0,
+                  **kwargs):
         x = inputs['x']
-        t = state['t']
         outputs = {'x': x}
         if(reverse == False or compute_base == True):
-            outputs['log_pz'] = -0.5*jnp.sum(x**2)/t + -0.5*dim*jnp.log(2*jnp.pi)
+            if(negative_entropy == False):
+                outputs['log_pz'] = -0.5*jnp.sum(x**2)/t**2 + -0.5*dim*jnp.log(2*jnp.pi*t**2)
+            else:
+                outputs['log_pz'] = -0.5*dim*(1 + jnp.log(2*jnp.pi))
         else:
             outputs['log_pz'] = 0.0
+
+        if(reverse == True and prior_sample == True):
+            assert key is not None
+            x = random.normal(key, x.shape)*t
+
+            if(compute_base == True):
+                if(negative_entropy == False):
+                    outputs['log_pz'] = -0.5*jnp.sum(x**2)/t**2 + -0.5*dim*jnp.log(2*jnp.pi*t**2)
+                else:
+                    outputs['log_pz'] = -0.5*dim*(1 + jnp.log(2*jnp.pi))
+
+            outputs['x'] = x
+
         return outputs, state
 
     def create_params_and_state(key, input_shapes):
         x_shape = input_shapes['x']
         nonlocal dim
         dim = jnp.prod(jnp.array(x_shape))
-        params, state = {}, {'t': 1.0}
+        params, state = {}, {}
+        return params, state
+
+    return base.initialize(name, apply_fun, create_params_and_state)
+
+################################################################################################################
+
+@base.auto_batch
+def UniformDirichletPrior(name='uniform_dirichlet_prior'):
+
+    def apply_fun(params,
+                  state,
+                  inputs,
+                  reverse=False,
+                  compute_base=False,
+                  prior_sample=False,
+                  key=None, **kwargs):
+
+        x = inputs['x']
+        outputs = {'x': x}
+
+        alpha = jnp.ones_like(x)
+
+        if(reverse == False or compute_base == True):
+            outputs['log_pz'] = jnp.sum((alpha - 1)*jnp.log(x)) + gammaln(alpha.sum()) - gammaln(alpha).sum()
+        else:
+            outputs['log_pz'] = 0.0
+
+        if(reverse == True and prior_sample == True):
+            assert key is not None
+            x = random.dirichlet(key, alpha)
+
+            if(compute_base == True):
+                outputs['log_pz'] = jnp.sum((alpha - 1)*jnp.log(x)) + gammaln(alpha.sum()) - gammaln(alpha).sum()
+
+            outputs['x'] = x
+
+        return outputs, state
+
+    def create_params_and_state(key, input_shapes):
+        params, state = {}, {}
         return params, state
 
     return base.initialize(name, apply_fun, create_params_and_state)
@@ -81,7 +146,7 @@ def AffineGaussianPriorFullCov(out_dim, A_init=jaxinit.glorot_normal(), Sigma_ch
         outputs['log_pz'] = log_hx
         return outputs, state
 
-    def inverse(params, state, inputs, **kwargs):
+    def inverse(params, state, inputs, key=None, **kwargs):
         z = inputs['x']
         assert z.ndim == 1
 
@@ -96,7 +161,6 @@ def AffineGaussianPriorFullCov(out_dim, A_init=jaxinit.glorot_normal(), Sigma_ch
         diag = jnp.diag(Sigma_chol)
         Sigma_chol = jax.ops.index_update(Sigma_chol, jnp.diag_indices(Sigma_chol.shape[0]), jnp.exp(diag))
 
-        key = kwargs.pop('key', None)
         if(key is not None):
             sigma = state['sigma']
             noise = random.normal(key, x.shape)*sigma
@@ -233,5 +297,6 @@ def AffineGaussianPriorDiagCov(out_dim, A_init=jaxinit.glorot_normal(), name='af
 ################################################################################################################
 
 __all__ = ['UnitGaussianPrior',
+           'UniformDirichletPrior',
            'AffineGaussianPriorFullCov',
            'AffineGaussianPriorDiagCov']

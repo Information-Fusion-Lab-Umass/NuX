@@ -10,7 +10,7 @@ from collections import OrderedDict
 
 ################################################################################################################
 
-def sequential(*init_funs, name='sequential'):
+def sequential(*init_funs, log_likelihood=True, name='sequential'):
     n_layers = len(init_funs)
 
     def init_fun(key, original_inputs, batched=False, batch_depth=1, **kwargs):
@@ -49,7 +49,8 @@ def sequential(*init_funs, name='sequential'):
             if(flow.name in used_names):
                 index = used_names[flow.name]
                 used_names[flow.name] += 1
-                flow = flow._replace(name='%s_%d'%(flow.name, index))
+                flow.name = '%s_%d'%(flow.name, index)
+                # flow = flow._replace(name='%s_%d'%(flow.name, index))
             else:
                 used_names[flow.name] = 0
 
@@ -62,7 +63,10 @@ def sequential(*init_funs, name='sequential'):
         output_shapes = flow.output_shapes
         output_ndims = flow.output_ndims
         outputs.update(misc_outputs)
-        outputs['log_det'] = log_det
+        if(log_likelihood):
+            outputs['log_det'] = log_det
+        else:
+            outputs['log_det'] = 0.0
 
         def apply_fun(params, state, original_inputs, reverse=False, **kwargs):
             # Use a new dictionary so that we don't modify the existing one
@@ -82,6 +86,8 @@ def sequential(*init_funs, name='sequential'):
 
             for fun, name, key in zip(funs, names, keys):
                 # Run the function
+                if(name not in kwargs):
+                    kwargs['name'] = name
                 outputs, uptd_state = fun(params[name], state[name], inputs, key=key, reverse=reverse, **kwargs)
                 # Update the log determinant and state
                 log_det += outputs.get('log_det', 0.0)
@@ -90,7 +96,11 @@ def sequential(*init_funs, name='sequential'):
                 # Update the input for the next iteration
                 inputs.update(outputs)
 
-            inputs['log_det'] = log_det
+            if(log_likelihood):
+                inputs['log_det'] = log_det
+            else:
+                inputs['log_det'] = 0.0
+
             return inputs, updated_state
 
         flow = base.Flow(name, actual_input_shape, output_shapes, input_ndims, output_ndims, params, state, apply_fun)
@@ -100,7 +110,7 @@ def sequential(*init_funs, name='sequential'):
 
 ################################################################################################################
 
-def factored(*init_funs, name='factored'):
+def factored(*init_funs, log_likelihood=True, name='factored'):
     n_factors = len(init_funs)
 
     def init_fun(key, inputs, batched=False, batch_depth=1, **kwargs):
@@ -140,7 +150,8 @@ def factored(*init_funs, name='factored'):
             if(flow.name in used_names):
                 index = used_names[flow.name]
                 used_names[flow.name] += 1
-                flow = flow._replace(name='%s_%d'%(flow.name, index))
+                flow.name = '%s_%d'%(flow.name, index)
+                # flow = flow._replace(name='%s_%d'%(flow.name, index))
             else:
                 used_names[flow.name] = 0
 
@@ -153,7 +164,10 @@ def factored(*init_funs, name='factored'):
         outputs = inputs.copy()
         outputs.update(misc_outputs)
         outputs['x'] = xs
-        outputs['log_det'] = log_det
+        if(log_likelihood == True):
+            outputs['log_det'] = log_det
+        else:
+            outputs['log_det'] = 0.0
 
         # Need to unbatch the outputs
         if(batched == True):
@@ -207,7 +221,11 @@ def factored(*init_funs, name='factored'):
             outputs = inputs.copy()
             outputs.update(misc_outputs)
             outputs['x'] = xs
-            outputs['log_det'] = log_det
+            if(log_likelihood == True):
+                outputs['log_det'] = log_det
+            else:
+                outputs['log_det'] = 0.0
+
             return outputs, updated_state
 
         flow = base.Flow(name, actual_input_shape, output_shapes, input_ndims, output_ndims, params, state, apply_fun)

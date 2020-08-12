@@ -27,39 +27,40 @@ def Identity(name='Identity'):
 ################################################################################################################
 
 @base.auto_batch
-def AffineLDU(L_init=jaxinit.normal(), d_init=jaxinit.ones, U_init=jaxinit.normal(), name='affine_ldu'):
+def AffineLDU(L_init=jaxinit.normal(), d_init=jaxinit.zeros, U_init=jaxinit.normal(), name='affine_ldu'):
     # language=rst
     """
     LDU parametrized square dense matrix
     """
     triangular_indices = None
 
+    @jax.jit
     def get_LDU(params):
-        L_flat, d, U_flat = params['L_flat'], params['d'], params['U_flat']
+        L_flat, log_d, U_flat = params['L_flat'], params['log_d'], params['U_flat']
 
         L = jnp.pad(L_flat, (1, 0))[triangular_indices]
-        L = L + jnp.eye(d.shape[-1])
+        L = L + jnp.eye(log_d.shape[-1])
         L = L.T
 
         U = jnp.pad(U_flat, (1, 0))[triangular_indices]
-        U = U + jnp.eye(d.shape[-1])
+        U = U + jnp.eye(log_d.shape[-1])
 
-        return L, d, U
+        return L, log_d, U
 
     def apply_fun(params, state, inputs, reverse=False, **kwargs):
-        L, d, U = get_LDU(params)
+        L, log_d, U = get_LDU(params)
         x = inputs['x']
         assert x.ndim == 1
         if(reverse == False):
-            z = jnp.einsum('ij,j->i', U, x)
-            z = z*d
-            z = jnp.einsum('ij,j->i', L, z)
+            z = U@x
+            z = z*jnp.exp(log_d)
+            z = L@z
         else:
             z = util.L_solve(L, x)
-            z = z/d
+            z = z*jnp.exp(-log_d)
             z = util.U_solve(U, z)
 
-        log_det = jnp.sum(jnp.log(jnp.abs(d)), axis=-1)
+        log_det = jnp.sum(log_d, axis=-1)
 
         outputs = {'x': z, 'log_det': log_det}
         return outputs, state
@@ -74,10 +75,10 @@ def AffineLDU(L_init=jaxinit.normal(), d_init=jaxinit.ones, U_init=jaxinit.norma
         flat_dim = util.n_elts_upper_triangular(dim)
 
         k1, k2, k3 = random.split(key, 3)
-        L_flat, d, U_flat = L_init(k1, (flat_dim,)), d_init(k2, (dim,)), U_init(k3, (flat_dim,))
+        L_flat, log_d, U_flat = L_init(k1, (flat_dim,)), d_init(k2, (dim,)), U_init(k3, (flat_dim,))
 
         params = {'L_flat': L_flat,
-                  'd'     : d,
+                  'log_d' : log_d,
                   'U_flat': U_flat}
         state = {}
         return params, state
@@ -125,31 +126,35 @@ def AffineSVD(n_householders, U_init=jaxinit.glorot_normal(), log_s_init=jaxinit
     return base.initialize(name, apply_fun, create_params_and_state)
 
 @base.auto_batch
-def AffineDense(W_init=jaxinit.glorot_normal(), name='affine_dense'):
+def AffineDense(W_init=jaxinit.glorot_normal(), b_init=jaxinit.zeros, name='affine_dense'):
     # language=rst
     """
     Basic affine transformation
     """
     def apply_fun(params, state, inputs, reverse=False, **kwargs):
         x = inputs['x']
-        W = params['W']
+        W, b = params['W'], params['b']
         # W = W/jnp.sqrt(jnp.sum(W**2, axis=0) + 1e-5)
+        # W = W*jax.lax.rsqrt(jnp.sum(W**2, axis=0) + 1e-5)
         assert x.ndim == 1
 
         if(reverse == False):
-            z = W@x
+            z = W@x + b
         else:
             W_inv = jnp.linalg.inv(W)
-            z = W_inv@x
+            z = W_inv@(x - b)
 
-        log_det = jnp.linalg.slogdet(W)[1]
+        log_det = jax.jit(jnp.linalg.slogdet)(W)[1]
         outputs = {'x': z, 'log_det': log_det}
         return outputs, state
 
     def create_params_and_state(key, input_shapes):
         x_shape = input_shapes['x']
-        W = W_init(key, (x_shape[-1], x_shape[-1]))
-        params = {'W': W}
+        keys = random.split(key, 2)
+        W = W_init(keys[0], (x_shape[-1], x_shape[-1]))
+        W = util.whiten(W)
+        b = b_init(keys[1], (x_shape[-1],))
+        params = {'W': W, 'b': b}
         state = {}
         return params, state
 

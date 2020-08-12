@@ -96,8 +96,9 @@ def Logit(lmbda=0.05, name='logit'):
     """
     safe = lmbda is not None
 
-    def apply_fun(params, state, inputs, reverse=False, **kwargs):
+    def apply_fun(params, state, inputs, reverse=False, generate_image=False, **kwargs):
         x = inputs['x']
+        outputs = {}
 
         if(reverse == False):
             if(safe == True):
@@ -109,10 +110,14 @@ def Logit(lmbda=0.05, name='logit'):
             z = jax.nn.sigmoid(x)
             log_det = (jax.nn.softplus(x) + jax.nn.softplus(-x))
 
+            # If we are generating images, we want to pass the normalized image
+            # to matplotlib!
+            if(generate_image):
+                outputs['image'] = z
+
             if(safe == True):
                 z -= lmbda
                 z /= (1.0 - 2*lmbda)
-
 
         if(safe == True):
             log_det += jnp.log(1.0 - 2*lmbda)
@@ -122,7 +127,8 @@ def Logit(lmbda=0.05, name='logit'):
             # Then we have an image and have to sum more
             log_det = log_det.sum(axis=(-2, -1))
 
-        outputs = {'x': z, 'log_det': log_det}
+        outputs['x'] = z,
+        outputs['log_det'] = log_det
         return outputs, state
 
     def create_params_and_state(key, input_shapes):

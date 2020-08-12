@@ -13,6 +13,13 @@ import pathlib
 
 ################################################################################################################
 
+def linear_warmup_lr_schedule(i, warmup=1000, lr_decay=1.0, lr=1e-4):
+    return jnp.where(i < warmup,
+                     lr*i/warmup,
+                     lr*(lr_decay**(i - warmup)))
+
+################################################################################################################
+
 TEST = jnp.ones((0, 0))
 TRAIN = jnp.ones((0,))
 
@@ -284,7 +291,33 @@ def householder_prod(x, vs):
 def householder_prod_transpose(x, vs):
     return jax.lax.scan(householder_prod_body, x, vs[::-1])[0]
 
+@jit
+def householder_apply(U, log_s, VT, z):
+    # Compute Az
+    x = householder_prod(z, VT)
+    x = x*jnp.exp(log_s)
+    x = jnp.pad(x, (0, U.shape[1] - z.shape[0]))
+    x = householder_prod(x, U)
+    return x
 
+@jit
+def householder_pinv_apply(U, log_s, VT, x):
+    # Compute A^+@x and also return U_perp^T@x
+    UTx = householder_prod_transpose(x, U)
+    z, UperpTx = jnp.split(UTx, jnp.array([log_s.shape[0]]))
+    z = z*jnp.exp(-log_s)
+    z = householder_prod_transpose(z, VT)
+    return z, UperpTx
+
+@jit
+def householder_to_dense(U, log_s, VT):
+    return jax.vmap(partial(householder_apply, U, log_s, VT))(jnp.eye(VT.shape[0])).T
+
+@jit
+def householder_pinv_to_dense(U, log_s, VT):
+    return jax.vmap(partial(householder_pinv_apply, U, log_s, VT))(jnp.eye(U.shape[0]))[0].T
+
+################################################################################################################
 
 # def LowDimInputConvBlock(n_channels=512, init_zeros=True, name='unnamed'):
 #     # language=rst
