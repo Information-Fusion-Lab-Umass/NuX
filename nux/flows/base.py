@@ -196,6 +196,23 @@ def Debug(message='', name='debug'):
 
 ################################################################################################################
 
+def NoOp(message='', name='no_op'):
+    # language=rst
+    """
+    Dummy layer
+    """
+
+    def apply_fun(params, state, inputs, **kwargs):
+        return inputs, state
+
+    def create_params_and_state(key, input_shapes):
+        params, state = {}, {}
+        return params, state
+
+    return initialize(name, apply_fun, create_params_and_state)
+
+################################################################################################################
+
 def no_log_likelihood(flow_init):
 
     def apply_fun(params, state, inputs, **kwargs):

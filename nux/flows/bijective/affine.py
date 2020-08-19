@@ -265,7 +265,7 @@ def OnebyOneConv(weight_norm=True, W_init=jaxinit.glorot_normal(), name='1x1conv
         height, width, channel = x.shape[-3], x.shape[-2], x.shape[-1]
 
         if(weight_norm):
-            W = W/jnp.sqrt(jnp.sum(W**2, axis=0) + 1e-5)
+            W *= jax.lax.rsqrt(jnp.sum(W**2, axis=0) + 1e-5)
 
         x = x[None]
         if(reverse == False):

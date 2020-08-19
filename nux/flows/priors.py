@@ -6,15 +6,13 @@ from functools import partial
 import nux.util as util
 import nux.flows
 import nux.flows.base as base
-from jax.scipy.special import gammaln
+from jax.scipy.special import gammaln, logsumexp
 
 @base.auto_batch
 def UnitGaussianPrior(name='unit_gaussian_prior'):
     # language=rst
     """
     Prior for the normalizing flow.
-
-    :param axis - Axes to reduce over
     """
     dim = None
 
@@ -65,7 +63,70 @@ def UnitGaussianPrior(name='unit_gaussian_prior'):
 
 @base.auto_batch
 def UniformDirichletPrior(name='uniform_dirichlet_prior'):
+    # language=rst
+    """
+    Dirichlet prior with alpha = 1.  Can optionally pass labels too.
+    """
+    def apply_fun(params,
+                  state,
+                  inputs,
+                  reverse=False,
+                  compute_base=False,
+                  prior_sample=False,
+                  key=None,
+                  scale=1.0,
+                  **kwargs):
+        x = inputs['x']
+        y = inputs.get('y', -1)
+        outputs = {'x': x}
 
+        alpha = jnp.ones_like(x)*scale
+
+        if(reverse == False or compute_base == True):
+            # Compute p(x,y) = p(y|x)p(x) if we have a label, p(x) otherwise
+            outputs['log_pz'] = jax.lax.cond(y >= 0, lambda a: jnp.log(x[y]), lambda a: 0.0, None)
+            outputs['log_pz'] += jnp.sum((alpha - 1)*jnp.log(x)) + gammaln(alpha.sum()) - gammaln(alpha).sum()
+        else:
+            outputs['log_pz'] = 0.0
+
+        if(reverse == True and prior_sample == True):
+            assert key is not None
+
+            if(y >= 0):
+                # Just sample from a dirichlet with a different alpha
+                alpha = jnp.ones_like(x)
+                alpha = jax.ops.index_update(alpha, y, 5)
+                x = random.dirichlet(key, alpha)
+
+                if(compute_base == True):
+                    outputs['log_pz'] = jnp.log(x[y]) + jnp.sum((alpha - 1)*jnp.log(x)) + gammaln(alpha.sum()) - gammaln(alpha).sum()
+
+            else:
+                x = random.dirichlet(key, alpha)
+
+                if(compute_base == True):
+                    outputs['log_pz'] = jnp.sum((alpha - 1)*jnp.log(x)) + gammaln(alpha.sum()) - gammaln(alpha).sum()
+
+            outputs['x'] = x
+
+        outputs['prediction'] = jnp.argmax(x)
+        return outputs, state
+
+    def create_params_and_state(key, input_shapes):
+        assert len(input_shapes['x']) == 1
+        params, state = {}, {}
+        return params, state
+
+    return base.initialize(name, apply_fun, create_params_and_state)
+
+################################################################################################################
+
+@base.auto_batch
+def GMMPrior(n_classes, name='gmm_prior'):
+    # language=rst
+    """
+    Gaussian mixture model prior with fixed means and covariances.  Can optionally pass labels too.
+    """
     def apply_fun(params,
                   state,
                   inputs,
@@ -73,30 +134,60 @@ def UniformDirichletPrior(name='uniform_dirichlet_prior'):
                   compute_base=False,
                   prior_sample=False,
                   key=None, **kwargs):
-
+        means, log_diag_covs = state['means'], state['log_diag_covs']
         x = inputs['x']
+        y = inputs.get('y', -1)
         outputs = {'x': x}
 
-        alpha = jnp.ones_like(x)
+        # Compute the log pdfs of each mixture component
+        gmm = vmap(partial(util.gaussian_diag_cov_logpdf, x))
+        log_pdfs = gmm(means, log_diag_covs)
 
         if(reverse == False or compute_base == True):
-            outputs['log_pz'] = jnp.sum((alpha - 1)*jnp.log(x)) + gammaln(alpha.sum()) - gammaln(alpha).sum()
+            # Compute p(x,y) = p(x|y)p(y) if we have a label, p(x) otherwise
+            outputs['log_pz'] = jax.lax.cond(y >= 0,
+                                             lambda a: log_pdfs[y] + jnp.log(n_classes),
+                                             lambda a: logsumexp(log_pdfs) - jnp.log(n_classes),
+                                             None)
         else:
             outputs['log_pz'] = 0.0
 
         if(reverse == True and prior_sample == True):
             assert key is not None
-            x = random.dirichlet(key, alpha)
 
-            if(compute_base == True):
-                outputs['log_pz'] = jnp.sum((alpha - 1)*jnp.log(x)) + gammaln(alpha.sum()) - gammaln(alpha).sum()
+            if(y >= 0):
+                # Sample from a certain cluster
+                x = random.normal(key, x.shape) + means[y]
+
+                if(compute_base == True):
+                    # Compute the likelihoods
+                    gmm = vmap(partial(util.gaussian_diag_cov_logpdf, x))
+                    log_pdfs = gmm(means, log_diag_covs)
+
+                    outputs['log_pz'] = log_pdfs[y] - jnp.log(n_classes)
+            else:
+                # Sample from any cluster
+                y = random.randint(key, minval=0, maxval=n_classes, shape=(1,))[0]
+                x = random.normal(key, x.shape) + means[y]
+
+                if(compute_base == True):
+                    outputs['log_pz'] = logsumexp(log_pdfs) - jnp.log(n_classes)
 
             outputs['x'] = x
+
+        outputs['prediction'] = jnp.argmax(log_pdfs)
 
         return outputs, state
 
     def create_params_and_state(key, input_shapes):
-        params, state = {}, {}
+        x_shape = input_shapes['x']
+        assert len(x_shape) == 1
+
+        means = random.normal(key, (n_classes, x_shape[-1]))
+        log_diag_covs = jnp.zeros((n_classes, x_shape[-1]))
+
+        params = {}
+        state = {'means': means, 'log_diag_covs': log_diag_covs}
         return params, state
 
     return base.initialize(name, apply_fun, create_params_and_state)
@@ -135,7 +226,7 @@ def AffineGaussianPriorFullCov(out_dim, A_init=jaxinit.glorot_normal(), Sigma_ch
 
         z = jnp.einsum('ij,j->i', IpL_inv@Sigma_inv_A.T, x)
         x_proj = jnp.einsum('ij,j->i', Sigma_inv_A, z)
-        a = util.upper_cho_solve(Sigma_chol, x)
+        a = util.lower_cho_solve(Sigma_chol, x)
 
         log_hx = -0.5*jnp.sum(x*(a - x_proj), axis=-1)
         log_hx -= 0.5*jnp.linalg.slogdet(IpL)[1]
@@ -298,5 +389,6 @@ def AffineGaussianPriorDiagCov(out_dim, A_init=jaxinit.glorot_normal(), name='af
 
 __all__ = ['UnitGaussianPrior',
            'UniformDirichletPrior',
+           'GMMPrior',
            'AffineGaussianPriorFullCov',
            'AffineGaussianPriorDiagCov']

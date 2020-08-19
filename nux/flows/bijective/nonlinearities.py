@@ -127,7 +127,7 @@ def Logit(lmbda=0.05, name='logit'):
             # Then we have an image and have to sum more
             log_det = log_det.sum(axis=(-2, -1))
 
-        outputs['x'] = z,
+        outputs['x'] = z
         outputs['log_det'] = log_det
         return outputs, state
 

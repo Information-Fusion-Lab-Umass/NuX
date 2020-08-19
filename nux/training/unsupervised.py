@@ -10,6 +10,43 @@ __all__ = ['nll_loss', 'GenerativeModel', 'ImageGenerativeModel', '_ImageMixin']
 
 ################################################################################################################
 
+@partial(jit, static_argnums=(0, 1, 2))
+def scan_body(valgrad, opt_update, get_params, carry, inputs, clip=True):
+    params, state, opt_state = carry
+    i, key, inputs = inputs
+
+    # Take a gradient step
+    (train_loss, (outputs, state)), grad = valgrad(params, state, inputs, key=key)
+
+    if(clip):
+        grad = jit(optimizers.clip_grads)(grad, 5.0)
+
+    # Update the parameters and optimizer state
+    opt_state = opt_update(i, grad, opt_state)
+    params = get_params(opt_state)
+
+    return (params, state, opt_state), train_loss
+
+@partial(jit, static_argnums=(0, 1, 2, 3))
+def train_loop(valgrad, opt_update, get_params, batch_size, params, state, opt_state, key, data_shard, iter_numbers):
+    """ Fast training loop using scan """
+
+    # Fill the scan function
+    body = partial(scan_body, valgrad, opt_update, get_params)
+
+    # Get the inputs for the scan loop
+    n_iters = iter_numbers.shape[0]
+    batch_idx = random.randint(key, minval=0, maxval=data_shard.shape[0], shape=(n_iters, batch_size))
+    inputs = {'x': data_shard[batch_idx,...]}
+    keys = random.split(key, n_iters)
+
+    # Run the optimizer steps
+    carry = (params, state, opt_state)
+    inputs = (iter_numbers, keys, inputs)
+    return jax.lax.scan(body, carry, inputs)
+
+################################################################################################################
+
 @partial(jit, static_argnums=(0,))
 def nll_loss(apply_fun, params, state, inputs, **kwargs):
     """ Compute the negative mean log likelihood -sum log p(x).
@@ -36,9 +73,10 @@ class GenerativeModel():
             lr_decay - Learning rate decay.
             lr       - Max learning rate.
     """
-    def __init__(self, flow, clip=5.0, warmup=None, lr_decay=1.0, lr=1e-4):
+    def __init__(self, flow, loss_fun=None, clip=5.0, warmup=None, lr_decay=1.0, lr=1e-4, batch_size=32):
         self.flow = flow
-        self.loss_fun = partial(nll_loss, partial(flow.apply, reverse=False))
+        loss_fun = nll_loss if loss_fun is None else loss_fun
+        self.loss_fun = partial(loss_fun, partial(flow.apply, reverse=False))
         self.valgrad = jit(jax.value_and_grad(self.loss_fun, has_aux=True))
 
         # Optionally use a learning schedule
@@ -61,6 +99,9 @@ class GenerativeModel():
 
         self.training_steps = 0
         self.losses = []
+
+        batch_size = 32
+        self.fast_train = partial(train_loop, self.valgrad, self.opt_update, self.get_params, batch_size)
 
     #############################################################################
 
@@ -110,6 +151,17 @@ class GenerativeModel():
 
         return loss, outputs
 
+    def multi_grad_step(self, key, data_shard, n_iters=1000):
+        iter_numbers = jnp.arange(self.training_steps, self.training_steps + n_iters)
+        (params, state, opt_state), train_losses = self.fast_train(self.flow.params, self.flow.state, self.opt_state, key, data_shard, iter_numbers)
+        self.losses.extend(list(train_losses))
+
+        self.training_steps += n_iters
+        self.flow.params = params
+        self.flow.state = state
+        self.opt_state = opt_state
+        return train_losses
+
     #############################################################################
 
     def forward_apply(self, key, inputs):
@@ -156,12 +208,12 @@ class _ImageMixin():
     def sample(self, key, n_samples, full_output=False):
         # dummy_z is a placeholder with the shapes we'll use when we sample in the prior.
         dummy_z = jnp.zeros((n_samples,) + self.flow.output_shapes['x'])
-        outputs, _ = self.apply(self.params, self.state, {'x': dummy_z}, key=key, reverse=True, compute_base=True, prior_sample=True)
+        outputs, _ = self.apply(self.params, self.state, {'x': dummy_z}, key=key, reverse=True, compute_base=True, prior_sample=True, generate_image=True)
         return outputs['image'] if full_output == False else outputs
 
 ################################################################################################################
 
-class ImageGenerativeModel(GenerativeModel, _ImageMixin):
+class ImageGenerativeModel(_ImageMixin, GenerativeModel):
     """ Generative flow model for images.
 
         Args:

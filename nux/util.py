@@ -13,6 +13,12 @@ import pathlib
 
 ################################################################################################################
 
+@jit
+def xTAx(A, x):
+    return jnp.einsum('i,ij,j', x, A, x)
+
+################################################################################################################
+
 def linear_warmup_lr_schedule(i, warmup=1000, lr_decay=1.0, lr=1e-4):
     return jnp.where(i < warmup,
                      lr*i/warmup,
@@ -243,10 +249,16 @@ def gaussian_diag_cov_logpdf(x, mean, log_diag_cov):
     log_px = -0.5*jnp.sum(dx*jnp.exp(-log_diag_cov)*dx, axis=-1)
     return log_px - 0.5*jnp.sum(log_diag_cov) - 0.5*x.shape[-1]*jnp.log(2*jnp.pi)
 
+@jit
+def unit_gaussian_logpdf(x):
+    if(x.ndim > 1):
+        return jax.vmap(unit_gaussian_logpdf)(x)
+    return -0.5*jnp.dot(x, x) - 0.5*x.shape[-1]*jnp.log(2*jnp.pi)
+
 ################################################################################################################
 
 @jit
-def upper_cho_solve(chol, x):
+def lower_cho_solve(chol, x):
     return jax.scipy.linalg.cho_solve((chol, True), x)
 
 def upper_triangular_indices(N):

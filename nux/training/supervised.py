@@ -26,13 +26,16 @@ def classification_loss(apply_fun, params, state, inputs, beta, **kwargs):
     """
     # Compute log p(x)
     nll, (updated_state, outputs) = unsupervised.nll_loss(apply_fun, params, state, inputs, **kwargs)
+    loss = nll
+
+    l2 = jnp.linalg.norm(jax.flatten_util.ravel_pytree(params)[0])
 
     # Compute log p(y|x)
     labels = inputs['y']
     log_pygx = jnp.log(outputs['x'][jnp.arange(labels.shape[0]), labels])
     loss = nll - beta*jnp.mean(log_pygx)
 
-    return loss, (updated_state, outputs)
+    return loss + 0.1*l2, (updated_state, outputs)
 
 ################################################################################################################
 
@@ -47,30 +50,33 @@ class SupervisedGenerativeModel(unsupervised.GenerativeModel):
             lr       - Max learning rate.
             beta      - How much to weight the log likelihood contribution.
     """
-    def __init__(self, flow, clip=5.0, warmup=None, lr_decay=1.0, lr=1e-4, beta=1.0):
+    def __init__(self, flow, loss_fun=None, clip=5.0, warmup=None, lr_decay=1.0, lr=1e-4, beta=1.0):
         super().__init__(flow,
                          clip=clip,
                          warmup=warmup,
                          lr_decay=lr_decay,
                          lr=lr)
 
-        self.loss_fun = partial(classification_loss, partial(flow.apply, reverse=False))
+        loss_fun = classification_loss if loss_fun is None else loss_fun
+        self.loss_fun = partial(loss_fun, partial(flow.apply, reverse=False))
         self.valgrad = jit(jax.value_and_grad(self.loss_fun, has_aux=True))
 
         # In case we want to weight classification loss more
         self.beta = beta
 
+        self.losses = []
         self.train_accs = []
         self.test_accs = []
 
     #############################################################################
 
-    def grad_step(self, key, inputs, beta=None):
+    def grad_step(self, key, inputs, beta=None, **kwargs):
 
         beta = beta if beta is not None else self.beta
 
         # Take a gradient step
-        loss, outputs = super().grad_step(key, inputs, beta=beta)
+        loss, outputs = super().grad_step(key, inputs, beta=beta, **kwargs)
+        self.losses.append(loss)
 
         # Compute the training accuracy
         train_acc = jnp.mean(outputs['prediction'] == inputs['y'])
@@ -117,5 +123,5 @@ class SupervisedGenerativeModel(unsupervised.GenerativeModel):
 
 ################################################################################################################
 
-class SupervisedImageGenerativeModel(SupervisedGenerativeModel, unsupervised._ImageMixin):
+class SupervisedImageGenerativeModel(unsupervised._ImageMixin, SupervisedGenerativeModel):
     pass

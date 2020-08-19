@@ -68,10 +68,15 @@ def sequential(*init_funs, log_likelihood=True, name='sequential'):
         else:
             outputs['log_det'] = 0.0
 
-        def apply_fun(params, state, original_inputs, reverse=False, **kwargs):
+        def apply_fun(params, state, original_inputs, reverse=False, capture_names=(), **kwargs):
             # Use a new dictionary so that we don't modify the existing one
             inputs = {}
             inputs.update(original_inputs)
+
+            # We may want to capture intermediate outputs
+            capture = {}
+            for name in capture_names:
+                capture[name] = {}
 
             funs = apply_funs
             names = list(params.keys())
@@ -96,10 +101,19 @@ def sequential(*init_funs, log_likelihood=True, name='sequential'):
                 # Update the input for the next iteration
                 inputs.update(outputs)
 
+                # Capture outputs
+                if(name in capture):
+                    capture[name] = inputs.copy()
+                    capture[name]['total_log_det'] = log_det
+
             if(log_likelihood):
                 inputs['log_det'] = log_det
             else:
                 inputs['log_det'] = 0.0
+
+            # Update with the captured variables
+            for name in capture_names:
+                inputs['capture_%s'%name] = capture[name]
 
             return inputs, updated_state
 
