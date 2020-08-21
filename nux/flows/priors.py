@@ -62,7 +62,7 @@ def UnitGaussianPrior(name='unit_gaussian_prior'):
 ################################################################################################################
 
 @base.auto_batch
-def UniformDirichletPrior(name='uniform_dirichlet_prior'):
+def UniformDirichletPrior(alpha_scale=1.0, name='uniform_dirichlet_prior'):
     # language=rst
     """
     Dirichlet prior with alpha = 1.  Can optionally pass labels too.
@@ -74,12 +74,13 @@ def UniformDirichletPrior(name='uniform_dirichlet_prior'):
                   compute_base=False,
                   prior_sample=False,
                   key=None,
-                  scale=1.0,
+                  scale=None,
                   **kwargs):
         x = inputs['x']
         y = inputs.get('y', -1)
         outputs = {'x': x}
 
+        scale = alpha_scale if scale is None else scale
         alpha = jnp.ones_like(x)*scale
 
         if(reverse == False or compute_base == True):

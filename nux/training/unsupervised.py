@@ -27,17 +27,16 @@ def scan_body(valgrad, opt_update, get_params, carry, inputs, clip=True):
 
     return (params, state, opt_state), train_loss
 
-@partial(jit, static_argnums=(0, 1, 2, 3))
-def train_loop(valgrad, opt_update, get_params, batch_size, params, state, opt_state, key, data_shard, iter_numbers):
+@partial(jit, static_argnums=(0, 1, 2))
+def train_loop(valgrad, opt_update, get_params, params, state, opt_state, key, x, iter_numbers):
     """ Fast training loop using scan """
 
     # Fill the scan function
     body = partial(scan_body, valgrad, opt_update, get_params)
 
     # Get the inputs for the scan loop
-    n_iters = iter_numbers.shape[0]
-    batch_idx = random.randint(key, minval=0, maxval=data_shard.shape[0], shape=(n_iters, batch_size))
-    inputs = {'x': data_shard[batch_idx,...]}
+    n_iters = x.shape[0]
+    inputs = {'x': x}
     keys = random.split(key, n_iters)
 
     # Run the optimizer steps
@@ -59,7 +58,7 @@ def nll_loss(apply_fun, params, state, inputs, **kwargs):
     """
     outputs, updated_state = apply_fun(params, state, inputs, **kwargs)
     loss = outputs.get('log_pz', 0.0) + outputs.get('log_det', 0.0)
-    return -jnp.mean(loss), (updated_state, outputs)
+    return -jnp.mean(loss), (outputs, updated_state)
 
 ################################################################################################################
 
@@ -73,7 +72,7 @@ class GenerativeModel():
             lr_decay - Learning rate decay.
             lr       - Max learning rate.
     """
-    def __init__(self, flow, loss_fun=None, clip=5.0, warmup=None, lr_decay=1.0, lr=1e-4, batch_size=32):
+    def __init__(self, flow, loss_fun=None, clip=5.0, warmup=None, lr_decay=1.0, lr=1e-4):
         self.flow = flow
         loss_fun = nll_loss if loss_fun is None else loss_fun
         self.loss_fun = partial(loss_fun, partial(flow.apply, reverse=False))
@@ -100,8 +99,7 @@ class GenerativeModel():
         self.training_steps = 0
         self.losses = []
 
-        batch_size = 32
-        self.fast_train = partial(train_loop, self.valgrad, self.opt_update, self.get_params, batch_size)
+        self.fast_train = partial(train_loop, self.valgrad, self.opt_update, self.get_params)
 
     #############################################################################
 
@@ -151,9 +149,13 @@ class GenerativeModel():
 
         return loss, outputs
 
-    def multi_grad_step(self, key, data_shard, n_iters=1000):
+    def multi_grad_step(self, key, x):
+        # This function expects doubly batched inputs!!
+        assert len(x.shape) - len(self.flow.input_shapes['x']) == 2
+
+        n_iters = x.shape[0]
         iter_numbers = jnp.arange(self.training_steps, self.training_steps + n_iters)
-        (params, state, opt_state), train_losses = self.fast_train(self.flow.params, self.flow.state, self.opt_state, key, data_shard, iter_numbers)
+        (params, state, opt_state), train_losses = self.fast_train(self.flow.params, self.flow.state, self.opt_state, key, x, iter_numbers)
         self.losses.extend(list(train_losses))
 
         self.training_steps += n_iters
