@@ -95,7 +95,6 @@ def UniformDirichletPrior(alpha_scale=1.0, name='uniform_dirichlet_prior'):
 
             if(y >= 0):
                 # Just sample from a dirichlet with a different alpha
-                alpha = jnp.ones_like(x)
                 alpha = jax.ops.index_update(alpha, y, 5)
                 x = random.dirichlet(key, alpha)
 

@@ -10,7 +10,7 @@ import nux.flows
 import nux.flows.base as base
 
 @base.auto_batch
-def importance_weighted(nif, prior, n_importance_samples=64, name='importance_weight'):
+def importance_weighted(nif, prior, n_importance_samples=64, conditional_entropy=True, name='importance_weight'):
     # language=rst
     """
     Use importance weighting for gradient estimation.
@@ -19,19 +19,24 @@ def importance_weighted(nif, prior, n_importance_samples=64, name='importance_we
 
     def _forward(nif_outputs, prior_outputs, batch_depth=1):
 
-        prior_outputs['log_px'] = prior_outputs['log_pz'] + prior_outputs['log_det']
+        prior_outputs['log_px'] = prior_outputs['log_pz'] + prior_outputs.get('log_det', 0.0)
+        log_pz = logsumexp(prior_outputs['log_px'])
 
         # Compute the importance weights
         assert prior_outputs['log_px'].ndim == 1
         w = prior_outputs['log_px'] - logsumexp(prior_outputs['log_px'])
         w = jnp.exp(w)
 
-        # Don't pass a gradient through this!
-        w = jax.lax.stop_gradient(w)
+        if(conditional_entropy == False):
+            # Don't pass a gradient through this!
+            w = jax.lax.stop_gradient(w)
 
         # Compute the objective.  This is an estimate of log p(x) - H[p(z|x)]
         assert nif_outputs['log_pxgz'].ndim == 1
         objective = jnp.sum(w*(nif_outputs['log_pxgz'] + prior_outputs['log_px']))
+
+        # Compute the conditional entropy
+        ce = jnp.sum(w*nif_outputs['log_pxgz'])
 
         # Compute the upper bound on the log likelihood log_p(x) + KL[p(z|x)||q(z|x)]
         assert nif_outputs['log_qzgx'].ndim == 1
@@ -54,6 +59,10 @@ def importance_weighted(nif, prior, n_importance_samples=64, name='importance_we
 
         outputs = {'x': z,
                    'log_det': objective,
+                   'conditional_entropy': ce,
+                   'prior': log_pz,
+                   'log_pz': 0.0,
+                   'manifold_likelihood': nif_outputs['manifold_likelihood'].mean(),
                    'log_px_est': log_px_estimate,
                    'log_px_upper_est': log_px_upper_bound,
                    'log_px_lower': log_px_lower_bound,

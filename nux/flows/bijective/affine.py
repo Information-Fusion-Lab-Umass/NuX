@@ -24,6 +24,29 @@ def Identity(name='Identity'):
 
     return base.initialize(name, apply_fun, create_params_and_state)
 
+@base.auto_batch
+def Scale(tau, name='scale'):
+    # language=rst
+    """
+    Scale by a constant
+    """
+    def apply_fun(params, state, inputs, reverse=False, **kwargs):
+        outputs = {}
+        if(reverse == False):
+            outputs['x'] = inputs['x']/tau
+        else:
+            outputs['x'] = inputs['x']*tau
+
+        outputs['log_det'] = -jnp.log(tau)*jnp.prod(inputs['x'].shape)
+        return outputs, state
+
+    def create_params_and_state(key, input_shapes):
+        params = {}
+        state = {}
+        return params, state
+
+    return base.initialize(name, apply_fun, create_params_and_state)
+
 ################################################################################################################
 
 @base.auto_batch
@@ -379,6 +402,7 @@ def LocalDense(filter_shape=(2, 2), dilation=(1, 1), W_init=jaxinit.glorot_norma
 ################################################################################################################
 
 __all__ = ['Identity',
+           'Scale',
            'AffineLDU',
            'AffineSVD',
            'AffineDense',

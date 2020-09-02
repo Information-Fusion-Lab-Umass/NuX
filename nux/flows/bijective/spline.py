@@ -167,7 +167,7 @@ def NeuralSpline(K, network=None, hidden_layer_sizes=[1024]*4, name='unnamed'):
 
         nonlocal network
         if(network is None):
-            network = hk.transform(lambda x, **kwargs: util.SimpleMLP(network_out_shape, hidden_layer_sizes, 'affine')(x, **kwargs), apply_rng=True)
+            network = hk.transform(lambda x, **kwargs: util.SimpleMLP(network_out_shape, hidden_layer_sizes, is_additive=False)(x, **kwargs), apply_rng=True)
 
         params = {'hk_params': network.init(key, jnp.zeros((x1_dim,)))}
         state = {}

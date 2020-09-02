@@ -35,7 +35,7 @@ def remap_indices(indices, N):
 ################################################################################################################
 
 @jit
-def stochastic_inverse(x, b, A, log_diag_cov, s):
+def stochastic_inverse(x, A, b, log_diag_cov, s):
     """
     Compute N(z|mu(x), Sigma(x)) and h(x).
     """
@@ -74,7 +74,7 @@ def sample_stochastic_inverse(x, A, b, log_diag_cov, s, key):
     """
 
     # Sample from the stochastic inverse q(z|x)
-    z, log_hx, sigma_ATA_chol = stochastic_inverse(x, b, A, log_diag_cov, s)
+    z, log_hx, sigma_ATA_chol = stochastic_inverse(x, A, b, log_diag_cov, s)
 
     # Sample z and compute the manifold term
     if(key is not None):
@@ -94,7 +94,7 @@ def sample_stochastic_inverse(x, A, b, log_diag_cov, s, key):
         log_pxgz = 0.0
         log_qzgx = 0.0
 
-    outputs = {'x': z, 'log_det': log_det, 'log_pxgz': log_pxgz, 'log_qzgx': log_qzgx}
+    outputs = {'x': z, 'log_det': log_det, 'log_hx': log_hx, 'log_pxgz': log_pxgz, 'log_qzgx': log_qzgx}
     return outputs
 
 @jit
@@ -143,9 +143,8 @@ def TallAffineDiagCov(out_dim, A_init=jaxinit.glorot_normal(), b_init=jaxinit.no
 
         Args:
     """
-    def apply_fun(params, state, inputs, reverse=False, forward_monte_carlo=False, key=None, **kwargs):
+    def apply_fun(params, state, inputs, reverse=False, forward_monte_carlo=False, s=1.0, key=None, **kwargs):
         A, b, log_diag_cov = params['A'], params['b'], params['log_diag_cov']
-        s = state['s']
 
         if(reverse == False):
             outputs = sample_stochastic_inverse(inputs['x'], A, b, log_diag_cov, s, key)
@@ -159,7 +158,6 @@ def TallAffineDiagCov(out_dim, A_init=jaxinit.glorot_normal(), b_init=jaxinit.no
 
     def create_params_and_state(key, input_shapes):
         x_shape = input_shapes['x']
-        output_shape = x_shape[:-1] + (out_dim,)
         z_dim, x_dim = out_dim, x_shape[-1]
         keys = random.split(key, 3)
 
@@ -170,7 +168,8 @@ def TallAffineDiagCov(out_dim, A_init=jaxinit.glorot_normal(), b_init=jaxinit.no
 
         # Create the flow parameters
         params = {'A': A, 'b': b, 'log_diag_cov': log_diag_cov}
-        state = {'s': 1.0}
+        state = {}
+
         return params, state
 
     return base.initialize(name, apply_fun, create_params_and_state)

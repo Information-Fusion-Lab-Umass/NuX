@@ -1,7 +1,7 @@
 import os
 import numpy as np
 import jax.numpy as jnp
-from jax import jit
+from jax import jit, random
 from functools import partial
 from jax.flatten_util import ravel_pytree
 from jax.tree_util import tree_map
@@ -54,6 +54,25 @@ def dict_recurse(pytree, root_key=None):
         return [(root_key, pytree)]
 
 ################################################################################################################
+
+def key_tree_like(key, pytree):
+    # Figure out what the tree structure is
+    flat_tree, treedef = jax.tree_util.tree_flatten(pytree)
+
+    # Generate a tree of keys with the same structure as pytree
+    n_keys = len(flat_tree)
+    keys = random.split(key, n_keys)
+    key_tree = jax.tree_util.tree_unflatten(treedef, keys)
+    return key_tree
+
+@partial(jit, static_argnums=(0,))
+def tree_multimap_multiout(f, tree, *rest):
+    # Like tree_multimap but expects f(leaves) to return a tuple.
+    # This function will return trees for each tuple element.
+    leaves, treedef = jax.tree_util.tree_flatten(tree)
+    all_leaves = [leaves] + [treedef.flatten_up_to(r) for r in rest]
+    new_leaves = [f(*xs) for xs in zip(*all_leaves)]
+    return [treedef.unflatten(leaf) for leaf in zip(*new_leaves)]
 
 @jit
 def tree_shapes(pytree):
