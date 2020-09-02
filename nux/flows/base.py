@@ -1,227 +1,167 @@
-from collections import OrderedDict, namedtuple
-from functools import partial, wraps
-import jax.nn.initializers as jaxinit
+from functools import partial
 import jax.numpy as jnp
 import jax
 from jax import random, jit, vmap
+import haiku as hk
+from abc import ABC, abstractmethod
+from typing import Optional, Mapping, Type, Callable, Iterable, Any, Sequence, Union, Tuple
 import nux.util as util
-import os
-fast_tree_leaves = jit(jax.tree_util.tree_leaves)
 
-class Flow():
-
-    __slots__ =  ['name', 'input_shapes', 'output_shapes', 'input_ndims', 'output_ndims', 'params', 'state', 'apply']
-
-    def __init__(self, name, input_shapes, output_shapes, input_ndims, output_ndims, params, state, apply):
-        self.name          = name
-        self.input_shapes  = input_shapes
-        self.output_shapes = output_shapes
-        self.input_ndims   = input_ndims
-        self.output_ndims  = output_ndims
-        self.params        = params
-        self.state         = state
-        self.apply         = apply
-
-    def _replace(self, **kwargs):
-        for attr, val in kwargs.items():
-            setattr(self, attr, val)
-        return self
-
-    def save_params_and_state_to_file(self, path=None):
-        assert path is not None
-
-        params_path = os.path.join(path, 'params.npz')
-        state_path  = os.path.join(path, 'state.npz')
-
-        # Make the save folder if it doesn't exist
-        util.save_pytree_to_file(self.params, params_path)
-        util.save_pytree_to_file(self.state, state_path)
-
-    def load_param_and_state_from_file(self, path=None):
-        assert path is not None
-
-        params_path = os.path.join(path, 'params.npz')
-        state_path  = os.path.join(path, 'state.npz')
-
-        self.params = util.load_pytree_from_file(self.params, params_path)
-        self.state = util.load_pytree_from_file(self.state, state_path)
+__all__ = ["transform_flow",
+           "Layer",
+           "AutoBatchedLayer"]
 
 ################################################################################################################
 
-def auto_batch(layer):
-    # language=rst
-    """
-    Automatically handle extra leading dimensions on an input.
-    """
-    @wraps(layer)
-    def call_layer(*args, **kwargs):
+from haiku._src.transform import TransformedWithState, to_prng_sequence, check_mapping, INIT_RNG_ERROR, APPLY_RNG_STATE_ERROR, APPLY_RNG_ERROR
+from haiku._src.typing import PRNGKey, PRNGSeed, Params, State
+from haiku._src.base import new_context
 
-        name = kwargs.get('name')
+def transform_flow(create_fun) -> TransformedWithState:
 
-        _init_fun = layer(*args, **kwargs)
+  def init_fn(
+      rng: Optional[Union[PRNGKey, PRNGSeed]],
+      inputs: Mapping[str, jnp.ndarray],
+      batch_axes=(),
+      **kwargs,
+  ) -> Tuple[Params, State]:
+    """Initializes your function collecting parameters and state."""
+    rng = to_prng_sequence(rng, err_msg=INIT_RNG_ERROR)
+    with new_context(rng=rng) as ctx:
+      # Create the model
+      model = create_fun()
 
-        def init_fun(key, inputs, batched=False, batch_depth=1, **kwargs):
-            # Initialize the flow layer
-            outputs, flow = _init_fun(key, inputs, batched=batched, batch_depth=batch_depth, **kwargs)
+      # Load the batch axes for the inputs
+      Layer.batch_axes = batch_axes
 
-            # Keep track of the expected dimensions
-            expected_input_x_dim = fast_tree_leaves(flow.input_ndims['x'])[0]
-            expected_output_x_dim = fast_tree_leaves(flow.output_ndims['x'])[0]
+      # Initialize the model
+      outputs = model(inputs, **kwargs)
 
-            # The new apply fun will vmap when needed
-            def apply_fun(params, state, inputs, key=None, reverse=False, **kwargs):
-                input_dim = fast_tree_leaves(inputs['x'])[0].ndim # Assume all inputs are batched the same!!
-                expected_dim = expected_input_x_dim if reverse == False else expected_output_x_dim
+      # We also need to run it in reverse to initialize the sample shapes!
+      model(outputs, sample=True, **kwargs)
 
-                # Recursively vmap
-                if(input_dim > expected_dim):
+      # Unset the batch axes
+      Layer.batch_axes = ()
 
-                    # Need to split keys when we vmap!
-                    if(key is not None):
-                        N = fast_tree_leaves(inputs['x'])[0].shape[0]
-                        keys = random.split(key, N)
-                        outputs, updated_state = vmap(partial(apply_fun, params, state, reverse=reverse, **kwargs))(inputs, keys)
-                    else:
-                        outputs, updated_state = vmap(partial(apply_fun, params, state, reverse=reverse, **kwargs))(inputs)
+    return ctx.collect_params(), ctx.collect_initial_state()
 
-                    # Average the state.  Not sure if this is the best way to do this.
-                    updated_state = jax.tree_util.tree_map(lambda x: x.mean(axis=0), updated_state)
-                    return outputs, updated_state
+  def apply_fn(
+      params: Optional[Params],
+      state: Optional[State],
+      rng: Optional[Union[PRNGKey, PRNGSeed]],
+      *args,
+      **kwargs,
+  ) -> Tuple[Any, State]:
+    """Applies your function injecting parameters and state."""
+    params = check_mapping("params", params)
+    state = check_mapping("state", state)
+    rng = to_prng_sequence(
+        rng, err_msg=(APPLY_RNG_STATE_ERROR if state else APPLY_RNG_ERROR))
+    with new_context(params=params, state=state, rng=rng) as ctx:
+      model = create_fun()
+      out = model(*args, **kwargs)
+    return out, ctx.collect_state()
 
-                return flow.apply(params, state, inputs, key=key, reverse=reverse, **kwargs)
-
-            new_flow = Flow(flow.name, flow.input_shapes, flow.output_shapes, flow.input_ndims, flow.output_ndims, flow.params, flow.state, apply_fun)
-            return outputs, new_flow
-
-        return init_fun
-
-    return call_layer
+  return TransformedWithState(init_fn, apply_fn)
 
 ################################################################################################################
 
-def initialize(name, apply_fun, create_params_and_state, data_dependent=False, start_hook=None, end_hook=None):
-    # language=rst
-    """
-    Data dependent init function that does not do any special initialization using data.
-    """
-    def init_fun(key, inputs, batched=None, batch_depth=1, **kwargs):
-        # Must specify if input is batched!
-        assert batched is not None
-        assert (batched is True) or (batched is False)
+from haiku._src.base import current_frame, current_bundle_name, StatePair
+from haiku._src.typing import ParamName, Shape
 
-        if(batched == False):
-            for i in range(batch_depth):
-                inputs = jax.tree_util.tree_map(lambda x: x[None], inputs)
+def get_tree_shapes(name: ParamName,
+                    pytree: Any,
+                    batch_axes: Optional[Sequence[int]] = ()
+) -> Shape:
+  state = current_frame().state[current_bundle_name()]
+  value = state.get(name, None)
+  if value is None:
 
-        # Retrieve the shapes of the inputs
-        unbatched_inputs = inputs
-        for i in range(batch_depth):
-            unbatched_inputs = jax.tree_util.tree_map(lambda x: x[0], unbatched_inputs)
-        input_shapes = util.tree_shapes(unbatched_inputs)
-        input_ndims = util.tree_ndims(unbatched_inputs)
+    def get_unbatched_shape(x):
+      x_shape = [s for i, s in enumerate(x.shape) if i not in batch_axes]
+      x_shape = tuple(x_shape)
+      return x_shape
 
-        # Initialize the parameters and state
-        if(data_dependent):
-            params, state = create_params_and_state(key, inputs, batch_depth)
+    tree_shapes = jax.tree_util.tree_map(get_unbatched_shape, pytree)
+
+    value = state[name] = StatePair(tree_shapes, tree_shapes)
+  return value.current
+
+################################################################################################################
+
+class Layer(hk.Module, ABC):
+
+  batch_axes = ()
+
+  def __init__(self, name=None):
+    super().__init__(name=name)
+
+  def set_expected_shapes(self, inputs: Mapping[str, jnp.ndarray], sample: Optional[bool]=False):
+    # Keep track of the initial input shapes
+    if sample == False:
+      self.expected_shapes = get_tree_shapes("input_shapes", inputs, batch_axes=Layer.batch_axes)
+    else:
+      self.expected_shapes = get_tree_shapes("sample_input_shapes", inputs, batch_axes=Layer.batch_axes)
+
+  def __call__(self, inputs: Mapping[str, jnp.ndarray], sample: Optional[bool]=False, **kwargs) -> Mapping[str, jnp.ndarray]:
+    self.set_expected_shapes(inputs, sample=sample)
+    return self.call(inputs, sample, **kwargs)
+
+  @abstractmethod
+  def call(self, inputs: Mapping[str, jnp.ndarray], sample: Optional[bool]=False, **kwargs) -> Mapping[str, jnp.ndarray]:
+    """ The expectation is that inputs will be a dicionary with
+        "x" holding data and "y" holding possible labels.  Other inputs
+        can be passed in too """
+    pass
+
+################################################################################################################
+
+class AutoBatchedLayer(Layer):
+
+  def __call__(self, inputs: Mapping[str, jnp.ndarray], sample: Optional[bool]=False, **kwargs) -> Mapping[str, jnp.ndarray]:
+    self.set_expected_shapes(inputs, sample=sample)
+
+    # Determine the passed input shapes
+    input_shapes = util.tree_shapes(inputs)
+
+    recurse = False
+    batch_size = None
+    input_in_axes = {}
+
+    # Figure out which inputs need to be vmapped over
+    for name, expected_shape in self.expected_shapes.items():
+      input_shape = input_shapes[name]
+      input_ndim = len(input_shape)
+      expected_ndim = len(expected_shape)
+
+      # If the dimensinoality of the input is more then expected, we need to vmap
+      if input_ndim > expected_ndim:
+        input_in_axes[name] = 0
+        recurse = True
+
+        # We need to make sure that the batch sizes are the same across all
+        # of the vmap arguments
+        if batch_size is None:
+          batch_size = input_shape[0]
         else:
-            params, state = create_params_and_state(key, input_shapes)
+          assert input_shape[0] == batch_size, "Batch size mismatch."
+      else:
+        # We don't need to vmap over this input
+        input_in_axes[name] = None
 
-        # If we need things from the initialization function, we can pass a hook
-        if(start_hook is not None):
-            start_hook(input_shapes, input_ndims)
+    # Evaluate the vmapped function
+    if recurse:
+      return vmap(partial(self, sample=sample, **kwargs), in_axes=(input_in_axes,))(inputs)
 
-        # Pass the inputs to forward.  Must use the same key as create_params_and_state
-        # so that data dependent initialization works!
-        vmapped_fun = partial(apply_fun, params, state, key=key, **kwargs)
-        for i in range(batch_depth):
-            vmapped_fun = vmap(vmapped_fun)
-        outputs, _ = vmapped_fun(inputs)
+    # Evaluate the function
+    outputs = self.call(inputs, sample=sample, **kwargs)
 
-        # Retrieve the output shapes
-        unbatched_outputs = outputs
-        for i in range(batch_depth):
-            unbatched_outputs = jax.tree_util.tree_map(lambda x: x[0], unbatched_outputs)
-        output_shapes = util.tree_shapes(unbatched_outputs)
-        output_ndims = util.tree_ndims(unbatched_outputs)
+    # Record the output shapes.  outputs is unbatched!
+    if sample == False:
+      get_tree_shapes("output_shapes", outputs)
+    else:
+      get_tree_shapes("sample_output_shapes", outputs)
 
-        # Get the flow instance
-        flow = Flow(name, input_shapes, output_shapes, input_ndims, output_ndims, params, state, apply_fun)
-
-        # If we need things from the initialization function, we can pass a hook
-        if(end_hook is not None):
-            end_hook(flow)
-
-        if(batched == False):
-            outputs = unbatched_outputs
-
-        return outputs, flow
-
-    return init_fun
+    return outputs
 
 ################################################################################################################
-
-def Debug(message='', name='debug'):
-    # language=rst
-    """
-    Debug by looking at input shapes
-    """
-    n_dims = None
-
-    def apply_fun(params, state, inputs, reverse=False, name=None, **kwargs):
-        x = inputs['x']
-        dims = x.ndim
-
-        inputs_shapes = util.tree_shapes(inputs)
-        print(message, 'inputs_shapes', inputs_shapes)
-
-        if(dims > n_dims):
-            log_det = jnp.zeros(x.shape[:dims - n_dims])
-        else:
-            log_det = 0.0
-
-        outputs = {'x': x, 'log_det': log_det}
-        outputs['%s_x'%name] = x
-
-        return outputs, state
-
-    def create_params_and_state(key, input_shapes):
-        params, state = {}, {}
-        return params, state
-
-    def hook(input_shapes, input_ndims):
-        nonlocal n_dims
-        n_dims = input_ndims['x']
-
-    return initialize(name, apply_fun, create_params_and_state, start_hook=hook)
-
-################################################################################################################
-
-def NoOp(message='', name='no_op'):
-    # language=rst
-    """
-    Dummy layer
-    """
-
-    def apply_fun(params, state, inputs, **kwargs):
-        return inputs, state
-
-    def create_params_and_state(key, input_shapes):
-        params, state = {}, {}
-        return params, state
-
-    return initialize(name, apply_fun, create_params_and_state)
-
-################################################################################################################
-
-def no_log_likelihood(flow_init):
-
-    def apply_fun(params, state, inputs, **kwargs):
-        outputs, state = apply_fun(params, state, inputs, **kwargs)
-        if('log_det' in outputs):
-            outputs['log_det'] = 0.0
-        return outputs, state
-
-    def init_fun(key, inputs, **kwargs):
-        return flow_init(key, inputs, **kwargs)
-
-    return init_fun

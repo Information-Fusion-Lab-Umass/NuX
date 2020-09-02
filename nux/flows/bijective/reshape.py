@@ -1,192 +1,77 @@
+import jax
 import jax.numpy as jnp
-from jax import vmap
-from functools import partial
 import nux.util as util
-import nux.flows
-import nux.flows.base as base
+from jax import random, vmap
+from functools import partial
+import haiku as hk
+from typing import Optional, Mapping
+from nux.flows.base import *
+import nux.util as util
 
-################################################################################################################
+__all__ = ["Squeeze",
+           "UnSqueeze",
+           "Flatten",
+           "Reverse"]
 
-@base.auto_batch
-def Squeeze(name='squeeze'):
-    # language=rst
-    """
-    Squeeze transformation
-    """
-    def apply_fun(params, state, inputs, reverse=False, **kwargs):
-        x = inputs['x']
-        if(reverse == False):
-            z = util.dilated_squeeze(x, (2, 2), (1, 1))
-        else:
-            z = util.dilated_unsqueeze(x, (2, 2), (1, 1))
-        outputs = {'x': z, 'log_det': 0.0}
-        return outputs, state
+class Squeeze(AutoBatchedLayer):
 
-    def create_params_and_state(key, input_shapes):
-        H, W, C = input_shapes['x']
-        assert H%2 == 0
-        assert W%2 == 0
-        params, state = {}, {}
-        return params, state
+  def __init__(self, name: str="squeeze", **kwargs):
+    super().__init__(name=name, **kwargs)
 
-    return base.initialize(name, apply_fun, create_params_and_state)
+  def call(self, inputs: Mapping[str, jnp.ndarray], sample: Optional[bool]=False, **kwargs) -> Mapping[str, jnp.ndarray]:
+    x = inputs["x"]
+    if sample == False:
+      z = util.dilated_squeeze(x, (2, 2), (1, 1))
+    else:
+      z = util.dilated_unsqueeze(x, (2, 2), (1, 1))
 
-@base.auto_batch
-def UnSqueeze(name='unsqueeze'):
-    # language=rst
-    """
-    Squeeze transformation
-    """
-    def apply_fun(params, state, inputs, reverse=False, **kwargs):
-        x = inputs['x']
-        if(reverse == True):
-            z = util.dilated_squeeze(x, (2, 2), (1, 1))
-        else:
-            z = util.dilated_unsqueeze(x, (2, 2), (1, 1))
-        outputs = {'x': z, 'log_det': 0.0}
-        return outputs, state
+    outputs = {"x": z, "log_det": jnp.array(0.0)}
+    return outputs
 
-    def create_params_and_state(key, input_shapes):
-        H, W, C = input_shapes['x']
-        assert C%4 == 0
-        params, state = {}, {}
-        return params, state
+class UnSqueeze(AutoBatchedLayer):
 
-    return base.initialize(name, apply_fun, create_params_and_state)
+  def __init__(self, name: str="unsqueeze", **kwargs):
+    super().__init__(name=name, **kwargs)
 
-################################################################################################################
+  def call(self, inputs: Mapping[str, jnp.ndarray], sample: Optional[bool]=False, **kwargs) -> Mapping[str, jnp.ndarray]:
+    x = inputs["x"]
+    if sample == True:
+      z = util.dilated_squeeze(x, (2, 2), (1, 1))
+    else:
+      z = util.dilated_unsqueeze(x, (2, 2), (1, 1))
 
-@base.auto_batch
-def Transpose(axis_order, name='transpose'):
-    # language=rst
-    """
-    Transpose an input
-    """
-    order = None
-    order_inverse = None
+    outputs = {"x": z, "log_det": jnp.array(0.0)}
+    return outputs
 
-    def apply_fun(params, state, inputs, reverse=False, **kwargs):
-        x = inputs['x']
-        if(reverse == False):
-            z = x.transpose(order)
-        else:
-            z = x.transpose(order_inverse)
-        outputs = {'x': z, 'log_det': 0.0}
-        return outputs, state
+class Flatten(AutoBatchedLayer):
 
-    def create_params_and_state(key, input_shapes):
-        x_shape = input_shapes['x']
-        nonlocal order
-        order = [ax%len(axis_order) for ax in axis_order]
-        assert len(order) == len(x_shape)
-        assert len(set(order)) == len(order)
+  def __init__(self, name: str="flatten", **kwargs):
+    super().__init__(name=name, **kwargs)
 
-        nonlocal order_inverse
-        order_inverse = [order.index(i) for i in range(len(order))]
-        params, state = {}, {}
-        return params, state
+  def call(self, inputs: Mapping[str, jnp.ndarray], sample: Optional[bool]=False, **kwargs) -> Mapping[str, jnp.ndarray]:
+    x = inputs["x"]
 
-    return base.initialize(name, apply_fun, create_params_and_state)
+    def init_fun(shape, dtype):
+      return jnp.array(shape)
 
-################################################################################################################
+    original_shape = hk.get_state("original_state", x.shape, jnp.int32, init_fun)
 
-@base.auto_batch
-def Reshape(shape, name='reshape'):
-    # language=rst
-    """
-    Prior for the normalizing flow.
+    if sample == False:
+        z = x.ravel()
+    else:
+        # z = x.reshape(self.expected_shapes["x"])
+        z = x.reshape(original_shape)
 
-    :param shape - Shape to reshape to
-    """
+    outputs = {"x": z, "log_det": jnp.array(0.0)}
+    return outputs
 
-    # Need to keep track of the original shape in order to invert
-    original_shape = None
-    assert len([1 for s in shape if s < 0]) < 2, 'Can only have 1 negative shape'
-    has_negative1 = jnp.any(jnp.array(shape) < 0)
+class Reverse(AutoBatchedLayer):
 
-    def apply_fun(params, state, inputs, reverse=False, **kwargs):
-        x = inputs['x']
-        if(reverse == False):
-            z = x.reshape(shape)
-        else:
-            z = x.reshape(original_shape)
-        outputs = {'x': z, 'log_det': 0.0}
-        return outputs, state
+  def __init__(self, name: str="reverse", **kwargs):
+    super().__init__(name=name, **kwargs)
 
-    def create_params_and_state(key, input_shapes):
-        x_shape = input_shapes['x']
-        # If there is a negative 1, then figure out what to do
-        nonlocal shape
-        if(has_negative1):
-            total_dim = jnp.prod(jnp.array(x_shape))
-            given_dim = jnp.prod(jnp.array([s for s in shape if s > 0]))
-            remaining_dim = total_dim//given_dim
-            shape = [s if s > 0 else remaining_dim for s in shape]
-
-        nonlocal original_shape
-        original_shape = x_shape
-        assert jnp.prod(jnp.array(x_shape)) == jnp.prod(jnp.array(shape)), 'x_shape %s shape: %s'%(str(x_shape), str(shape))
-
-        params, state = {}, {}
-        return params, state
-
-    return base.initialize(name, apply_fun, create_params_and_state)
-
-################################################################################################################
-
-@base.auto_batch
-def Flatten(name='flatten'):
-    # Need to keep track of the original shape in order to invert
-    original_shape = None
-    shape = None
-
-    def apply_fun(params, state, inputs, reverse=False, **kwargs):
-        x = inputs['x']
-        if(reverse == False):
-            z = x.reshape(shape)
-        else:
-            z = x.reshape(original_shape)
-
-        outputs = {'x': z, 'log_det': 0.0}
-        return outputs, state
-
-    def create_params_and_state(key, input_shapes):
-        x_shape = input_shapes['x']
-        nonlocal shape, original_shape
-        original_shape = x_shape
-        shape = (jnp.prod(jnp.array(x_shape)),)
-        assert jnp.prod(jnp.array(x_shape)) == jnp.prod(jnp.array(shape)), 'x_shape %s shape: %s'%(str(x_shape), str(shape))
-
-        params, state = {}, {}
-        return params, state
-
-    return base.initialize(name, apply_fun, create_params_and_state)
-
-################################################################################################################
-
-@base.auto_batch
-def Reverse(name='reverse'):
-    # language=rst
-    """
-    Reverse an input.
-    """
-    def apply_fun(params, state, inputs, reverse=False, **kwargs):
-        x = inputs['x']
-        z = x[...,::-1]
-        outputs = {'x': z, 'log_det': 0.0}
-        return outputs, state
-
-    def create_params_and_state(key, input_shapes):
-        params, state = {}, {}
-        return params, state
-
-    return base.initialize(name, apply_fun, create_params_and_state)
-
-################################################################################################################
-
-__all__ = ['Squeeze',
-           'UnSqueeze',
-           'Transpose',
-           'Reshape',
-           'Flatten',
-           'Reverse']
+  def call(self, inputs: Mapping[str, jnp.ndarray], sample: Optional[bool]=False, **kwargs) -> Mapping[str, jnp.ndarray]:
+    x = inputs["x"]
+    z = x[...,::-1]
+    outputs = {"x": z, "log_det": jnp.array(0.0)}
+    return outputs

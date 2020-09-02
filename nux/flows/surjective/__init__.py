@@ -1,1 +1,1 @@
-from nux.flows.surjective.dequantize import *
+from nux.flows.surjective.dequantization import *

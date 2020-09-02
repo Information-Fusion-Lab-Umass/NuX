@@ -1,144 +1,117 @@
-import jax.numpy as jnp
 import jax
-import nux.flows
-import nux.flows.base as base
+import jax.numpy as jnp
+import nux.util as util
+from jax import random, vmap
+from functools import partial
+import haiku as hk
+from typing import Optional, Mapping
+from nux.flows.base import *
+import nux.util as util
 
-@base.auto_batch
-def LeakyReLU(alpha=0.01, name='leaky_relu'):
-    # language=rst
-    """
-    Leaky ReLU
+__all__ = ["LeakyReLU",
+           "Sigmoid",
+           "Logit"]
 
-    :param alpha: Slope for negative inputs
-    """
-    def apply_fun(params, state, inputs, reverse=False, **kwargs):
-        x = inputs['x']
+class LeakyReLU(AutoBatchedLayer):
 
-        if(reverse == False):
-            z = jnp.where(x > 0, x, alpha*x)
-        else:
-            z = jnp.where(x > 0, x, x/alpha)
+  def __init__(self, alpha: float=0.01, name: str="leaky_relu", **kwargs):
+    super().__init__(name=name, **kwargs)
+    self.alpha = alpha
 
-        log_dx_dz = jnp.where(x > 0, 0, jnp.log(alpha))
-        log_det = log_dx_dz.sum(axis=-1)
+  def call(self, inputs: Mapping[str, jnp.ndarray], sample: Optional[bool]=False, **kwargs) -> Mapping[str, jnp.ndarray]:
+    x = inputs["x"]
 
-        if(log_det.ndim > 1):
-            # Then we have an image and have to sum over the height and width axes
-            log_det = log_det.sum(axis=(-2, -1))
+    if sample == False:
+      z = jnp.where(x > 0, x, self.alpha*x)
+    else:
+      z = jnp.where(x > 0, x, x/self.alpha)
 
-        outputs = {'x': z, 'log_det': log_det}
-        return outputs, state
+    log_dx_dz = jnp.where(x > 0, 0, jnp.log(self.alpha))
+    log_det = log_dx_dz.sum(axis=-1)
 
-    def create_params_and_state(key, input_shapes):
-        params, state = {}, {}
-        return params, state
+    if log_det.ndim > 1:
+      # Then we have an image and have to sum over the height and width axes
+      log_det = log_det.sum(axis=(-2, -1))
 
-    return base.initialize(name, apply_fun, create_params_and_state)
+    outputs = {"x": z, "log_det": log_det}
+    return outputs
 
-################################################################################################################
+class Sigmoid(AutoBatchedLayer):
 
-@base.auto_batch
-def Sigmoid(lmbda=None, name='sigmoid'):
-    # language=rst
-    """
-    Invertible sigmoid.  The logit function is its inverse.
+  def __init__(self, scale: Optional[float]=None, name: str="sigmoid", **kwargs):
+    super().__init__(name=name, **kwargs)
+    self.scale = scale
+    self.has_scale = scale is not None
 
-    :param lmbda: For numerical stability
-    """
-    safe = lmbda is not None
+  def call(self, inputs: Mapping[str, jnp.ndarray], sample: Optional[bool]=False, **kwargs) -> Mapping[str, jnp.ndarray]:
+    x = inputs["x"]
 
-    def apply_fun(params, state, inputs, reverse=False, **kwargs):
-        x = inputs['x']
+    if sample == False:
+      z = jax.nn.sigmoid(x)
 
-        if(reverse == False):
-            z = jax.nn.sigmoid(x)
+      if self.has_scale == True:
+        z -= self.scale
+        z /= 1.0 - 2*self.scale
 
-            if(safe == True):
-                z -= lmbda
-                z /= 1.0 - 2*lmbda
+      log_det = -(jax.nn.softplus(x) + jax.nn.softplus(-x))
+    else:
+      if self.has_scale == True:
+        x *= 1.0 - 2*self.scale
+        x += self.scale
 
-            log_det = -(jax.nn.softplus(x) + jax.nn.softplus(-x))
-        else:
-            if(safe == True):
-                x *= 1.0 - 2*lmbda
-                x += lmbda
+      z = jax.scipy.special.logit(x)
+      log_det = -(jax.nn.softplus(z) + jax.nn.softplus(-z))
 
-            z = jax.scipy.special.logit(x)
-            log_det = -(jax.nn.softplus(z) + jax.nn.softplus(-z))
+    if self.has_scale == True:
+      log_det -= jnp.log(1.0 - 2*self.scale)
 
-        if(safe == True):
-            log_det -= jnp.log(1.0 - 2*lmbda)
+    log_det = log_det.sum(axis=-1)
 
-        log_det = log_det.sum(axis=-1)
+    if log_det.ndim > 1:
+      # Then we have an image and have to sum over the height and width axes
+      log_det = log_det.sum(axis=(-2, -1))
 
-        if(log_det.ndim > 1):
-            # Then we have an image and have to sum over the height and width axes
-            log_det = log_det.sum(axis=(-2, -1))
+    outputs = {"x": z, "log_det": log_det}
+    return outputs
 
-        outputs = {'x': z, 'log_det': log_det}
-        return outputs, state
+class Logit(AutoBatchedLayer):
 
-    def create_params_and_state(key, input_shapes):
-        params, state = {}, {}
-        return params, state
+  def __init__(self, scale: Optional[float]=0.05, name: str="logit", **kwargs):
+    super().__init__(name=name, **kwargs)
+    self.scale = scale
+    self.has_scale = scale is not None
 
-    return base.initialize(name, apply_fun, create_params_and_state)
+  def call(self, inputs: Mapping[str, jnp.ndarray], sample: Optional[bool]=False, generate_image: Optional[bool]=False, **kwargs) -> Mapping[str, jnp.ndarray]:
+    x = inputs["x"]
+    outputs = {}
 
-################################################################################################################
+    if sample == False:
+      if self.has_scale == True:
+        x *= (1.0 - 2*self.scale)
+        x += self.scale
+      z = jax.scipy.special.logit(x)
+      log_det = (jax.nn.softplus(z) + jax.nn.softplus(-z))
+    else:
+      z = jax.nn.sigmoid(x)
+      log_det = (jax.nn.softplus(x) + jax.nn.softplus(-x))
 
-@base.auto_batch
-def Logit(lmbda=0.05, name='logit'):
-    # language=rst
-    """
-    Inverse of Sigmoid
+      # If we are generating images, we want to pass the normalized image
+      # to matplotlib!
+      if generate_image:
+        outputs['image'] = z
 
-    :param lmbda: For numerical stability
-    """
-    safe = lmbda is not None
+      if self.has_scale == True:
+        z -= self.scale
+        z /= (1.0 - 2*self.scale)
 
-    def apply_fun(params, state, inputs, reverse=False, generate_image=False, **kwargs):
-        x = inputs['x']
-        outputs = {}
+    if self.has_scale == True:
+      log_det += jnp.log(1.0 - 2*self.scale)
 
-        if(reverse == False):
-            if(safe == True):
-                x *= (1.0 - 2*lmbda)
-                x += lmbda
-            z = jax.scipy.special.logit(x)
-            log_det = (jax.nn.softplus(z) + jax.nn.softplus(-z))
-        else:
-            z = jax.nn.sigmoid(x)
-            log_det = (jax.nn.softplus(x) + jax.nn.softplus(-x))
+    log_det = log_det.sum(axis=-1)
+    if log_det.ndim > 1:
+      # Then we have an image and have to sum more
+      log_det = log_det.sum(axis=(-2, -1))
 
-            # If we are generating images, we want to pass the normalized image
-            # to matplotlib!
-            if(generate_image):
-                outputs['image'] = z
-
-            if(safe == True):
-                z -= lmbda
-                z /= (1.0 - 2*lmbda)
-
-        if(safe == True):
-            log_det += jnp.log(1.0 - 2*lmbda)
-
-        log_det = log_det.sum(axis=-1)
-        if(log_det.ndim > 1):
-            # Then we have an image and have to sum more
-            log_det = log_det.sum(axis=(-2, -1))
-
-        outputs['x'] = z
-        outputs['log_det'] = log_det
-        return outputs, state
-
-    def create_params_and_state(key, input_shapes):
-        params, state = {}, {}
-        return params, state
-
-    return base.initialize(name, apply_fun, create_params_and_state)
-
-################################################################################################################
-
-__all__ = ['LeakyReLU',
-           'Sigmoid',
-           'Logit']
+    outputs['x'] = z
+    outputs['log_det'] = log_det
+    return outputs

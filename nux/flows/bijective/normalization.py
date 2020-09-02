@@ -1,133 +1,52 @@
 import jax
-import jax.nn.initializers as jaxinit
 import jax.numpy as jnp
-from jax import random, vmap, jit
-from functools import partial
 import nux.util as util
-import nux.flows
-import nux.flows.base as base
+from jax import random, vmap
+from functools import partial
+import haiku as hk
+from typing import Optional, Mapping
+from nux.flows.base import *
+import nux.util as util
 
-@base.auto_batch
-def ActNorm(log_s_init=jaxinit.zeros, b_init=jaxinit.zeros, name='act_norm'):
-    # language=rst
-    """
-    Act normalization
-    """
-    multiply_by = None
-
-    def apply_fun(params, state, inputs, reverse=False, **kwargs):
-        x = inputs['x']
-
-        if(reverse == False):
-            z = (x - params['b'])*jnp.exp(-params['log_s'])
-        else:
-            z = jnp.exp(params['log_s'])*x + params['b']
-
-        log_det = -params['log_s'].sum()
-
-        # Need to multiply by the height/width if we have an image
-        log_det *= multiply_by
-
-        outputs = {'x': z, 'log_det': log_det}
-        return outputs, state
-
-    def create_params_and_state(key, inputs, batch_depth):
-        x = inputs['x']
-
-        nonlocal multiply_by
-        multiply_by = jnp.prod(jnp.array([s for i, s in enumerate(x.shape) if i >= batch_depth and i < len(x.shape) - 1]))
-
-        # Create the parameters
-        axes = tuple(jnp.arange(len(x.shape) - 1))
-        params = {'b'    : jnp.mean(x, axis=axes),
-                  'log_s': jnp.log(jnp.std(x, axis=axes) + 1e-5)}
-        state = {}
-        return params, state
-
-    return base.initialize(name, apply_fun, create_params_and_state, data_dependent=True)
-
-# Don't use autobatching!
-def BatchNorm(epsilon=1e-5, alpha=0.05, beta_init=jaxinit.zeros, gamma_init=jaxinit.zeros, name='batch_norm'):
-    # language=rst
-    """
-    Invertible batch norm.
-
-    :param axis: Batch axis
-    :param epsilon: Constant for numerical stability
-    :param alpha: Parameter for exponential moving average of population parameters
-    """
-    assert 0, 'Haven\'t tested this yet with more than 1 batch.  Use ActNorm instead.'
-    expected_dim = None
-
-    def get_bn_params(x, test, running_mean, running_var):
-        """ Update the batch norm statistics """
-        if(util.is_testing(test)):
-            mean, var = running_mean, running_var
-        else:
-            mean = jnp.mean(x, axis=0)
-            var = jnp.var(x, axis=0) + epsilon
-            running_mean = (1 - alpha)*running_mean + alpha*mean
-            running_var = (1 - alpha)*running_var + alpha*var
-
-        return (mean, var), (running_mean, running_var)
-
-    def apply_fun(params, state, inputs, reverse=False, **kwargs):
-        x = inputs['x']
-        not_batched = x.ndim == expected_dim
-        if(not_batched):
-            x = x[None]
-
-        beta, log_gamma = params['beta'], params['log_gamma']
-        running_mean, running_var = state['running_mean'], state['running_var']
-
-        # Check if we're training or testing
-        test = kwargs.get('test', util.TRAIN)
-
-        # Update the running population parameters
-        (mean, var), (running_mean, running_var) = get_bn_params(x, test, running_mean, running_var)
-
-        if(reverse == False):
-            x_hat = (x - mean) / jnp.sqrt(var)
-            z = jnp.exp(log_gamma)*x_hat + beta
-        else:
-            x_hat = (x - beta)*jnp.exp(-log_gamma)
-            z = x_hat*jnp.sqrt(var) + mean
-
-        log_det = log_gamma.sum()
-        log_det += -0.5*jnp.log(var).sum()
-
-        updated_state = {}
-        updated_state['running_mean'] = running_mean
-        updated_state['running_var'] = running_var
-
-        if(not_batched):
-            z = z[0]
-
-        outputs = {'x': z, 'log_det': log_det}
-
-        return outputs, updated_state
-
-    def create_params_and_state(key, input_shapes):
-        x_shape = input_shapes['x']
-        k1, k2 = random.split(key)
-        beta, log_gamma = beta_init(k1, x_shape), gamma_init(k2, x_shape)
-        running_mean = jnp.zeros(x_shape)
-        running_var = jnp.ones(x_shape)
-
-        nonlocal expected_dim
-        expected_dim = len(x_shape)
-
-        params = {'beta': beta,
-                  'log_gamma': log_gamma}
-
-        state = {'running_mean': running_mean,
-                 'running_var': running_var}
-
-        return params, state
-
-    return base.initialize(name, apply_fun, create_params_and_state)
+__all__ = ["ActNorm"]
 
 ################################################################################################################
 
-__all__ = ['ActNorm',
-           'BatchNorm']
+class ActNorm(Layer):
+
+  def __init__(self, name: str="act_norm", **kwargs):
+    super().__init__(name=name, **kwargs)
+
+  def call(self, inputs: Mapping[str, jnp.ndarray], sample: Optional[bool]=False, **kwargs) -> Mapping[str, jnp.ndarray]:
+    outputs = {}
+
+    def b_init(*args, **kwargs):
+      x = inputs["x"]
+      axes = tuple(jnp.arange(len(x.shape) - 1))
+      return jnp.mean(x, axis=axes)
+
+    def log_s_init(*args, **kwargs):
+      x = inputs["x"]
+      axes = tuple(jnp.arange(len(x.shape) - 1))
+      return jnp.log(jnp.std(x, axis=axes) + 1e-5)
+
+    def const_init(*args, **kwargs):
+      # We need to multiply the log determinant by the other dimensions
+      x = inputs["x"]
+      shape = [s for i, s in enumerate(x.shape) if i not in Layer.batch_axes] + [1]
+      return jnp.prod(jnp.array(shape))
+
+    b     = hk.get_parameter("b", shape=(inputs["x"].shape[-1],), dtype=inputs["x"].dtype, init=b_init)
+    log_s = hk.get_parameter("log_s", shape=(inputs["x"].shape[-1],), dtype=inputs["x"].dtype, init=b_init)
+    const = hk.get_state("const", shape=(), dtype=jnp.float32, init=const_init)
+
+    if sample == False:
+      x = inputs["x"]
+      outputs["x"] = (x - b)*jnp.exp(-log_s)
+    else:
+      z = inputs["x"]
+      outputs["x"] = jnp.exp(log_s)*z + b
+
+    outputs["log_det"] = -log_s.sum()*const
+
+    return outputs
