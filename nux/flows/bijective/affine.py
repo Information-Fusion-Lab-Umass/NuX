@@ -6,6 +6,7 @@ from jax import random, vmap
 from functools import partial
 import nux.flows
 import nux.flows.base as base
+import nux.flows.spectral_norm as sn
 
 @base.auto_batch
 def Identity(name='Identity'):
@@ -50,7 +51,10 @@ def Scale(tau, name='scale'):
 ################################################################################################################
 
 @base.auto_batch
-def AffineLDU(L_init=jaxinit.normal(), d_init=jaxinit.zeros, U_init=jaxinit.normal(), name='affine_ldu'):
+def AffineLDU(L_init=jaxinit.normal(),
+              d_init=jaxinit.zeros,
+              U_init=jaxinit.normal(),
+              name='affine_ldu'):
     # language=rst
     """
     LDU parametrized square dense matrix
@@ -72,6 +76,9 @@ def AffineLDU(L_init=jaxinit.normal(), d_init=jaxinit.zeros, U_init=jaxinit.norm
 
     def apply_fun(params, state, inputs, reverse=False, **kwargs):
         L, log_d, U = get_LDU(params)
+
+        log_d = jnp.tanh(log_d)
+
         x = inputs['x']
         assert x.ndim == 1
         if(reverse == False):
@@ -149,23 +156,37 @@ def AffineSVD(n_householders, U_init=jaxinit.glorot_normal(), log_s_init=jaxinit
     return base.initialize(name, apply_fun, create_params_and_state)
 
 @base.auto_batch
-def AffineDense(W_init=jaxinit.glorot_normal(), b_init=jaxinit.zeros, name='affine_dense'):
+def AffineDense(W_init=jaxinit.glorot_normal(),
+                b_init=jaxinit.zeros,
+                spectral_norm=False,
+                scale=0.97,
+                n_iters=1,
+                bias=True,
+                name='affine_dense'):
     # language=rst
     """
     Basic affine transformation
     """
     def apply_fun(params, state, inputs, reverse=False, **kwargs):
         x = inputs['x']
-        W, b = params['W'], params['b']
-        # W = W/jnp.sqrt(jnp.sum(W**2, axis=0) + 1e-5)
-        # W = W*jax.lax.rsqrt(jnp.sum(W**2, axis=0) + 1e-5)
+        W = params['W']
+
+        if(spectral_norm):
+            u = state['u']
+            W, state['u'] = sn.spectral_norm_apply(W, u, scale, n_iters)
+
         assert x.ndim == 1
 
         if(reverse == False):
-            z = W@x + b
+            z = W@x
+            if(bias == True):
+                z += params['b']
+
         else:
             W_inv = jnp.linalg.inv(W)
-            z = W_inv@(x - b)
+            if(bias == True):
+                x -= params['b']
+            z = W_inv@x
 
         log_det = jax.jit(jnp.linalg.slogdet)(W)[1]
         outputs = {'x': z, 'log_det': log_det}
@@ -176,9 +197,17 @@ def AffineDense(W_init=jaxinit.glorot_normal(), b_init=jaxinit.zeros, name='affi
         keys = random.split(key, 2)
         W = W_init(keys[0], (x_shape[-1], x_shape[-1]))
         W = util.whiten(W)
-        b = b_init(keys[1], (x_shape[-1],))
-        params = {'W': W, 'b': b}
+
+        params = {'W': W}
         state = {}
+
+        if(bias):
+            b = b_init(keys[1], (x_shape[-1],))
+            params['b'] = b
+
+        if(spectral_norm):
+            state['u'] = sn.initialize_spectral_norm_u_tree(key, W)
+
         return params, state
 
     return base.initialize(name, apply_fun, create_params_and_state)

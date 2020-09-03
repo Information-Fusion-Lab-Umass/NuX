@@ -3,6 +3,7 @@ from jax import jit, random
 from functools import partial
 import jax
 import nux.util as util
+import nux.flows.base as base
 
 __all__ = ['spectral_norm_body',
            'spectral_norm_apply',
@@ -68,26 +69,30 @@ def check_spectral_norm(pytree):
 
 ################################################################################################################
 
-def spectral_norm_wrapper(flow_init, scale=0.97, spectral_norm_iters=1):
+def spectral_norm_wrapper(flow_init, scale=0.97, spectral_norm_iters=1, name='spectral_norm'):
 
     flow_apply_fun = None
 
-    def apply_fun(params, state, inputs, **kwargs):
-        u_tree = state['u_tree']
+    def apply_fun(params, state, inputs, *args, **kwargs):
+
+        updated_state = {}
 
         # Apply spectral normalization
-        params, u_tree = spectral_norm_tree(params, u_tree, scale, spectral_norm_iters)
-        return flow_apply_fun(params, state, inputs, **kwargs)
+        params, updated_state['u_tree'] = spectral_norm_tree(params, state['u_tree'], scale, spectral_norm_iters)
+
+        # Run the flow
+        outputs, updated_state['flow_state'] = flow_apply_fun(params, state['flow_state'], inputs, *args, **kwargs)
+
+        return outputs, updated_state
 
     def init_fun(key, inputs, **kwargs):
-        k1, k2 = random.split(key, 2)
+        k1, k2, k3 = random.split(key, 3)
 
-        nonlocal flow_apply_fun
         outputs, flow = flow_init(k1, inputs, **kwargs)
 
-        # Swap the apply functions
+        # # Swap the apply functions
+        nonlocal flow_apply_fun
         flow_apply_fun = flow.apply
-        flow.apply = apply_fun
 
         # Make sure that we keep track of the u_tree
         u_tree = initialize_spectral_norm_u_tree(k2, flow.params)
@@ -95,9 +100,18 @@ def spectral_norm_wrapper(flow_init, scale=0.97, spectral_norm_iters=1):
         # Initialize the parameters with some spectral norm
         params, u_tree = spectral_norm_tree(flow.params, u_tree, scale, 20)
 
-        flow.params = params
-        flow.state['u_tree'] = u_tree
+        state = {'flow_state': flow.state, 'u_tree': u_tree}
 
+        outputs, _ = apply_fun(params, state, inputs, key=k3, **kwargs)
+
+        flow = base.Flow(name,
+                         flow.input_shapes,
+                         flow.output_shapes,
+                         flow.input_ndims,
+                         flow.output_ndims,
+                         params,
+                         state,
+                         apply_fun)
         return outputs, flow
 
     return init_fun

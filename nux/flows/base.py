@@ -33,9 +33,11 @@ class Flow():
         params_path = os.path.join(path, 'params.npz')
         state_path  = os.path.join(path, 'state.npz')
 
-        # Make the save folder if it doesn't exist
-        util.save_pytree_to_file(self.params, params_path)
-        util.save_pytree_to_file(self.state, state_path)
+        util.save_pytree(self.params, params_path, overwrite=True)
+        util.save_pytree(self.state, state_path, overwrite=True)
+
+        # util.save_pytree_to_file(self.params, params_path)
+        # util.save_pytree_to_file(self.state, state_path)
 
     def load_param_and_state_from_file(self, path=None):
         assert path is not None
@@ -43,8 +45,11 @@ class Flow():
         params_path = os.path.join(path, 'params.npz')
         state_path  = os.path.join(path, 'state.npz')
 
-        self.params = util.load_pytree_from_file(self.params, params_path)
-        self.state = util.load_pytree_from_file(self.state, state_path)
+        self.params = util.load_pytree(params_path)
+        self.state = util.load_pytree(state_path)
+
+        # self.params = util.load_pytree_from_file(self.params, params_path)
+        # self.state = util.load_pytree_from_file(self.state, state_path)
 
 ################################################################################################################
 

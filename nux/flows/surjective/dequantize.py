@@ -22,7 +22,7 @@ def UniformDequantization(noise_scale=None, scale=256.0, name='uniform_dequantiz
         if(key is None):
             noise = jnp.zeros_like(x)
         else:
-            noise = random.uniform(key, x.shape)*state['noise_scale_array']
+            noise = random.uniform(key, x.shape)#*state['noise_scale_array']
 
         log_det = -jnp.log(scale)
         log_det *= jnp.prod(jnp.array(x.shape))
@@ -39,11 +39,11 @@ def UniformDequantization(noise_scale=None, scale=256.0, name='uniform_dequantiz
         x_shape = input_shapes['x']
         params, state = {}, {}
 
-        if(noise_scale is None):
-            state['noise_scale_array'] = jnp.ones(x_shape)
-        else:
-            assert noise_scale.shape == x_shape
-            state['noise_scale_array'] = noise_scale
+        # if(noise_scale is None):
+        #     state['noise_scale_array'] = jnp.ones(x_shape)
+        # else:
+        #     assert noise_scale.shape == x_shape
+        #     state['noise_scale_array'] = noise_scale
 
         return params, state
 
