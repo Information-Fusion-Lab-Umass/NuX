@@ -7,8 +7,12 @@ import haiku as hk
 from typing import Optional, Mapping
 from nux.flows.base import *
 import nux.util as util
+import numpyro
+numpyro.set_platform('gpu')
+import numpyro.distributions as dists
 
-__all__ = ["ActNorm"]
+__all__ = ["ActNorm",
+           "FlowNorm"]
 
 ################################################################################################################
 
@@ -48,5 +52,44 @@ class ActNorm(Layer):
       outputs["x"] = jnp.exp(log_s)*z + b
 
     outputs["log_det"] = -log_s.sum()*const
+
+    return outputs
+
+################################################################################################################
+
+class FlowNorm(AutoBatchedLayer):
+
+  def __init__(self, name: str="flow_norm", **kwargs):
+    super().__init__(name=name, **kwargs)
+
+  def call(self, inputs: Mapping[str, jnp.ndarray], sample: Optional[bool]=False, **kwargs) -> Mapping[str, jnp.ndarray]:
+    outputs = {}
+
+    def const_init(*args, **kwargs):
+      # We need to multiply the log determinant by the other dimensions
+      x = inputs["x"]
+      shape = [s for i, s in enumerate(x.shape) if i not in Layer.batch_axes] + [1]
+      return jnp.prod(jnp.array(shape))
+
+    dim, dtype = inputs["x"].shape[-1], inputs["x"].dtype
+    b     = hk.get_parameter("b", shape=(dim,), dtype=dtype, init=jnp.zeros)
+    log_s = hk.get_parameter("log_s", shape=(dim,), dtype=dtype, init=jnp.zeros)
+    const = hk.get_state("const", shape=(), dtype=jnp.float32, init=const_init)
+
+    log_det = -log_s.sum()*const
+    outputs["log_det"] = log_det
+
+    if sample == False:
+      x = inputs["x"]
+      outputs["x"] = (x - b)*jnp.exp(-log_s)
+
+      # Add in the normalzation prior
+      z = (jax.lax.stop_gradient(x) - b)*jnp.exp(-log_s)
+      normal = dists.Normal(0, 1)
+      log_pz = normal.log_prob(z).sum()
+      outputs["flow_norm"] = log_pz + log_det
+    else:
+      z = inputs["x"]
+      outputs["x"] = jnp.exp(log_s)*z + b
 
     return outputs

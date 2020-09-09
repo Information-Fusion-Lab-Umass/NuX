@@ -4,7 +4,7 @@ import nux.util as util
 from jax import random, vmap
 from functools import partial
 import haiku as hk
-from typing import Optional, Mapping
+from typing import Optional, Mapping, Tuple, Sequence, Union, Any
 from nux.flows.base import *
 import nux.util as util
 
@@ -13,7 +13,10 @@ __all__ = ["Identity",
            "AffineDense",
            "AffineLDU",
            "AffineSVD",
-           "OneByOneConv"]
+           "OneByOneConv",
+           "LocalDense",
+           "SmoothHeightWidth",
+           "ConstantConv"]
 
 ################################################################################################################
 
@@ -181,3 +184,125 @@ class OneByOneConv(AutoBatchedLayer):
     outputs["log_det"] = jnp.linalg.slogdet(W)[1]*height*width
 
     return outputs
+
+################################################################################################################
+
+class LocalDense(AutoBatchedLayer):
+
+  def __init__(self,
+               filter_shape: Tuple[int]=(2, 2),
+               dilation: Tuple[int]=(1, 1),
+               name: str="local_dense",
+               W_init=None,
+               **kwargs):
+    super().__init__(name=name, **kwargs)
+    self.filter_shape = filter_shape
+    self.dilation = dilation
+    self.W_init = hk.initializers.VarianceScaling(1.0, 'fan_avg', 'truncated_normal') if W_init is None else W_init
+
+  def call(self, inputs: Mapping[str, jnp.ndarray], sample: Optional[bool]=False, **kwargs) -> Mapping[str, jnp.ndarray]:
+    outputs = {}
+    x_shape, x_dtype = inputs["x"].shape, inputs["x"].dtype
+    h, w, c = inputs["x"].shape
+    fh, fw = self.filter_shape
+    dh, dw = self.dilation
+
+    # Find the shape of the dilated_squeeze output
+    H_sq, W_sq, C_sq = (h//fh, w//fw, c*fh*fw)
+
+    W = hk.get_parameter("W", shape=(C_sq, C_sq), dtype=x_dtype, init=self.W_init)
+    b = hk.get_parameter("b", shape=x_shape, dtype=x_dtype, init=jnp.zeros)*0.0
+
+    if sample == False:
+      x = inputs["x"]
+      x = util.dilated_squeeze(x, self.filter_shape, self.dilation)
+      z = jax.lax.conv_general_dilated(x[None],
+                                       W[None,None,...],
+                                       (1, 1),
+                                       'SAME',
+                                       (1, 1),
+                                       (1, 1),
+                                       dimension_numbers=('NHWC', 'HWIO', 'NHWC'))[0]
+      z = util.dilated_unsqueeze(z, self.filter_shape, self.dilation)
+      outputs["x"] = z + b
+    else:
+      W_inv = jnp.linalg.inv(W)
+      z = inputs["x"]
+      zmb = util.dilated_squeeze(z - b, self.filter_shape, self.dilation)
+      x = jax.lax.conv_general_dilated(zmb[None],
+                                       W_inv[None,None,...],
+                                       (1, 1),
+                                       'SAME',
+                                       (1, 1),
+                                       (1, 1),
+                                       dimension_numbers=('NHWC', 'HWIO', 'NHWC'))[0]
+      x = util.dilated_unsqueeze(x, self.filter_shape, self.dilation)
+      outputs["x"] = x
+
+    outputs["log_det"] = jnp.linalg.slogdet(W)[1]*h*w
+
+    return outputs
+
+################################################################################################################
+
+class ConstantConv(AutoBatchedLayer):
+
+  def __init__(self,
+               filter_shape: Tuple[int]=(2, 2),
+               name: str="constant_conv",
+               W_init=None,
+               **kwargs):
+    super().__init__(name=name, **kwargs)
+    self.filter_shape = filter_shape
+    self.W_init = hk.initializers.VarianceScaling(1.0, 'fan_avg', 'truncated_normal') if W_init is None else W_init
+
+  def call(self, inputs: Mapping[str, jnp.ndarray], sample: Optional[bool]=False, **kwargs) -> Mapping[str, jnp.ndarray]:
+
+    outputs = {}
+    x_shape, x_dtype = inputs["x"].shape, inputs["x"].dtype
+    h, w, c = inputs["x"].shape
+    fh, fw = self.filter_shape
+
+    W = hk.get_state("W", shape=(fh, fw, c, c), dtype=x_dtype, init=self.W_init)
+    b = hk.get_state("b", shape=x_shape, dtype=x_dtype, init=jnp.zeros)*0.0
+
+    if sample == False:
+      x = inputs["x"]
+      z = jax.lax.conv_general_dilated(x[None],
+                                       W,
+                                       (1, 1),
+                                       'SAME',
+                                       (1, 1),
+                                       (1, 1),
+                                       dimension_numbers=('NHWC', 'HWIO', 'NHWC'))[0]
+      outputs["x"] = z + b
+    else:
+      z = inputs["x"]
+      zmb = z - b
+
+      W_ = W.transpose((2, 3, 0, 1))
+      z_ = zmb.transpose((2, 0, 1))
+
+      x, r_sq, iters = util.CTC_solve(W_, (0, 1, 0, 1), (1, 1), 1000, z_, jnp.zeros_like(z_))
+      outputs["x"] = x.transpose((1, 2, 0))
+
+    outputs["log_det"] = jnp.array(0.0)
+
+    return outputs
+
+################################################################################################################
+
+class SmoothHeightWidth(ConstantConv):
+
+  def __init__(self,
+               filter_shape: Sequence[int]=(2, 2),
+               name: str="smooth_height_width",
+               **kwargs):
+
+    def W_init(shape, dtype):
+      h, w, cin, cout = shape
+      return jnp.broadcast_to(jnp.eye(cin, cout)[None,None], shape).astype(dtype)/(h*w)
+
+    super().__init__(filter_shape=filter_shape, name=name, W_init=W_init, **kwargs)
+
+################################################################################################################

@@ -7,19 +7,22 @@ import haiku as hk
 from typing import Optional, Mapping
 from nux.flows.base import *
 import nux.util as util
+import numpyro
+numpyro.set_platform('gpu')
 import numpyro.distributions as dists
 from jax.scipy.special import logsumexp
 
 __all__ = ["UnitGaussianPrior",
            "GMMPrior"]
 
-class UnitGaussianPrior(AutoBatchedLayer):
+class UnitGaussianPrior(AutoBatchedLayerWithRNG):
 
   def __init__(self, name: str="unit_gaussian_prior", **kwargs):
     super().__init__(name=name, **kwargs)
 
   def call(self,
            inputs: Mapping[str, jnp.ndarray],
+           rng: jnp.ndarray,
            sample: Optional[bool]=False,
            t: Optional[float]=1.0,
            ignore_prior: Optional[bool]=False,
@@ -38,7 +41,6 @@ class UnitGaussianPrior(AutoBatchedLayer):
       if ignore_prior:
         outputs = {"x": z, "log_pz": jnp.array(0.0)}
       else:
-        rng = hk.next_rng_key()
         x = normal.sample(rng, z.shape)
         log_pz = normal.log_prob(x).sum()
         outputs = {"x": x, "log_pz": log_pz}
@@ -46,7 +48,7 @@ class UnitGaussianPrior(AutoBatchedLayer):
 
 ################################################################################################################
 
-class GMMPrior(AutoBatchedLayer):
+class GMMPrior(AutoBatchedLayerWithRNG):
 
   def __init__(self, n_classes: int, name: str="gmm_prior", **kwargs):
     super().__init__(name=name, **kwargs)
@@ -54,6 +56,7 @@ class GMMPrior(AutoBatchedLayer):
 
   def call(self,
            inputs: Mapping[str, jnp.ndarray],
+           rng: jnp.ndarray,
            sample: Optional[bool]=False,
            ignore_prior: Optional[bool]=False,
            **kwargs
@@ -83,23 +86,18 @@ class GMMPrior(AutoBatchedLayer):
         outputs = {"x": x, "log_pz": jnp.array(0.0)}
       else:
         # Sample from all of the clusters
-        rng = hk.next_rng_key()
         xs = normal.sample(rng)
 
         def no_label(y):
-          rng = hk.next_rng_key()
+          rng = hk.next_rng_key() # NEED TO SPLIT THE KEY
           y = dists.CategoricalLogits(jnp.zeros(self.n_classes)).sample(rng, (1,))[0]
           return y, logsumexp(log_pdfs) - jnp.log(self.n_classes)
 
         def with_label(y):
           return y, log_pdfs[y] - jnp.log(self.n_classes)
 
-        def eval_per_label(y):
-          return jax.lax.cond(y < 0, no_label, with_label, y)
-
         # Either sample or use a specified cluster
         y, log_pz = jax.lax.cond(y < 0, no_label, with_label, y)
-        # y, log_pz = vmap(eval_per_label)(y)
 
         # Take a specific cluster
         outputs = {"x": xs[y], "log_pz": log_pz}
