@@ -1,36 +1,32 @@
 from functools import partial
-import jax.nn.initializers as jaxinit
 import jax.numpy as jnp
 import jax
 from jax import random, jit, vmap
-from jax.experimental import optimizers
+import optax
 import nux.util as util
 
 ################################################################################################################
 
-@partial(jit, static_argnums=(0, 1, 2))
-def scan_body(valgrad, opt_update, get_params, carry, inputs, clip=True):
+@partial(jit, static_argnums=(0, 1))
+def scan_body(valgrad, opt_update, carry, inputs):
     params, state, opt_state = carry
     i, key, inputs = inputs
 
     # Take a gradient step
     (train_loss, (outputs, state)), grad = valgrad(params, state, inputs, key=key)
 
-    if(clip):
-        grad = jit(optimizers.clip_grads)(grad, 5.0)
-
     # Update the parameters and optimizer state
-    opt_state = opt_update(i, grad, opt_state)
-    params = get_params(opt_state)
+    updates, opt_state = opt_update(grad, opt_state, params)
+    params = jit(optax.apply_updates)(params, updates)
 
     return (params, state, opt_state), (train_loss, outputs)
 
-@partial(jit, static_argnums=(0, 1, 2))
-def train_loop(valgrad, opt_update, get_params, params, state, opt_state, key, inputs, iter_numbers):
+@partial(jit, static_argnums=(0, 1))
+def train_loop(valgrad, opt_update, params, state, opt_state, key, inputs, iter_numbers):
     """ Fast training loop using scan """
 
     # Fill the scan function
-    body = partial(scan_body, valgrad, opt_update, get_params)
+    body = partial(scan_body, valgrad, opt_update)
 
     # Get the inputs for the scan loop
     n_iters = iter_numbers.shape[0]
@@ -44,32 +40,27 @@ def train_loop(valgrad, opt_update, get_params, params, state, opt_state, key, i
 ################################################################################################################
 
 class Trainer():
-    def __init__(self, loss_fun, params, clip=5.0, warmup=None, lr_decay=1.0, lr=1e-4):
+    def __init__(self, loss_fun, params, optimizer=None, clip=5.0, lr=1e-4):
         self.loss_fun = loss_fun
+        self.valgrad = jax.value_and_grad(self.loss_fun, has_aux=True)
         self.valgrad = jit(jax.value_and_grad(self.loss_fun, has_aux=True))
 
-        # Optionally use a learning schedule
-        if(warmup is None):
-            opt_init, opt_update, get_params = optimizers.adam(lr)
+        if(optimizer is None):
+            warmup_schedule = partial(util.linear_warmup_lr_schedule, warmup=1000, lr_decay=1.0, lr=-lr)
+            opt_init, opt_update = optax.chain(optax.scale_by_adam(b1=0.9, b2=0.999, eps=1e-8),
+                                               optax.scale_by_schedule(warmup_schedule),
+                                               optax.clip(clip))
         else:
-            schedule = partial(util.linear_warmup_lr_schedule, warmup=warmup, lr_decay=lr_decay, lr=lr)
-            opt_init, opt_update, get_params = optimizers.adam(schedule)
+            opt_init, opt_update = optimizer
 
         # Initialize the optimizer state
-        self.opt_update, self.get_params = jit(opt_update), jit(get_params)
+        self.opt_update = jit(opt_update)
         self.opt_state = opt_init(params)
-
-        # Gradient clipping is crucial for tough datasets!
-        if(clip is not None):
-            self.clip = partial(optimizers.clip_grads, max_norm=clip)
-            self.clip = jit(self.clip)
-        else:
-            self.clip = None
 
         self.training_steps = 0
         self.losses = []
 
-        self.fast_train = partial(train_loop, self.valgrad, self.opt_update, self.get_params)
+        self.fast_train = partial(train_loop, self.valgrad, self.opt_update)
 
     def grad_step(self, key, inputs, params, state, **kwargs):
 
@@ -77,15 +68,11 @@ class Trainer():
         (loss, (outputs, state)), grad = self.valgrad(params, state, inputs, key=key, **kwargs)
         self.losses.append(loss)
 
-        # Clip the gradients
-        if(self.clip):
-            grad = self.clip(grad)
-
         # Take a grad step
-        self.opt_state = self.opt_update(self.training_steps, grad, self.opt_state)
-        self.training_steps += 1
+        updates, self.opt_state = self.opt_update(grad, self.opt_state, params)
+        params = jit(optax.apply_updates)(params, updates)
 
-        params = self.get_params(self.opt_state)
+        self.training_steps += 1
 
         return loss, outputs, params, state
 
@@ -99,5 +86,17 @@ class Trainer():
         self.training_steps += n_iters
         self.opt_state = opt_state
         return (train_losses, outputs), params, state
+
+    def save_opt_state_to_file(self, path=None):
+        assert path is not None
+
+        opt_state_path = os.path.join(path, 'opt_state.pickle')
+        util.save_pytree(self.opt_state, opt_state_path, overwrite=True)
+
+    def load_param_and_state_from_file(self, path=None):
+        assert path is not None
+
+        opt_state_path = os.path.join(path, 'opt_state.pickle')
+        self.opt_state = util.load_pytree(opt_state_path)
 
 ################################################################################################################

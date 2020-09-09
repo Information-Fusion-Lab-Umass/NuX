@@ -8,6 +8,12 @@ import nux.util as util
 import os
 fast_tree_leaves = jit(jax.tree_util.tree_leaves)
 
+__all__ = ['Flow',
+           'Debug',
+           'NoOp',
+           'no_log_likelihood',
+           'track']
+
 class Flow():
 
     __slots__ =  ['name', 'input_shapes', 'output_shapes', 'input_ndims', 'output_ndims', 'params', 'state', 'apply']
@@ -30,26 +36,20 @@ class Flow():
     def save_params_and_state_to_file(self, path=None):
         assert path is not None
 
-        params_path = os.path.join(path, 'params.npz')
-        state_path  = os.path.join(path, 'state.npz')
+        params_path = os.path.join(path, 'params.pickle')
+        state_path  = os.path.join(path, 'state.pickle')
 
         util.save_pytree(self.params, params_path, overwrite=True)
         util.save_pytree(self.state, state_path, overwrite=True)
 
-        # util.save_pytree_to_file(self.params, params_path)
-        # util.save_pytree_to_file(self.state, state_path)
-
     def load_param_and_state_from_file(self, path=None):
         assert path is not None
 
-        params_path = os.path.join(path, 'params.npz')
-        state_path  = os.path.join(path, 'state.npz')
+        params_path = os.path.join(path, 'params.pickle')
+        state_path  = os.path.join(path, 'state.pickle')
 
         self.params = util.load_pytree(params_path)
         self.state = util.load_pytree(state_path)
-
-        # self.params = util.load_pytree_from_file(self.params, params_path)
-        # self.state = util.load_pytree_from_file(self.state, state_path)
 
 ################################################################################################################
 
@@ -228,5 +228,38 @@ def no_log_likelihood(flow_init):
 
     def init_fun(key, inputs, **kwargs):
         return flow_init(key, inputs, **kwargs)
+
+    return init_fun
+
+################################################################################################################
+
+def track(flow_init, name=None):
+    assert name is not None
+
+    flow_apply_fun = None
+
+    def apply_fun(params, state, inputs, **kwargs):
+        outputs, state = flow_apply_fun(params, state, inputs, **kwargs)
+        outputs2 = outputs.copy()
+        outputs2[name] = outputs
+        return outputs2, state
+
+    def init_fun(key, inputs, **kwargs):
+        outputs, flow = flow_init(key, inputs, **kwargs)
+        outputs2 = outputs.copy()
+        outputs2[name] = outputs
+
+        nonlocal flow_apply_fun
+        flow_apply_fun = flow.apply
+
+        flow = Flow(name,
+                    flow.input_shapes,
+                    flow.output_shapes,
+                    flow.input_ndims,
+                    flow.output_ndims,
+                    flow.params,
+                    flow.state,
+                    apply_fun)
+        return outputs2, flow
 
     return init_fun

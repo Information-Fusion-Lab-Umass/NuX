@@ -34,27 +34,6 @@ def is_testing(x):
 
 ################################################################################################################
 
-from haiku._src.data_structures import frozendict
-from collections import OrderedDict
-
-def dict_recurse(pytree, root_key=None):
-    if(isinstance(pytree, dict) or
-       isinstance(pytree, OrderedDict) or
-       isinstance(pytree, frozendict)):
-
-        return_list = []
-        items = pytree.items()
-        for key, val in items:
-            joined_key = key if root_key is None else root_key+'/'+key
-            ret_list = dict_recurse(val, joined_key)
-            return_list.extend(ret_list)
-
-        return return_list
-    else:
-        return [(root_key, pytree)]
-
-################################################################################################################
-
 def key_tree_like(key, pytree):
     # Figure out what the tree structure is
     flat_tree, treedef = jax.tree_util.tree_flatten(pytree)
@@ -65,7 +44,7 @@ def key_tree_like(key, pytree):
     key_tree = jax.tree_util.tree_unflatten(treedef, keys)
     return key_tree
 
-@partial(jit, static_argnums=(0,))
+# @partial(jit, static_argnums=(0,))
 def tree_multimap_multiout(f, tree, *rest):
     # Like tree_multimap but expects f(leaves) to return a tuple.
     # This function will return trees for each tuple element.
@@ -91,26 +70,94 @@ def whiten(x):
 
 ################################################################################################################
 
+def weight_norm(x):
+    return x*jax.lax.rsqrt(jnp.sum(x**2, axis=0) + 1e-5)
+
 class SimpleMLP(hk.Module):
 
-    def __init__(self, out_shape, hidden_layer_sizes, is_additive, name=None):
+    def __init__(self, out_shape, hidden_layer_sizes, is_additive, weight_norm=True, name=None):
         super().__init__(name=name)
         assert len(out_shape) == 1
         self.out_dim = out_shape[0]
         self.hidden_layer_sizes = hidden_layer_sizes
         self.is_additive = is_additive
+        self.weight_norm = weight_norm
 
     def __call__(self, x, **kwargs):
-        for dim in self.hidden_layer_sizes:
-            x = hk.Linear(dim, hk.initializers.VarianceScaling(1.0, 'fan_avg', 'truncated_normal'))(x)
-            # x = jax.nn.relu(x)
+
+        w_init = hk.initializers.VarianceScaling(1.0, 'fan_avg', 'truncated_normal')
+
+        for i, output_size in enumerate(self.hidden_layer_sizes):
+            input_size = x.shape[-1]
+            w = hk.get_parameter(f"w_{i}", [output_size, input_size], init=w_init)
+            if(self.weight_norm):
+                w = weight_norm(w)
+
+            b = hk.get_parameter(f"b_{i}", [output_size], init=jnp.zeros)
+            x = w@x + b
+
             x = jax.nn.swish(x)/1.1
-        mu = hk.Linear(self.out_dim, hk.initializers.VarianceScaling(1.0, 'fan_avg', 'truncated_normal'))(x)
+
+        w_mu = hk.get_parameter("w_mu", [self.out_dim, x.shape[-1]], init=w_init)
+        if(self.weight_norm):
+            w_mu = weight_norm(w_mu)
+        b_mu = hk.get_parameter("b_mu", [self.out_dim], init=jnp.zeros)
+        mu = w_mu@x + b_mu
+
         if(self.is_additive):
             return mu
-        alpha = hk.Linear(self.out_dim, hk.initializers.VarianceScaling(1.0, 'fan_avg', 'truncated_normal'))(x)
+
+        w_alpha = hk.get_parameter("w_alpha", [self.out_dim, x.shape[-1]], init=w_init)
+        if(self.weight_norm):
+            w_alpha = weight_norm(w_alpha)
+        b_alpha = hk.get_parameter("b_alpha", [self.out_dim], init=jnp.zeros)
+        alpha = w_alpha@x + b_alpha
+
         alpha = jnp.tanh(alpha)
         return mu, alpha
+
+class WeightNormConv(hk.Module):
+
+    def __init__(self,
+                 out_channels,
+                 kernel_shape,
+                 stride=(1, 1),
+                 padding='SAME',
+                 lhs_dilation=(1, 1),
+                 rhs_dilation=(1, 1),
+                 w_init=None,
+                 b_init=jnp.zeros,
+                 name=None):
+        super().__init__(name=name)
+        self.out_channels      = out_channels
+        self.kernel_shape      = kernel_shape
+        self.stride            = stride
+        self.padding           = padding
+        self.lhs_dilation      = lhs_dilation
+        self.rhs_dilation   = rhs_dilation
+        self.w_init            = w_init
+        self.b_init            = b_init
+        self.dimension_numbers = ('NHWC', 'HWIO', 'NHWC')
+
+    def __call__(self, x, **kwargs):
+        in_channels = x.shape[-1]
+
+        w_shape = self.kernel_shape + (in_channels, self.out_channels)
+        w = hk.get_parameter("w", w_shape, x.dtype, init=self.w_init)
+        w = jax.vmap(jax.vmap(weight_norm))(w)
+
+        out = jax.lax.conv_general_dilated(x,
+                                           w,
+                                           window_strides=self.stride,
+                                           padding=self.padding,
+                                           lhs_dilation=self.lhs_dilation,
+                                           rhs_dilation=self.rhs_dilation,
+                                           dimension_numbers=self.dimension_numbers)
+
+        b = hk.get_parameter("b", (self.out_channels,), x.dtype, init=self.b_init)
+        b = jnp.broadcast_to(b, out.shape)
+        out = out + b
+        return out
 
 class SimpleConv(hk.Module):
 
@@ -126,21 +173,25 @@ class SimpleConv(hk.Module):
     def __call__(self, x, **kwargs):
         H, W, C = x.shape
 
-        x = hk.Conv2D(output_channels=self.n_hidden_channels,
-                      kernel_shape=(3, 3),
-                      stride=(1, 1),
-                      w_init=hk.initializers.VarianceScaling(1.0, 'fan_avg', 'truncated_normal'))(x[None])[0]
+        x = WeightNormConv(out_channels=self.n_hidden_channels,
+                           kernel_shape=(3, 3),
+                           stride=(1, 1),
+                           w_init=hk.initializers.VarianceScaling(1.0, 'fan_avg', 'truncated_normal'))(x[None])[0]
+
         x = jax.nn.relu(x)
-        x = hk.Conv2D(output_channels=self.n_hidden_channels,
-                      kernel_shape=(1, 1),
-                      stride=(1, 1),
-                      w_init=hk.initializers.VarianceScaling(1.0, 'fan_avg', 'truncated_normal'))(x[None])[0]
+
+        x = WeightNormConv(out_channels=self.n_hidden_channels,
+                           kernel_shape=(1, 1),
+                           stride=(1, 1),
+                           w_init=hk.initializers.VarianceScaling(1.0, 'fan_avg', 'truncated_normal'))(x[None])[0]
+
         x = jax.nn.relu(x)
-        x = hk.Conv2D(output_channels=self.last_channels,
-                      kernel_shape=(3, 3),
-                      stride=(1, 1),
-                      w_init=hk.initializers.Constant(0),
-                      b_init=hk.initializers.Constant(0))(x[None])[0]
+
+        x = WeightNormConv(out_channels=self.last_channels,
+                           kernel_shape=(3, 3),
+                           stride=(1, 1),
+                           w_init=hk.initializers.Constant(0),
+                           b_init=hk.initializers.Constant(0))(x[None])[0]
 
         if(self.is_additive):
             return x
@@ -248,36 +299,8 @@ def load_pytree(path: Union[str, Path]) -> pytree:
         data = pickle.load(file)
     return data
 
-################################################################################################################
-
 def save_np_array_to_file(np_array, path):
     np.savetxt(path, np_array, delimiter=",")
-
-def save_pytree_to_file(pytree, path):
-    """ Save a pytree to file in pickle format"""
-    dir_structure, file_name = os.path.split(path)
-    assert file_name.endswith('.npz')
-
-    # Create the path if it doesn't exist
-    pathlib.Path(dir_structure).mkdir(parents=True, exist_ok=True)
-
-    # Save the raw numpy parameters
-    flat_pytree, _ = ravel_pytree(pytree)
-    numpy_tree = np.array(flat_pytree)
-
-    # Save the array to an npz file
-    np.savez_compressed(path, flat_tree=numpy_tree)
-
-def load_pytree_from_file(pytree, path):
-    assert os.path.exists(path), '%s does not exist!'%path
-
-    # Load the pytree structure
-    _, unflatten = ravel_pytree(pytree)
-
-    with np.load(path) as data:
-        numpy_tree = data['flat_tree']
-
-    return unflatten(numpy_tree)
 
 ################################################################################################################
 

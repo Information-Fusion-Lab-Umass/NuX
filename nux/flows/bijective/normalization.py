@@ -18,17 +18,66 @@ def ActNorm(log_s_init=jaxinit.zeros, b_init=jaxinit.zeros, name='act_norm'):
     def apply_fun(params, state, inputs, reverse=False, **kwargs):
         x = inputs['x']
 
+        outputs = {}
+
+        # Need to multiply by the height/width if we have an image
+        log_det = -params['log_s'].sum()
+        log_det *= multiply_by
+        outputs['log_det'] = log_det
+
         if(reverse == False):
             z = (x - params['b'])*jnp.exp(-params['log_s'])
         else:
             z = jnp.exp(params['log_s'])*x + params['b']
 
-        log_det = -params['log_s'].sum()
+        outputs['z'] = z
+        return outputs, state
+
+    def create_params_and_state(key, inputs, batch_depth):
+        x = inputs['x']
+
+        nonlocal multiply_by
+        multiply_by = jnp.prod(jnp.array([s for i, s in enumerate(x.shape) if i >= batch_depth and i < len(x.shape) - 1]))
+
+        # Create the parameters
+        axes = tuple(jnp.arange(len(x.shape) - 1))
+        params = {'b'    : jnp.mean(x, axis=axes),
+                  'log_s': jnp.log(jnp.std(x, axis=axes) + 1e-5)}
+        state = {}
+        return params, state
+
+    return base.initialize(name, apply_fun, create_params_and_state, data_dependent=True)
+
+@base.auto_batch
+def FlowNorm(log_s_init=jaxinit.zeros, b_init=jaxinit.zeros, name='flow_norm'):
+    # language=rst
+    """
+    Act normalization
+    """
+    multiply_by = None
+
+    def apply_fun(params, state, inputs, reverse=False, **kwargs):
+        x = inputs['x']
+        b, log_s = params['b'], params['log_s']
+
+        outputs = {}
 
         # Need to multiply by the height/width if we have an image
+        log_det = -log_s.sum()
         log_det *= multiply_by
+        outputs['log_det'] = log_det
 
-        outputs = {'x': z, 'log_det': log_det}
+        if(reverse == False):
+            z = (x - b)*jnp.exp(-log_s)
+
+            # Learn to make the act norm normalize data
+            z2 = (jax.lax.stop_gradient(x) - b)*jnp.exp(-log_s)
+            log_pz = util.unit_gaussian_logpdf(z2)
+            outputs['flow_norm'] = log_pz + log_det
+        else:
+            z = jnp.exp(log_s)*x + b
+
+        outputs['z'] = z
         return outputs, state
 
     def create_params_and_state(key, inputs, batch_depth):

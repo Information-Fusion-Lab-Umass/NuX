@@ -123,7 +123,6 @@ def NeuralSpline(K, network=None, hidden_layer_sizes=[1024]*4, bounds=((-10.0, 1
         x = inputs['x']
 
         x1, x2 = jnp.split(x, jnp.array([x1_dim]), axis=-1)
-        D = x1.shape[-1]
 
         if(reverse == False):
             theta1 = params['theta']

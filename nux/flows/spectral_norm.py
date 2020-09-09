@@ -90,7 +90,7 @@ def spectral_norm_wrapper(flow_init, scale=0.97, spectral_norm_iters=1, name='sp
 
         outputs, flow = flow_init(k1, inputs, **kwargs)
 
-        # # Swap the apply functions
+        # Swap the apply functions
         nonlocal flow_apply_fun
         flow_apply_fun = flow.apply
 

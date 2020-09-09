@@ -1,11 +1,10 @@
 from functools import partial
-import jax.nn.initializers as jaxinit
 import jax.numpy as jnp
 import jax
 from jax import random, jit, vmap
-from jax.experimental import optimizers
 import nux.util as util
-from nux.training.base import Trainer
+from nux.training.trainer import Trainer
+from nux.training.tester import Tester
 
 __all__ = ['nll_loss',
            'GenerativeModel',
@@ -42,12 +41,17 @@ class GenerativeModel():
             lr_decay - Learning rate decay.
             lr       - Max learning rate.
     """
-    def __init__(self, flow, loss_fun=None, clip=5.0, warmup=None, lr_decay=1.0, lr=1e-4):
+    def __init__(self, flow, loss_fun=None, test_aggregate_fun=None, **kwargs):
         self.flow = flow
 
         loss_fun = nll_loss if loss_fun is None else loss_fun
         loss_fun = partial(loss_fun, self.flow.apply)
-        self.trainer = Trainer(loss_fun, self.flow.params, clip=clip, warmup=warmup, lr_decay=lr_decay, lr=lr)
+        self.trainer = Trainer(loss_fun, self.flow.params, **kwargs)
+
+        if(test_aggregate_fun is None):
+            def test_aggregate_fun(inputs, outputs, reconstr):
+                return jnp.mean(outputs['log_pz'] + outputs['log_det'])
+        self.tester = Tester(self.flow.apply, aggregate_fun=test_aggregate_fun)
 
     #############################################################################
 
@@ -77,6 +81,16 @@ class GenerativeModel():
 
     #############################################################################
 
+    @property
+    def opt_state(self):
+        return self.trainer.opt_state
+
+    @opt_state.setter
+    def opt_state(self, val):
+        self.trainer.opt_state = val
+
+    #############################################################################
+
     def grad_step(self, key, inputs, **kwargs):
         loss, outputs, params, state = self.trainer.grad_step(key, inputs, self.params, self.state, **kwargs)
         self.flow.params = params
@@ -96,16 +110,29 @@ class GenerativeModel():
 
     #############################################################################
 
+    def multi_test_step(self, key, inputs):
+        x = inputs['x']
+
+        # This function expects doubly batched inputs!!
+        assert len(x.shape) - len(self.flow.input_shapes['x']) == 2
+        test_metrics = self.tester.multi_eval_step(key, inputs, self.flow.params, self.flow.state)
+
+        # Aggregate over the outer batch
+        test_metrics = jax.tree_map(lambda x: x.mean(), test_metrics)
+        return test_metrics
+
+    #############################################################################
+
     def forward_apply(self, key, inputs):
         outputs, _ = self.apply(self.params, self.state, inputs, key=key)
         return outputs
 
     #############################################################################
 
-    def sample(self, key, n_samples, full_output=False):
+    def sample(self, key, n_samples, full_output=False, **kwargs):
         # dummy_z is a placeholder with the shapes we'll use when we sample in the prior.
         dummy_z = jnp.zeros((n_samples,) + self.flow.output_shapes['x'])
-        outputs, _ = self.apply(self.params, self.state, {'x': dummy_z}, key=key, reverse=True, compute_base=True, prior_sample=True)
+        outputs, _ = self.apply(self.params, self.state, {'x': dummy_z}, key=key, reverse=True, compute_base=True, prior_sample=True, **kwargs)
         return outputs['x'] if full_output == False else outputs
 
     #############################################################################
@@ -125,10 +152,10 @@ class GenerativeModel():
     #############################################################################
 
     def save_training_state(self, path=None):
-        assert 0, 'Not implemented'
+        self.trainer.save_opt_state_to_file(path=path)
 
     def load_training_state(self, path=None):
-        assert 0, 'Not implemented'
+        self.trainer.load_param_and_state_from_file(path=path)
 
 ################################################################################################################
 
@@ -146,6 +173,7 @@ class MultiLossGenerativeModel(GenerativeModel):
 
         fill = lambda x: partial(x, self.flow.apply)
         self.trainers = dict([(key, Trainer(fill(fun), self.flow.params, **kwargs)) for key, fun in loss_funs.items()])
+        self.tester  = Tester(self.flow, aggregate_fun=test_aggregate_fun)
 
     def grad_step(self, trainer_key, key, inputs, **kwargs):
         loss, outputs, params, state = self.trainers[trainer_key].grad_step(key, inputs, self.params, self.state, **kwargs)
@@ -171,16 +199,16 @@ class _ImageMixin():
 
         Args:
     """
-    def sample(self, key, n_samples, full_output=False):
+    def sample(self, key, n_samples, full_output=False, **kwargs):
         # dummy_z is a placeholder with the shapes we'll use when we sample in the prior.
         dummy_z = jnp.zeros((n_samples,) + self.flow.output_shapes['x'])
-        outputs, _ = self.apply(self.params, self.state, {'x': dummy_z}, key=key, reverse=True, compute_base=True, prior_sample=True, generate_image=True)
+        outputs, _ = self.apply(self.params, self.state, {'x': dummy_z}, key=key, reverse=True, compute_base=True, prior_sample=True, generate_image=True, **kwargs)
         return outputs['image'] if full_output == False else outputs
 
-    def sample2(self, key, n_samples, full_output=False):
+    def sample2(self, key, n_samples, full_output=False, **kwargs):
         # dummy_z is a placeholder with the shapes we'll use when we sample in the prior.
         z = random.normal(key, (n_samples,) + self.flow.output_shapes['x'])
-        outputs, _ = self.apply(self.params, self.state, {'x': z}, reverse=True, compute_base=True, generate_image=True)
+        outputs, _ = self.apply(self.params, self.state, {'x': z}, reverse=True, compute_base=True, generate_image=True, **kwargs)
         return outputs['image'] if full_output == False else outputs
 
 ################################################################################################################

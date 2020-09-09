@@ -8,4 +8,4 @@ from nux.flows.bijective.nonlinearities import *
 from nux.flows.bijective.normalization import *
 from nux.flows.bijective.reshape import *
 from nux.flows.bijective.spline import *
-from nux.flows.bijective.residual import *
+# from nux.flows.bijective.residual import *

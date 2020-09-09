@@ -12,8 +12,8 @@ import nux.util as util
 
 from jax.scipy.special import logsumexp
 
-from nux.flows.surjective.affine import TallDense
-from nux.flows.surjective.softmax import SoftmaxSurjection
+# from nux.flows.surjective.affine import TallDense
+# from nux.flows.surjective.softmax import SoftmaxSurjection
 
 import haiku as hk
 
@@ -27,7 +27,6 @@ if(__name__ == '__main__'):
 
     inputs = {'x': data}
     outputs, flow = flow_init(key, inputs, batched=True)
-
 
     if(False):
 
