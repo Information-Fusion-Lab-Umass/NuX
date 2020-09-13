@@ -9,6 +9,7 @@ from nux.flows.base import *
 import nux.util as util
 
 __all__ = ["LeakyReLU",
+           "SneakyReLU",
            "Sigmoid",
            "Logit"]
 
@@ -34,6 +35,41 @@ class LeakyReLU(AutoBatchedLayer):
       log_det = log_det.sum(axis=(-2, -1))
 
     outputs = {"x": z, "log_det": log_det}
+    return outputs
+
+class SneakyReLU(AutoBatchedLayer):
+
+  def __init__(self, alpha: float=0.1, name: str="leaky_relu", **kwargs):
+    super().__init__(name=name, **kwargs)
+
+    # Sneaky ReLU uses a different convention
+    self.alpha = (1.0 - alpha)/(1.0 + alpha)
+
+  def call(self, inputs: Mapping[str, jnp.ndarray], rng: jnp.ndarray=None, sample: Optional[bool]=False, **kwargs) -> Mapping[str, jnp.ndarray]:
+
+    outputs = {}
+
+    if sample == False:
+      x = inputs["x"]
+      sqrt_1px2 = jnp.sqrt(1 + x**2)
+      z = (x + self.alpha*(sqrt_1px2 - 1))/(1 + self.alpha)
+      outputs["x"] = z
+    else:
+      z = inputs["x"]
+      alpha_sq = self.alpha**2
+      b = (1 + self.alpha)*z + self.alpha
+      x = (jnp.sqrt(alpha_sq*(1 + b**2 - alpha_sq)) - b)/(alpha_sq - 1)
+      outputs["x"] = x
+      sqrt_1px2 = jnp.sqrt(1 + x**2)
+
+    log_det = jnp.log(1 + self.alpha*x/sqrt_1px2) - jnp.log(1 + self.alpha)
+    log_det = log_det.sum(axis=-1)
+
+    if log_det.ndim > 1:
+      # Then we have an image and have to sum over the height and width axes
+      log_det = log_det.sum(axis=(-2, -1))
+
+    outputs["log_det"] = log_det
     return outputs
 
 class Sigmoid(AutoBatchedLayer):

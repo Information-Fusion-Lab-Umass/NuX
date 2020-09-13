@@ -27,7 +27,7 @@ class Coupling(AutoBatchedLayer):
     self.n_channels         = n_channels
     self.kind               = kind
     self.axis               = axis
-    self.create_network     = None
+    self.create_network     = create_network
 
   def get_network(self, out_shape):
     if self.create_network is not None:
