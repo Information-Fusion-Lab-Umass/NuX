@@ -149,27 +149,34 @@ class Layer(hk.Module, ABC):
 
   def set_expected_shapes(self,
                           inputs: Mapping[str, jnp.ndarray],
-                          sample: Optional[bool]=False):
+                          sample: Optional[bool]=False,
+                          no_batching: Optional[bool]=False):
+
+    # We can force the code to not batch.  This is useful if we define an unbatched layer inside an auto-batched layer
+    batch_axes = Layer.batch_axes if no_batching == False else ()
+
     # Keep track of the initial input shapes
     if sample == False:
-      self.expected_shapes = get_tree_shapes("input_shapes", inputs, batch_axes=Layer.batch_axes)
+      self.expected_shapes = get_tree_shapes("input_shapes", inputs, batch_axes=batch_axes)
     else:
-      self.expected_shapes = get_tree_shapes("sample_input_shapes", inputs, batch_axes=Layer.batch_axes)
+      self.expected_shapes = get_tree_shapes("sample_input_shapes", inputs, batch_axes=batch_axes)
 
   def __call__(self,
                inputs: Mapping[str, jnp.ndarray],
                rng: jnp.ndarray=None,
                sample: Optional[bool]=False,
+               no_batching: Optional[bool]=False,
                **kwargs
     ) -> Mapping[str, jnp.ndarray]:
-    self.set_expected_shapes(inputs, sample=sample)
-    return self.call(inputs, rng, sample, **kwargs)
+    self.set_expected_shapes(inputs, sample=sample, no_batching=no_batching)
+    return self.call(inputs, rng, sample, no_batching=no_batching, **kwargs)
 
   @abstractmethod
   def call(self,
            inputs: Mapping[str, jnp.ndarray],
            rng: jnp.ndarray=None,
            sample: Optional[bool]=False,
+           no_batching: Optional[bool]=False,
            **kwargs
     ) -> Mapping[str, jnp.ndarray]:
     """ The expectation is that inputs will be a dicionary with
@@ -181,8 +188,16 @@ class Layer(hk.Module, ABC):
 
 class AutoBatchedLayer(Layer):
 
-  def __call__(self, inputs: Mapping[str, jnp.ndarray], rng: jnp.ndarray=None, sample: Optional[bool]=False, **kwargs) -> Mapping[str, jnp.ndarray]:
-    self.set_expected_shapes(inputs, sample=sample)
+  def __call__(self,
+               inputs: Mapping[str, jnp.ndarray],
+               rng: jnp.ndarray=None,
+               sample: Optional[bool]=False,
+               no_batching: Optional[bool]=False,
+               **kwargs
+    ) -> Mapping[str, jnp.ndarray]:
+
+    # Set the expected shapes
+    self.set_expected_shapes(inputs, sample=sample, no_batching=no_batching)
 
     # Determine the passed input shapes
     input_shapes = util.tree_shapes(inputs)
@@ -200,7 +215,7 @@ class AutoBatchedLayer(Layer):
       input_ndim = len(input_shape)
       expected_ndim = len(expected_shape)
 
-      # If the dimensinoality of the input is more then expected, we need to vmap
+      # If the dimensionality of the input is more then expected, we need to vmap
       if input_ndim > expected_ndim:
         input_in_axes[name] = 0
         recurse = True
@@ -231,10 +246,10 @@ class AutoBatchedLayer(Layer):
         rngs = random.split(rng, batch_size)
       else:
         rngs = tuple([None]*batch_size)
-      return vmap(partial(self, sample=sample, **kwargs), in_axes=(input_in_axes, 0))(inputs, rngs)
+      return vmap(partial(self, sample=sample, no_batching=no_batching, **kwargs), in_axes=(input_in_axes, 0))(inputs, rngs)
 
     # Evaluate the function
-    outputs = self.call(inputs, rng, sample=sample, **kwargs)
+    outputs = self.call(inputs, rng, sample=sample, no_batching=no_batching, **kwargs)
 
     # Record the output shapes.  outputs is unbatched!
     if sample == False:
