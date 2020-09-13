@@ -33,10 +33,10 @@ def log_det_estimate(residual_vjp, probe_shape, rng):
 
 ################################################################################################################
 
-class ResidualFlow(AutoBatchedLayerWithRNG):
+class ResidualFlow(AutoBatchedLayer):
 
   def __init__(self,
-               res_block_create_fun=None,
+               res_block_create_fun: Callable=None,
                scale: Optional[float]=0.85,
                spectral_norm_iters: Optional[int]=1,
                fixed_point_iters: Optional[int]=100,
@@ -48,6 +48,11 @@ class ResidualFlow(AutoBatchedLayerWithRNG):
     self.spectral_norm_iters  = spectral_norm_iters
     self.fixed_point_iters    = fixed_point_iters
 
+  # Initialize the residual block
+  def default_res_block(self, x):
+    network = util.SimpleMLP(x.shape, [16]*3, is_additive=True)
+    return network(x)
+
   def call(self,
            inputs: Mapping[str, jnp.ndarray],
            rng: PRNGKey,
@@ -55,12 +60,7 @@ class ResidualFlow(AutoBatchedLayerWithRNG):
            **kwargs
     ) -> Mapping[str, jnp.ndarray]:
 
-    # Initialize the residual block
-    def create_res_block(x):
-      network = util.SimpleMLP(x.shape, [16]*3, is_additive=True)
-      return network(x)
-
-    res_block_create_fun = create_res_block if self.res_block_create_fun is None else self.res_block_create_fun
+    res_block_create_fun = self.default_res_block if self.res_block_create_fun is None else self.res_block_create_fun
     res_block = hk.transform(res_block_create_fun)
     params = res_block.init(rng, inputs["x"])
 

@@ -13,7 +13,7 @@ from haiku._src.typing import PRNGKey
 __all__ = ["UniformDequantization",
            "VariationalDequantization"]
 
-class UniformDequantization(AutoBatchedLayerWithRNG):
+class UniformDequantization(AutoBatchedLayer):
 
   def __init__(self, scale: float, name: str="uniform_dequantization", **kwargs):
     super().__init__(name=name, **kwargs)

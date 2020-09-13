@@ -10,7 +10,7 @@ import nux.util as util
 __all__ = ["transform_flow",
            "Layer",
            "AutoBatchedLayer",
-           "AutoBatchedLayerWithRNG"]
+           "AutoBatchedLayer"]
 
 ################################################################################################################
 
@@ -35,11 +35,13 @@ def transform_flow(create_fun) -> TransformedWithState:
       # Load the batch axes for the inputs
       Layer.batch_axes = batch_axes
 
+      key = hk.next_rng_key()
+
       # Initialize the model
-      outputs = model(inputs, **kwargs)
+      outputs = model(inputs, key, **kwargs)
 
       # We also need to run it in reverse to initialize the sample shapes!
-      model(outputs, sample=True, **kwargs)
+      model(outputs, key, sample=True, **kwargs)
 
       # Unset the batch axes
       Layer.batch_axes = ()
@@ -50,7 +52,7 @@ def transform_flow(create_fun) -> TransformedWithState:
       params: Optional[Params],
       state: Optional[State],
       rng: Optional[Union[PRNGKey]],
-      *args,
+      inputs,
       **kwargs,
   ) -> Tuple[Any, State]:
     """Applies your function injecting parameters and state."""
@@ -60,7 +62,8 @@ def transform_flow(create_fun) -> TransformedWithState:
         rng, err_msg=(APPLY_RNG_STATE_ERROR if state else APPLY_RNG_ERROR))
     with new_context(params=params, state=state, rng=rng) as ctx:
       model = create_fun()
-      out = model(*args, **kwargs)
+      key = hk.next_rng_key()
+      out = model(inputs, key, **kwargs)
     return out, ctx.collect_state()
 
   return TransformedWithState(init_fn, apply_fn)
@@ -144,20 +147,31 @@ class Layer(hk.Module, ABC):
   def __init__(self, name=None):
     super().__init__(name=name)
 
-  # @partial(jit, static_argnums=(0,))
-  def set_expected_shapes(self, inputs: Mapping[str, jnp.ndarray], sample: Optional[bool]=False):
+  def set_expected_shapes(self,
+                          inputs: Mapping[str, jnp.ndarray],
+                          sample: Optional[bool]=False):
     # Keep track of the initial input shapes
     if sample == False:
       self.expected_shapes = get_tree_shapes("input_shapes", inputs, batch_axes=Layer.batch_axes)
     else:
       self.expected_shapes = get_tree_shapes("sample_input_shapes", inputs, batch_axes=Layer.batch_axes)
 
-  def __call__(self, inputs: Mapping[str, jnp.ndarray], sample: Optional[bool]=False, **kwargs) -> Mapping[str, jnp.ndarray]:
+  def __call__(self,
+               inputs: Mapping[str, jnp.ndarray],
+               rng: jnp.ndarray=None,
+               sample: Optional[bool]=False,
+               **kwargs
+    ) -> Mapping[str, jnp.ndarray]:
     self.set_expected_shapes(inputs, sample=sample)
-    return self.call(inputs, sample, **kwargs)
+    return self.call(inputs, rng, sample, **kwargs)
 
   @abstractmethod
-  def call(self, inputs: Mapping[str, jnp.ndarray], sample: Optional[bool]=False, **kwargs) -> Mapping[str, jnp.ndarray]:
+  def call(self,
+           inputs: Mapping[str, jnp.ndarray],
+           rng: jnp.ndarray=None,
+           sample: Optional[bool]=False,
+           **kwargs
+    ) -> Mapping[str, jnp.ndarray]:
     """ The expectation is that inputs will be a dicionary with
         "x" holding data and "y" holding possible labels.  Other inputs
         can be passed in too """
@@ -166,68 +180,6 @@ class Layer(hk.Module, ABC):
 ################################################################################################################
 
 class AutoBatchedLayer(Layer):
-
-  def __call__(self, inputs: Mapping[str, jnp.ndarray], sample: Optional[bool]=False, **kwargs) -> Mapping[str, jnp.ndarray]:
-    self.set_expected_shapes(inputs, sample=sample)
-
-    # Determine the passed input shapes
-    input_shapes = util.tree_shapes(inputs)
-
-    recurse = False
-    batch_size = None
-    input_in_axes = {}
-
-    # Figure out which inputs need to be vmapped over
-    for name, expected_shape in self.expected_shapes.items():
-      if(name not in input_shapes):
-        continue
-
-      input_shape = input_shapes[name]
-      input_ndim = len(input_shape)
-      expected_ndim = len(expected_shape)
-
-      # If the dimensinoality of the input is more then expected, we need to vmap
-      if input_ndim > expected_ndim:
-        input_in_axes[name] = 0
-        recurse = True
-
-        # We need to make sure that the batch sizes are the same across all
-        # of the vmap arguments
-        if batch_size is None:
-          batch_size = input_shape[0]
-        else:
-          assert input_shape[0] == batch_size, "Batch size mismatch."
-      else:
-        # We don't need to vmap over this input
-        input_in_axes[name] = None
-
-      # Remove so that we know whats left over at the end
-      del input_shapes[name]
-
-    # If we still have left over inputs, just assume that they are batched if
-    # there is any batching going on
-    if recurse:
-      for name in input_shapes.keys():
-        input_in_axes[name] = 0
-
-    # Evaluate the vmapped function
-    if recurse:
-      return vmap(partial(self, sample=sample, **kwargs), in_axes=(input_in_axes,))(inputs)
-
-    # Evaluate the function
-    outputs = self.call(inputs, sample=sample, **kwargs)
-
-    # Record the output shapes.  outputs is unbatched!
-    if sample == False:
-      get_tree_shapes("output_shapes", outputs)
-    else:
-      get_tree_shapes("sample_output_shapes", outputs)
-
-    return outputs
-
-################################################################################################################
-
-class AutoBatchedLayerWithRNG(Layer):
 
   def __call__(self, inputs: Mapping[str, jnp.ndarray], rng: jnp.ndarray=None, sample: Optional[bool]=False, **kwargs) -> Mapping[str, jnp.ndarray]:
     self.set_expected_shapes(inputs, sample=sample)
@@ -274,8 +226,11 @@ class AutoBatchedLayerWithRNG(Layer):
 
     # Evaluate the vmapped function
     if recurse:
-      rng = hk.next_rng_key()
-      rngs = random.split(rng, batch_size)
+      # Need to vmap over the random key too
+      if(rng is not None):
+        rngs = random.split(rng, batch_size)
+      else:
+        rngs = tuple([None]*batch_size)
       return vmap(partial(self, sample=sample, **kwargs), in_axes=(input_in_axes, 0))(inputs, rngs)
 
     # Evaluate the function
@@ -288,5 +243,3 @@ class AutoBatchedLayerWithRNG(Layer):
       get_tree_shapes("sample_output_shapes", outputs)
 
     return outputs
-
-################################################################################################################

@@ -38,7 +38,7 @@ class Coupling(AutoBatchedLayer):
       assert len(out_shape) == 3
       return util.SimpleConv(out_shape, self.n_channels, is_additive=self.kind=="additive")
 
-  def call(self, inputs: Mapping[str, jnp.ndarray], sample: Optional[bool]=False, **kwargs) -> Mapping[str, jnp.ndarray]:
+  def call(self, inputs: Mapping[str, jnp.ndarray], rng: jnp.ndarray=None, sample: Optional[bool]=False, **kwargs) -> Mapping[str, jnp.ndarray]:
     x = inputs["x"]
     x_shape = x.shape
     ax = self.axis%len(x_shape)
@@ -104,7 +104,7 @@ class ConditionedCoupling(AutoBatchedLayer):
       assert len(out_shape) == 3
       return util.SimpleConv(out_shape, self.n_channels, is_additive=self.kind=="additive")
 
-  def call(self, inputs: Mapping[str, jnp.ndarray], sample: Optional[bool]=False, **kwargs) -> Mapping[str, jnp.ndarray]:
+  def call(self, inputs: Mapping[str, jnp.ndarray], rng: jnp.ndarray=None, sample: Optional[bool]=False, **kwargs) -> Mapping[str, jnp.ndarray]:
     x, condition = inputs["x"], inputs["condition"]
     x_shape = x.shape
     ax = self.axis%len(x_shape)

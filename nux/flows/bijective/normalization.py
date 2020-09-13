@@ -18,7 +18,7 @@ class ActNorm(Layer):
   def __init__(self, name: str="act_norm", **kwargs):
     super().__init__(name=name, **kwargs)
 
-  def call(self, inputs: Mapping[str, jnp.ndarray], sample: Optional[bool]=False, **kwargs) -> Mapping[str, jnp.ndarray]:
+  def call(self, inputs: Mapping[str, jnp.ndarray], rng: jnp.ndarray=None, sample: Optional[bool]=False, **kwargs) -> Mapping[str, jnp.ndarray]:
     outputs = {}
 
     def b_init(*args, **kwargs):
@@ -59,7 +59,7 @@ class FlowNorm(AutoBatchedLayer):
   def __init__(self, name: str="flow_norm", **kwargs):
     super().__init__(name=name, **kwargs)
 
-  def call(self, inputs: Mapping[str, jnp.ndarray], sample: Optional[bool]=False, **kwargs) -> Mapping[str, jnp.ndarray]:
+  def call(self, inputs: Mapping[str, jnp.ndarray], rng: jnp.ndarray=None, sample: Optional[bool]=False, **kwargs) -> Mapping[str, jnp.ndarray]:
     outputs = {}
 
     def const_init(*args, **kwargs):

@@ -25,7 +25,7 @@ class Identity(AutoBatchedLayer):
   def __init__(self, name: str="identity", **kwargs):
     super().__init__(name=name, **kwargs)
 
-  def call(self, inputs: Mapping[str, jnp.ndarray], **kwargs) -> Mapping[str, jnp.ndarray]:
+  def call(self, inputs: Mapping[str, jnp.ndarray], rng: jnp.ndarray=None, **kwargs) -> Mapping[str, jnp.ndarray]:
     return {"x": inputs["x"], "log_det": jnp.array(0.0)}
 
 ################################################################################################################
@@ -36,7 +36,7 @@ class Scale(AutoBatchedLayer):
     super().__init__(name=name, **kwargs)
     self.tau = tau
 
-  def call(self, inputs: Mapping[str, jnp.ndarray], sample: Optional[bool]=False, **kwargs) -> Mapping[str, jnp.ndarray]:
+  def call(self, inputs: Mapping[str, jnp.ndarray], rng: jnp.ndarray=None, sample: Optional[bool]=False, **kwargs) -> Mapping[str, jnp.ndarray]:
     outputs = {}
 
     if sample == False:
@@ -56,7 +56,7 @@ class AffineDense(AutoBatchedLayer):
   def __init__(self, name: str="affine_dense", **kwargs):
     super().__init__(name=name, **kwargs)
 
-  def call(self, inputs: Mapping[str, jnp.ndarray], sample: Optional[bool]=False, **kwargs) -> Mapping[str, jnp.ndarray]:
+  def call(self, inputs: Mapping[str, jnp.ndarray], rng: jnp.ndarray=None, sample: Optional[bool]=False, **kwargs) -> Mapping[str, jnp.ndarray]:
     x = inputs["x"]
     outputs = {}
 
@@ -81,7 +81,7 @@ class AffineLDU(AutoBatchedLayer):
   def __init__(self, name: str="affine_ldu", **kwargs):
     super().__init__(name=name, **kwargs)
 
-  def call(self, inputs: Mapping[str, jnp.ndarray], sample: Optional[bool]=False, **kwargs) -> Mapping[str, jnp.ndarray]:
+  def call(self, inputs: Mapping[str, jnp.ndarray], rng: jnp.ndarray=None, sample: Optional[bool]=False, **kwargs) -> Mapping[str, jnp.ndarray]:
     outputs = {}
 
     init = hk.initializers.VarianceScaling(1.0, 'fan_avg', 'truncated_normal')
@@ -118,7 +118,7 @@ class AffineSVD(AutoBatchedLayer):
     super().__init__(name=name, **kwargs)
     self.n_householders = n_householders
 
-  def call(self, inputs: Mapping[str, jnp.ndarray], sample: Optional[bool]=False, **kwargs) -> Mapping[str, jnp.ndarray]:
+  def call(self, inputs: Mapping[str, jnp.ndarray], rng: jnp.ndarray=None, sample: Optional[bool]=False, **kwargs) -> Mapping[str, jnp.ndarray]:
     outputs = {}
 
     dim, dtype = inputs["x"].shape[-1], inputs["x"].dtype
@@ -157,7 +157,7 @@ class OneByOneConv(AutoBatchedLayer):
       return util.whiten(W)
     self.W_init = orthogonal_init
 
-  def call(self, inputs: Mapping[str, jnp.ndarray], sample: Optional[bool]=False, **kwargs) -> Mapping[str, jnp.ndarray]:
+  def call(self, inputs: Mapping[str, jnp.ndarray], rng: jnp.ndarray=None, sample: Optional[bool]=False, **kwargs) -> Mapping[str, jnp.ndarray]:
     outputs = {}
     height, width, channel = inputs["x"].shape
 
@@ -209,7 +209,7 @@ class LocalDense(AutoBatchedLayer):
     self.dilation = dilation
     self.W_init = hk.initializers.VarianceScaling(1.0, 'fan_avg', 'truncated_normal') if W_init is None else W_init
 
-  def call(self, inputs: Mapping[str, jnp.ndarray], sample: Optional[bool]=False, **kwargs) -> Mapping[str, jnp.ndarray]:
+  def call(self, inputs: Mapping[str, jnp.ndarray], rng: jnp.ndarray=None, sample: Optional[bool]=False, **kwargs) -> Mapping[str, jnp.ndarray]:
     outputs = {}
     x_shape, x_dtype = inputs["x"].shape, inputs["x"].dtype
     h, w, c = inputs["x"].shape
@@ -265,7 +265,7 @@ class ConstantConv(AutoBatchedLayer):
     self.filter_shape = filter_shape
     self.W_init = hk.initializers.VarianceScaling(1.0, 'fan_avg', 'truncated_normal') if W_init is None else W_init
 
-  def call(self, inputs: Mapping[str, jnp.ndarray], sample: Optional[bool]=False, **kwargs) -> Mapping[str, jnp.ndarray]:
+  def call(self, inputs: Mapping[str, jnp.ndarray], rng: jnp.ndarray=None, sample: Optional[bool]=False, **kwargs) -> Mapping[str, jnp.ndarray]:
 
     outputs = {}
     x_shape, x_dtype = inputs["x"].shape, inputs["x"].dtype

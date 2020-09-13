@@ -23,21 +23,26 @@ class sequential(Layer):
 
   def call(self,
            inputs: Mapping[str, jnp.ndarray],
+           rng: jnp.ndarray=None,
            sample: Optional[bool]=False,
            accumulate: Iterable[str]=["log_det", "flow_norm"],
            **kwargs
   ) -> Mapping[str, jnp.ndarray]:
 
+    n_layers = len(self.layers)
     iter_layers = self.layers if sample == False else self.layers[::-1]
 
     # Want to make sure that we're passing all inputs/outputs to the next layer
     final_outputs = inputs.copy()
     accumulated_outputs = dict([(name, jnp.array(0.0)) for name in accumulate])
 
+    # Split the random key
+    rngs = random.split(rng, n_layers) if rng is not None else [None]*n_layers
+
     # Run the rest of the layers
     layer_inputs = inputs.copy()
-    for layer in iter_layers:
-      outputs = layer(layer_inputs, sample=sample, **kwargs)
+    for layer, rng in zip(iter_layers, rngs):
+      outputs = layer(layer_inputs, rng, sample=sample, **kwargs)
       layer_inputs.update(outputs)
       final_outputs.update(outputs)
 
@@ -62,11 +67,13 @@ class factored(Layer):
 
   def call(self,
            inputs: Mapping[str, jnp.ndarray],
+           rng: jnp.ndarray=None,
            sample: Optional[bool]=False,
            accumulate: Iterable[str]=["log_det", "flow_norm"],
            **kwargs
   ) -> Mapping[str, jnp.ndarray]:
 
+    n_layers = len(self.layers)
     iter_layers = self.layers if sample == False else self.layers[::-1]
 
     # Want to make sure that we're passing all inputs/outputs to the next layer
@@ -74,14 +81,17 @@ class factored(Layer):
     accumulated_outputs = dict([(name, jnp.array(0.0)) for name in accumulate])
 
     # Split x
-    xs = jnp.split(inputs["x"], len(self.layers), self.axis)
+    xs = jnp.split(inputs["x"], n_layers, self.axis)
     zs = []
+
+    # Split the random key
+    rngs = random.split(rng, n_layers) if rng is not None else [None]*n_layers
 
     # Run each of the flows on a part of x
     layer_inputs = inputs.copy()
-    for x, layer in zip(xs, self.layers):
+    for x, layer, rng in zip(xs, self.layers, rngs):
       layer_inputs["x"] = x
-      outputs = layer(layer_inputs, sample=sample, **kwargs)
+      outputs = layer(layer_inputs, rng, sample=sample, **kwargs)
       final_outputs.update(outputs)
       zs.append(outputs["x"])
 
@@ -108,6 +118,7 @@ class multi_scale(Layer):
 
   def call(self,
            inputs: Mapping[str, jnp.ndarray],
+           rng: jnp.ndarray=None,
            sample: Optional[bool]=False,
            **kwargs
   ) -> Mapping[str, jnp.ndarray]:
@@ -116,7 +127,7 @@ class multi_scale(Layer):
                       factored(self.flow, nux.Identity()),
                       nux.UnSqueeze())
 
-    return flow(inputs, sample=sample)
+    return flow(inputs, rng, sample=sample)
 
 ################################################################################################################
 
@@ -130,11 +141,12 @@ class track(Layer):
 
   def call(self,
            inputs: Mapping[str, jnp.ndarray],
+           rng: jnp.ndarray=None,
            sample: Optional[bool]=False,
            **kwargs
   ) -> Mapping[str, jnp.ndarray]:
 
-    flow_outputs = self.flow(inputs, sample=sample, **kwargs)
+    flow_outputs = self.flow(inputs, rng, sample=sample, **kwargs)
     outputs = flow_outputs.copy()
     if(self.reducer is None):
       outputs[self.name] = flow_outputs

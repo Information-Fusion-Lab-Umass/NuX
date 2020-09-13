@@ -30,7 +30,7 @@ class CircularConv(AutoBatchedLayer):
     assert len(filter_shape) == 2
     self.filter_shape = filter_shape
 
-  def call(self, inputs: Mapping[str, jnp.ndarray], sample: Optional[bool]=False, **kwargs) -> Mapping[str, jnp.ndarray]:
+  def call(self, inputs: Mapping[str, jnp.ndarray], rng: jnp.ndarray=None, sample: Optional[bool]=False, **kwargs) -> Mapping[str, jnp.ndarray]:
 
     shape, dtype = inputs["x"].shape, inputs["x"].dtype
     init = hk.initializers.VarianceScaling(1.0, 'fan_avg', 'truncated_normal')

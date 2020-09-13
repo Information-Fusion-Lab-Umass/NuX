@@ -15,7 +15,7 @@ from haiku._src.typing import PRNGKey
 __all__ = ["UnitGaussianPrior",
            "GMMPrior"]
 
-class UnitGaussianPrior(AutoBatchedLayerWithRNG):
+class UnitGaussianPrior(AutoBatchedLayer):
 
   def __init__(self, name: str="unit_gaussian_prior", **kwargs):
     super().__init__(name=name, **kwargs)
@@ -48,7 +48,7 @@ class UnitGaussianPrior(AutoBatchedLayerWithRNG):
 
 ################################################################################################################
 
-class GMMPrior(AutoBatchedLayerWithRNG):
+class GMMPrior(AutoBatchedLayer):
 
   def __init__(self, n_classes: int, name: str="gmm_prior", **kwargs):
     super().__init__(name=name, **kwargs)

@@ -156,7 +156,7 @@ class NeuralSpline(AutoBatchedLayer):
     else:
       assert 0, "Currently only implemented for 1d inputs"
 
-  def call(self, inputs: Mapping[str, jnp.ndarray], sample: Optional[bool]=False, **kwargs) -> Mapping[str, jnp.ndarray]:
+  def call(self, inputs: Mapping[str, jnp.ndarray], rng: jnp.ndarray=None, sample: Optional[bool]=False, **kwargs) -> Mapping[str, jnp.ndarray]:
     x = inputs["x"]
     x1, x2 = jnp.split(x, jnp.array([x.shape[-1]//2]), axis=-1)
     param_dim = 3*self.K - 1

@@ -18,7 +18,7 @@ class Squeeze(AutoBatchedLayer):
   def __init__(self, name: str="squeeze", **kwargs):
     super().__init__(name=name, **kwargs)
 
-  def call(self, inputs: Mapping[str, jnp.ndarray], sample: Optional[bool]=False, **kwargs) -> Mapping[str, jnp.ndarray]:
+  def call(self, inputs: Mapping[str, jnp.ndarray], rng: jnp.ndarray=None, sample: Optional[bool]=False, **kwargs) -> Mapping[str, jnp.ndarray]:
     x = inputs["x"]
     if sample == False:
       z = util.dilated_squeeze(x, (2, 2), (1, 1))
@@ -33,7 +33,7 @@ class UnSqueeze(AutoBatchedLayer):
   def __init__(self, name: str="unsqueeze", **kwargs):
     super().__init__(name=name, **kwargs)
 
-  def call(self, inputs: Mapping[str, jnp.ndarray], sample: Optional[bool]=False, **kwargs) -> Mapping[str, jnp.ndarray]:
+  def call(self, inputs: Mapping[str, jnp.ndarray], rng: jnp.ndarray=None, sample: Optional[bool]=False, **kwargs) -> Mapping[str, jnp.ndarray]:
     x = inputs["x"]
     if sample == True:
       z = util.dilated_squeeze(x, (2, 2), (1, 1))
@@ -50,7 +50,7 @@ class Flatten(AutoBatchedLayer):
     super().__init__(name=name, **kwargs)
     self.original_shape = original_shape
 
-  def call(self, inputs: Mapping[str, jnp.ndarray], sample: Optional[bool]=False, **kwargs) -> Mapping[str, jnp.ndarray]:
+  def call(self, inputs: Mapping[str, jnp.ndarray], rng: jnp.ndarray=None, sample: Optional[bool]=False, **kwargs) -> Mapping[str, jnp.ndarray]:
     x = inputs["x"]
 
     # TODO: Fix this!  Need to find a way to store data dependent constants in a haiku context.
@@ -71,7 +71,7 @@ class Reverse(AutoBatchedLayer):
   def __init__(self, name: str="reverse", **kwargs):
     super().__init__(name=name, **kwargs)
 
-  def call(self, inputs: Mapping[str, jnp.ndarray], sample: Optional[bool]=False, **kwargs) -> Mapping[str, jnp.ndarray]:
+  def call(self, inputs: Mapping[str, jnp.ndarray], rng: jnp.ndarray=None, sample: Optional[bool]=False, **kwargs) -> Mapping[str, jnp.ndarray]:
     x = inputs["x"]
     z = x[...,::-1]
     outputs = {"x": z, "log_det": jnp.array(0.0)}

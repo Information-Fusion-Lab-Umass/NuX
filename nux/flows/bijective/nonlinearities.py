@@ -18,7 +18,7 @@ class LeakyReLU(AutoBatchedLayer):
     super().__init__(name=name, **kwargs)
     self.alpha = alpha
 
-  def call(self, inputs: Mapping[str, jnp.ndarray], sample: Optional[bool]=False, **kwargs) -> Mapping[str, jnp.ndarray]:
+  def call(self, inputs: Mapping[str, jnp.ndarray], rng: jnp.ndarray=None, sample: Optional[bool]=False, **kwargs) -> Mapping[str, jnp.ndarray]:
     x = inputs["x"]
 
     if sample == False:
@@ -43,7 +43,7 @@ class Sigmoid(AutoBatchedLayer):
     self.scale = scale
     self.has_scale = scale is not None
 
-  def call(self, inputs: Mapping[str, jnp.ndarray], sample: Optional[bool]=False, **kwargs) -> Mapping[str, jnp.ndarray]:
+  def call(self, inputs: Mapping[str, jnp.ndarray], rng: jnp.ndarray=None, sample: Optional[bool]=False, **kwargs) -> Mapping[str, jnp.ndarray]:
     x = inputs["x"]
 
     if sample == False:
@@ -81,7 +81,7 @@ class Logit(AutoBatchedLayer):
     self.scale = scale
     self.has_scale = scale is not None
 
-  def call(self, inputs: Mapping[str, jnp.ndarray], sample: Optional[bool]=False, generate_image: Optional[bool]=False, **kwargs) -> Mapping[str, jnp.ndarray]:
+  def call(self, inputs: Mapping[str, jnp.ndarray], rng: jnp.ndarray=None, sample: Optional[bool]=False, generate_image: Optional[bool]=False, **kwargs) -> Mapping[str, jnp.ndarray]:
     x = inputs["x"]
     outputs = {}
 

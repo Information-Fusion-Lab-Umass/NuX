@@ -94,7 +94,7 @@ class MAF(AutoBatchedLayer):
     self.hidden_layer_sizes = hidden_layer_sizes
     self.method = method
 
-  def call(self, inputs: Mapping[str, jnp.ndarray], sample: Optional[bool]=False, **kwargs) -> Mapping[str, jnp.ndarray]:
+  def call(self, inputs: Mapping[str, jnp.ndarray], rng: jnp.ndarray=None, sample: Optional[bool]=False, **kwargs) -> Mapping[str, jnp.ndarray]:
 
     def initialize_input_sel(shape, dtype):
       dim = shape[-1]

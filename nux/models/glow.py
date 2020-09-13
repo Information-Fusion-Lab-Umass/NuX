@@ -26,6 +26,7 @@ class GLOW(Layer):
 
   def call(self,
            inputs: Mapping[str, jnp.ndarray],
+           rng: jnp.ndarray=None,
            sample: Optional[bool]=False,
            **kwargs
   ) -> Mapping[str, jnp.ndarray]:
@@ -58,6 +59,7 @@ class MultiscaleGLOW(Layer):
 
   def call(self,
            inputs: Mapping[str, jnp.ndarray],
+           rng: jnp.ndarray=None,
            sample: Optional[bool]=False,
            **kwargs
   ) -> Mapping[str, jnp.ndarray]:
