@@ -147,17 +147,26 @@ class AffineSVD(AutoBatchedLayer):
 
 class OneByOneConv(AutoBatchedLayer):
 
-  def __init__(self, name: str="one_by_one_conv", **kwargs):
+  def __init__(self, weight_norm: bool=True, name: str="one_by_one_conv", **kwargs):
     super().__init__(name=name, **kwargs)
+    self.weight_norm = weight_norm
+
+    def orthogonal_init(shape, dtype):
+      key = hk.next_rng_key()
+      W = random.normal(key, shape=shape, dtype=dtype)
+      return util.whiten(W)
+    self.W_init = orthogonal_init
 
   def call(self, inputs: Mapping[str, jnp.ndarray], sample: Optional[bool]=False, **kwargs) -> Mapping[str, jnp.ndarray]:
     outputs = {}
     height, width, channel = inputs["x"].shape
 
     shape, dtype = inputs["x"].shape, inputs["x"].dtype
-    init = hk.initializers.VarianceScaling(1.0, 'fan_avg', 'truncated_normal')
-    W = hk.get_parameter("W", shape=(channel, channel), dtype=dtype, init=init)
+    W = hk.get_parameter("W", shape=(channel, channel), dtype=dtype, init=self.W_init)
     b = hk.get_parameter("b", shape=shape, dtype=dtype, init=jnp.zeros)
+
+    if(self.weight_norm):
+      W *= jax.lax.rsqrt(jnp.sum(W**2, axis=0))
 
     if sample == False:
       x = inputs["x"]

@@ -15,13 +15,13 @@ __all__ = ["transform_flow",
 ################################################################################################################
 
 from haiku._src.transform import TransformedWithState, to_prng_sequence, check_mapping, INIT_RNG_ERROR, APPLY_RNG_STATE_ERROR, APPLY_RNG_ERROR
-from haiku._src.typing import PRNGKey, PRNGSeed, Params, State
+from haiku._src.typing import PRNGKey, Params, State
 from haiku._src.base import new_context
 
 def transform_flow(create_fun) -> TransformedWithState:
 
   def init_fn(
-      rng: Optional[Union[PRNGKey, PRNGSeed]],
+      rng: Optional[Union[PRNGKey]],
       inputs: Mapping[str, jnp.ndarray],
       batch_axes=(),
       **kwargs,
@@ -49,7 +49,7 @@ def transform_flow(create_fun) -> TransformedWithState:
   def apply_fn(
       params: Optional[Params],
       state: Optional[State],
-      rng: Optional[Union[PRNGKey, PRNGSeed]],
+      rng: Optional[Union[PRNGKey]],
       *args,
       **kwargs,
   ) -> Tuple[Any, State]:
@@ -67,13 +67,59 @@ def transform_flow(create_fun) -> TransformedWithState:
 
 ################################################################################################################
 
-from haiku._src.base import current_frame, current_bundle_name, StatePair
-from haiku._src.typing import ParamName, Shape
+from haiku._src.base import current_frame, current_bundle_name, assert_context, ParamContext, create_parameter, run_custom_getters, current_module
+from haiku._src.typing import Initializer
 
-def get_tree_shapes(name: ParamName,
+def get_parameter_no_shape_check(
+    name: str,
+    shape: Sequence[int],
+    dtype: Any = jnp.float32,
+    init: Initializer = None,
+) -> jnp.ndarray:
+  assert_context("get_parameter")
+  assert init is not None, "Initializer must be specified."
+
+  bundle_name = current_bundle_name()
+  frame = current_frame()
+
+  if frame.params_frozen and bundle_name not in frame.params:
+    raise ValueError(
+        "Unable to retrieve parameter {!r} for module {!r}. "
+        "All parameters must be created as part of `init`.".format(
+            name, bundle_name))
+
+  params = frame.params[bundle_name]
+  param = params.get(name)
+  fq_name = bundle_name + "/" + name
+  if param is None:
+    if frame.params_frozen:
+      raise ValueError(
+          "Unable to retrieve parameter {!r} for module {!r}. "
+          "All parameters must be created as part of `init`.".format(
+              name, bundle_name))
+
+    param = create_parameter(fq_name, shape, dtype, init)
+    params[name] = param  # pytype: disable=unsupported-operands
+
+  # Custom getters allow a hook for users to customize the value returned by
+  # get_parameter. For example casting values to some dtype.
+  param = run_custom_getters(fq_name, param)
+
+  # Don't do this!!!
+  # assert param.shape == tuple(shape), (
+  #     "{!r} with shape {!r} does not match shape={!r} dtype={!r}".format(
+  #         fq_name, param.shape, shape, dtype))
+
+  return param
+
+################################################################################################################
+
+from haiku._src.base import current_frame, current_bundle_name, StatePair
+
+def get_tree_shapes(name: str,
                     pytree: Any,
                     batch_axes: Optional[Sequence[int]] = ()
-) -> Shape:
+) -> Any:
   state = current_frame().state[current_bundle_name()]
   value = state.get(name, None)
   if value is None:
@@ -155,6 +201,15 @@ class AutoBatchedLayer(Layer):
         # We don't need to vmap over this input
         input_in_axes[name] = None
 
+      # Remove so that we know whats left over at the end
+      del input_shapes[name]
+
+    # If we still have left over inputs, just assume that they are batched if
+    # there is any batching going on
+    if recurse:
+      for name in input_shapes.keys():
+        input_in_axes[name] = 0
+
     # Evaluate the vmapped function
     if recurse:
       return vmap(partial(self, sample=sample, **kwargs), in_axes=(input_in_axes,))(inputs)
@@ -207,6 +262,15 @@ class AutoBatchedLayerWithRNG(Layer):
       else:
         # We don't need to vmap over this input
         input_in_axes[name] = None
+
+      # Remove so that we know whats left over at the end
+      del input_shapes[name]
+
+    # If we still have left over inputs, just assume that they are batched if
+    # there is any batching going on
+    if recurse:
+      for name in input_shapes.keys():
+        input_in_axes[name] = 0
 
     # Evaluate the vmapped function
     if recurse:

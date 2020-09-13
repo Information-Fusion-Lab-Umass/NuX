@@ -8,6 +8,7 @@ from typing import Optional, Mapping, Callable
 from nux.flows.base import *
 import nux.util as util
 import nux
+from haiku._src.typing import PRNGKey
 
 __all__ = ["UniformDequantization",
            "VariationalDequantization"]
@@ -20,19 +21,23 @@ class UniformDequantization(AutoBatchedLayerWithRNG):
 
   def call(self,
            inputs: Mapping[str, jnp.ndarray],
-           rng: jnp.ndarray,
+           rng: PRNGKey,
            sample: Optional[bool]=False,
+           no_dequantization=False,
            **kwargs
   ) -> Mapping[str, jnp.ndarray]:
 
     x = inputs["x"]
 
     if(sample == False):
-      rng = hk.next_rng_key()
-      noise = random.uniform(rng, x.shape)
-      z = (x + noise)/self.scale
+      if(no_dequantization == False):
+        noise = random.uniform(rng, x.shape)
+        z = (x + noise)/self.scale
+      else:
+        z = x/self.scale
     else:
-      z = jnp.floor(x*self.scale)
+      z = x*self.scale
+      # z = jnp.floor(x*self.scale)
 
     log_det = -jnp.log(self.scale)*jnp.prod(jnp.array(x.shape))
     return {"x": z, "log_det": log_det}

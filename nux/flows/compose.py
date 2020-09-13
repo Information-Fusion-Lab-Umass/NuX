@@ -10,7 +10,8 @@ import nux
 
 __all__ = ["sequential",
            "factored",
-           "multi_scale"]
+           "multi_scale",
+           "track"]
 
 ################################################################################################################
 
@@ -23,7 +24,7 @@ class sequential(Layer):
   def call(self,
            inputs: Mapping[str, jnp.ndarray],
            sample: Optional[bool]=False,
-           accumulate: Iterable[str]=["log_det"],
+           accumulate: Iterable[str]=["log_det", "flow_norm"],
            **kwargs
   ) -> Mapping[str, jnp.ndarray]:
 
@@ -31,7 +32,7 @@ class sequential(Layer):
 
     # Want to make sure that we're passing all inputs/outputs to the next layer
     final_outputs = inputs.copy()
-    accumulated_outputs = dict([(name, 0.0) for name in accumulate])
+    accumulated_outputs = dict([(name, jnp.array(0.0)) for name in accumulate])
 
     # Run the rest of the layers
     layer_inputs = inputs.copy()
@@ -42,7 +43,7 @@ class sequential(Layer):
 
       # Remember to accumulate the outputs
       for name in accumulated_outputs.keys():
-        accumulated_outputs[name] += outputs.get(name, 0.0)
+        accumulated_outputs[name] += outputs.get(name, jnp.array(0.0))
 
     # Swap in the accumulated outputs
     for name, val in accumulated_outputs.items():
@@ -62,7 +63,7 @@ class factored(Layer):
   def call(self,
            inputs: Mapping[str, jnp.ndarray],
            sample: Optional[bool]=False,
-           accumulate: Iterable[str]=["log_det"],
+           accumulate: Iterable[str]=["log_det", "flow_norm"],
            **kwargs
   ) -> Mapping[str, jnp.ndarray]:
 
@@ -70,7 +71,7 @@ class factored(Layer):
 
     # Want to make sure that we're passing all inputs/outputs to the next layer
     final_outputs = inputs.copy()
-    accumulated_outputs = dict([(name, 0.0) for name in accumulate])
+    accumulated_outputs = dict([(name, jnp.array(0.0)) for name in accumulate])
 
     # Split x
     xs = jnp.split(inputs["x"], len(self.layers), self.axis)
@@ -86,7 +87,7 @@ class factored(Layer):
 
       # Remember to accumulate the outputs
       for name in accumulated_outputs.keys():
-        accumulated_outputs[name] += outputs.get(name, 0.0)
+        accumulated_outputs[name] += outputs.get(name, jnp.array(0.0))
 
     # Swap in the accumulated outputs
     for name, val in accumulated_outputs.items():
@@ -116,3 +117,27 @@ class multi_scale(Layer):
                       nux.UnSqueeze())
 
     return flow(inputs, sample=sample)
+
+################################################################################################################
+
+class track(Layer):
+
+  def __init__(self, flow, name: str, reducer: Callable=None, **kwargs):
+    self.name = name
+    self.flow = flow
+    self.reducer = reducer
+    super().__init__(name=name, **kwargs)
+
+  def call(self,
+           inputs: Mapping[str, jnp.ndarray],
+           sample: Optional[bool]=False,
+           **kwargs
+  ) -> Mapping[str, jnp.ndarray]:
+
+    flow_outputs = self.flow(inputs, sample=sample, **kwargs)
+    outputs = flow_outputs.copy()
+    if(self.reducer is None):
+      outputs[self.name] = flow_outputs
+    else:
+      outputs[self.name] = self.reducer(flow_outputs)
+    return outputs

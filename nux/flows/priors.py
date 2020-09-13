@@ -7,10 +7,10 @@ import haiku as hk
 from typing import Optional, Mapping
 from nux.flows.base import *
 import nux.util as util
-import numpyro
-numpyro.set_platform('gpu')
+import numpyro; numpyro.set_platform("gpu")
 import numpyro.distributions as dists
 from jax.scipy.special import logsumexp
+from haiku._src.typing import PRNGKey
 
 __all__ = ["UnitGaussianPrior",
            "GMMPrior"]
@@ -22,7 +22,7 @@ class UnitGaussianPrior(AutoBatchedLayerWithRNG):
 
   def call(self,
            inputs: Mapping[str, jnp.ndarray],
-           rng: jnp.ndarray,
+           rng: PRNGKey,
            sample: Optional[bool]=False,
            t: Optional[float]=1.0,
            ignore_prior: Optional[bool]=False,
@@ -56,7 +56,7 @@ class GMMPrior(AutoBatchedLayerWithRNG):
 
   def call(self,
            inputs: Mapping[str, jnp.ndarray],
-           rng: jnp.ndarray,
+           rng: PRNGKey,
            sample: Optional[bool]=False,
            ignore_prior: Optional[bool]=False,
            **kwargs

@@ -45,11 +45,17 @@ class Coupling(AutoBatchedLayer):
     split_index = x_shape[ax]//2
     xa, xb = jnp.split(x, indices_or_sections=jnp.array([split_index]), axis=self.axis)
 
+    # Initialize the coupling layer to the identity
+    scale_scale = hk.get_parameter("scale_scale", shape=xa.shape, dtype=xa.dtype, init=jnp.zeros)
+    scale_shift = hk.get_parameter("scale_shift", shape=xa.shape, dtype=xa.dtype, init=jnp.zeros)
     network = self.get_network(xa.shape)
 
     # Apply the transformation
     if self.kind == "affine":
       t, log_s = network(xb)
+      t = scale_shift*t
+      log_s = scale_scale*log_s
+
       if sample == False:
           za = (xa - t)*jnp.exp(-log_s)
       else:

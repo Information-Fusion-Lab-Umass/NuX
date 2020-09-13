@@ -98,7 +98,7 @@ class Logit(AutoBatchedLayer):
       # If we are generating images, we want to pass the normalized image
       # to matplotlib!
       if generate_image:
-        outputs['image'] = z
+        outputs["image"] = z
 
       if self.has_scale == True:
         z -= self.scale
@@ -112,6 +112,6 @@ class Logit(AutoBatchedLayer):
       # Then we have an image and have to sum more
       log_det = log_det.sum(axis=(-2, -1))
 
-    outputs['x'] = z
-    outputs['log_det'] = log_det
+    outputs["x"] = z
+    outputs["log_det"] = log_det
     return outputs

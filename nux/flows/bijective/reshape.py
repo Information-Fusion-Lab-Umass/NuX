@@ -43,24 +43,25 @@ class UnSqueeze(AutoBatchedLayer):
     outputs = {"x": z, "log_det": jnp.array(0.0)}
     return outputs
 
+
 class Flatten(AutoBatchedLayer):
 
-  def __init__(self, name: str="flatten", **kwargs):
+  def __init__(self, original_shape, name: str="flatten", **kwargs):
     super().__init__(name=name, **kwargs)
+    self.original_shape = original_shape
 
   def call(self, inputs: Mapping[str, jnp.ndarray], sample: Optional[bool]=False, **kwargs) -> Mapping[str, jnp.ndarray]:
     x = inputs["x"]
 
-    def init_fun(shape, dtype):
-      return jnp.array(shape)
-
-    original_shape = hk.get_state("original_state", x.shape, jnp.int32, init_fun)
+    # TODO: Fix this!  Need to find a way to store data dependent constants in a haiku context.
+    # def init_fun(shape, dtype):
+    #   return jnp.array(shape)
+    # original_shape = hk.get_state("original_state", x.shape, jnp.int32, init_fun)
 
     if sample == False:
         z = x.ravel()
     else:
-        # z = x.reshape(self.expected_shapes["x"])
-        z = x.reshape(original_shape)
+        z = x.reshape(self.original_shape)
 
     outputs = {"x": z, "log_det": jnp.array(0.0)}
     return outputs

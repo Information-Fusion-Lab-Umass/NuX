@@ -135,7 +135,7 @@ class NeuralSpline(AutoBatchedLayer):
                K: int,
                create_network: Optional[Callable]=None,
                hidden_layer_sizes: Optional[Sequence[int]]=[1024]*4,
-               bounds: Sequence[float]=((-10.0, 10.0), (-10.0, 10.0)),
+               bounds: Sequence[float]=((-4.0, 4.0), (-4.0, 4.0)),
                name: str="rq_spline",
                **kwargs
   ):
