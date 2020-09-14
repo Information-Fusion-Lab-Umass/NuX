@@ -39,7 +39,7 @@ class LeakyReLU(AutoBatchedLayer):
 
 class SneakyReLU(AutoBatchedLayer):
 
-  def __init__(self, alpha: float=0.1, name: str="leaky_relu", **kwargs):
+  def __init__(self, alpha: float=0.1, name: str="sneaky_relu", **kwargs):
     super().__init__(name=name, **kwargs)
 
     # Sneaky ReLU uses a different convention

@@ -58,8 +58,7 @@ def transform_flow(create_fun) -> TransformedWithState:
     """Applies your function injecting parameters and state."""
     params = check_mapping("params", params)
     state = check_mapping("state", state)
-    rng = to_prng_sequence(
-        rng, err_msg=(APPLY_RNG_STATE_ERROR if state else APPLY_RNG_ERROR))
+    rng = to_prng_sequence(rng, err_msg=(APPLY_RNG_STATE_ERROR if state else APPLY_RNG_ERROR))
     with new_context(params=params, state=state, rng=rng) as ctx:
       model = create_fun()
       key = hk.next_rng_key()
@@ -248,8 +247,14 @@ class AutoBatchedLayer(Layer):
         rngs = tuple([None]*batch_size)
       return vmap(partial(self, sample=sample, no_batching=no_batching, **kwargs), in_axes=(input_in_axes, 0))(inputs, rngs)
 
-    # Evaluate the function
-    outputs = self.call(inputs, rng, sample=sample, no_batching=no_batching, **kwargs)
+    # Evaluate the function or do flow norm initialization
+    flow_norm = kwargs.get("flow_norm", False)
+    if(flow_norm is False):
+      outputs = self.call(inputs, rng, sample=sample, no_batching=no_batching, **kwargs)
+    else:
+      input_no_grad = jax.lax.stop_gradient(inputs)
+      outputs = self.call(input_no_grad, rng, sample=sample, no_batching=no_batching, **kwargs)
+      outputs["flow_norm"] = -0.5*jnp.sum(outputs["x"]**2) + outputs.get("log_det", jnp.array(0.0))
 
     # Record the output shapes.  outputs is unbatched!
     if sample == False:
