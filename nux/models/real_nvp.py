@@ -8,8 +8,8 @@ def RealNVP(n_layers: int=10,
 
     layers = []
     for i in range(n_layers):
-        layers.append(nux.FlowNorm())
+        layers.append(nux.ActNorm())
         layers.append(nux.Reverse())
-        layers.append(nux.Coupling(hidden_layer_sizes=hidden_layer_sizes))
+        layers.append(nux.Coupling(hidden_layer_sizes=hidden_layer_sizes, kind='additive'))
 
     return nux.sequential(*layers)

@@ -10,7 +10,7 @@ def RQSpline(n_layers: int=10,
 
     layers = []
     for i in range(n_layers):
-        layers.append(nux.FlowNorm())
+        layers.append(nux.ActNorm())
         layers.append(nux.AffineLDU())
         layers.append(nux.NeuralSpline(n_bins, hidden_layer_sizes=hidden_layer_sizes, bounds=bounds))
 

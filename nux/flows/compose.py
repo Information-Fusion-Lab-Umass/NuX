@@ -35,6 +35,7 @@ class sequential(Layer):
     # Want to make sure that we're passing all inputs/outputs to the next layer
     final_outputs = inputs.copy()
     accumulated_outputs = dict([(name, jnp.array(0.0)) for name in accumulate])
+    accumulated_found = dict([(name, False) for name in accumulate])
 
     # Split the random key
     rngs = random.split(rng, n_layers) if rng is not None else [None]*n_layers
@@ -43,16 +44,19 @@ class sequential(Layer):
     layer_inputs = inputs.copy()
     for layer, rng in zip(iter_layers, rngs):
       outputs = layer(layer_inputs, rng, sample=sample, **kwargs)
-      layer_inputs.update(outputs)
+      layer_inputs["x"] = outputs["x"]
       final_outputs.update(outputs)
 
       # Remember to accumulate the outputs
       for name in accumulated_outputs.keys():
-        accumulated_outputs[name] += outputs.get(name, jnp.array(0.0))
+        if(name in outputs):
+          accumulated_outputs[name] += outputs[name]
+          accumulated_found[name] = True
 
     # Swap in the accumulated outputs
     for name, val in accumulated_outputs.items():
-      final_outputs[name] = val
+      if(accumulated_found[name]):
+        final_outputs[name] = val
 
     return final_outputs
 
@@ -79,6 +83,7 @@ class factored(Layer):
     # Want to make sure that we're passing all inputs/outputs to the next layer
     final_outputs = inputs.copy()
     accumulated_outputs = dict([(name, jnp.array(0.0)) for name in accumulate])
+    accumulated_found = dict([(name, False) for name in accumulate])
 
     # Split x
     xs = jnp.split(inputs["x"], n_layers, self.axis)
@@ -97,11 +102,14 @@ class factored(Layer):
 
       # Remember to accumulate the outputs
       for name in accumulated_outputs.keys():
-        accumulated_outputs[name] += outputs.get(name, jnp.array(0.0))
+        if(name in outputs):
+          accumulated_outputs[name] += outputs[name]
+          accumulated_found[name] = True
 
     # Swap in the accumulated outputs
     for name, val in accumulated_outputs.items():
-      final_outputs[name] = val
+      if(accumulated_found[name]):
+        final_outputs[name] = val
 
     # Recombine the data
     z = jnp.concatenate(zs, self.axis)

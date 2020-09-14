@@ -17,7 +17,7 @@ class Coupling(AutoBatchedLayer):
                create_network: Optional[Callable]=None,
                hidden_layer_sizes: Optional[Sequence[int]]=[1024]*4,
                n_channels: Optional[int]=256,
-               kind: Optional[str]="affine",
+               kind: Optional[str]="additive",
                axis: Optional[int]=-1,
                name: str="coupling",
                **kwargs
@@ -63,6 +63,8 @@ class Coupling(AutoBatchedLayer):
       log_det = -jnp.sum(log_s)
     else:
       t = network(xb)
+      t = scale_shift*t
+
       if sample == False:
           za = xa - t
       else:

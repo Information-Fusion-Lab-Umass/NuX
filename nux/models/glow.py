@@ -31,14 +31,11 @@ class GLOW(Layer):
            **kwargs
   ) -> Mapping[str, jnp.ndarray]:
 
-    def reducer(outputs):
-      return {"mean": outputs["x"].mean(), "std": outputs["x"].std()}
-
     layers = []
     for i in range(self.n_blocks):
-      layers.append(nux.track(nux.FlowNorm(), f"flow_norm_{i}_{self.name}", reducer))
-      layers.append(nux.track(nux.OneByOneConv(), f"conv_{i}_{self.name}", reducer))
-      layers.append(nux.track(nux.Coupling(n_channels=self.n_channels), f"coupling_{i}_{self.name}", reducer))
+      layers.append(nux.ActNorm())
+      layers.append(nux.OneByOneConv())
+      layers.append(nux.Coupling(n_channels=self.n_channels, kind='additive'))
 
     flow = nux.sequential(*layers)
     return flow(inputs, sample=sample, **kwargs)
