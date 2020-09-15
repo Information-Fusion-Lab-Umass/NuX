@@ -10,6 +10,7 @@ import jax
 import pickle
 import haiku as hk
 import pathlib
+import nux.spectral_norm as sn
 
 ################################################################################################################
 
@@ -76,13 +77,22 @@ def weight_norm(x):
 
 class SimpleMLP(hk.Module):
 
-    def __init__(self, out_shape, hidden_layer_sizes, is_additive, weight_norm=True, name=None):
+    def __init__(self,
+                 out_shape,
+                 hidden_layer_sizes,
+                 is_additive,
+                 weight_norm=False,
+                 spectral_norm=True,
+                 name=None):
         super().__init__(name=name)
         assert len(out_shape) == 1
-        self.out_dim = out_shape[0]
+        self.out_dim            = out_shape[0]
         self.hidden_layer_sizes = hidden_layer_sizes
-        self.is_additive = is_additive
-        self.weight_norm = weight_norm
+        self.is_additive        = is_additive
+
+        assert (weight_norm and spectral_norm) == False
+        self.weight_norm        = weight_norm
+        self.spectral_norm      = spectral_norm
 
     def __call__(self, x, **kwargs):
 
@@ -91,32 +101,56 @@ class SimpleMLP(hk.Module):
         for i, output_size in enumerate(self.hidden_layer_sizes):
             input_size = x.shape[-1]
             w = hk.get_parameter(f"w_{i}", [output_size, input_size], init=w_init)
+
             if(self.weight_norm):
                 w = weight_norm(w)
+
+            elif(self.spectral_norm):
+                u = hk.get_state(f"u_{i}", (w.shape[0],), init=hk.initializers.RandomNormal())
+                w, u = sn.spectral_norm_apply(w, u, 0.9, 1)
+                hk.set_state(f"u_{i}", u)
 
             b = hk.get_parameter(f"b_{i}", [output_size], init=jnp.zeros)
             x = w@x + b
 
-            x = jax.nn.relu(x)
-            # x = jax.nn.swish(x)/1.1
+            # x = jax.nn.relu(x)
+            x = jax.nn.swish(x)/1.1
 
+        # Output layer
         w_mu = hk.get_parameter("w_mu", [self.out_dim, x.shape[-1]], init=w_init)
+
         if(self.weight_norm):
             w_mu = weight_norm(w_mu)
+
+        elif(self.spectral_norm):
+            u = hk.get_state(f"u_mu", (w_mu.shape[0],), init=hk.initializers.RandomNormal())
+            w_mu, u = sn.spectral_norm_apply(w_mu, u, 0.9, 1)
+            hk.set_state(f"u_mu", u)
+
         b_mu = hk.get_parameter("b_mu", [self.out_dim], init=jnp.zeros)
         mu = w_mu@x + b_mu
 
         if(self.is_additive):
             return mu
 
+        # Split output head
         w_alpha = hk.get_parameter("w_alpha", [self.out_dim, x.shape[-1]], init=w_init)
+
         if(self.weight_norm):
             w_alpha = weight_norm(w_alpha)
+
+        elif(self.spectral_norm):
+            u = hk.get_state(f"u_alpha", (w_alpha.shape[0],), init=hk.initializers.RandomNormal())
+            w_alpha, u = sn.spectral_norm_apply(w_alpha, u, 0.9, 1)
+            hk.set_state(f"u_alpha", u)
+
         b_alpha = hk.get_parameter("b_alpha", [self.out_dim], init=jnp.zeros)
         alpha = w_alpha@x + b_alpha
 
         alpha = jnp.tanh(alpha)
         return mu, alpha
+
+################################################################################################################
 
 class WeightNormConv(hk.Module):
 
@@ -146,6 +180,7 @@ class WeightNormConv(hk.Module):
 
         w_shape = self.kernel_shape + (in_channels, self.out_channels)
         w = hk.get_parameter("w", w_shape, x.dtype, init=self.w_init)
+        assert 0, 'Not correct'
         w = jax.vmap(jax.vmap(weight_norm))(w)
 
         out = jax.lax.conv_general_dilated(x,
@@ -161,6 +196,56 @@ class WeightNormConv(hk.Module):
         out = out + b
         return out
 
+class SpectralNormConv(hk.Module):
+
+    def __init__(self,
+                 out_channels,
+                 kernel_shape,
+                 stride=(1, 1),
+                 padding='SAME',
+                 lhs_dilation=(1, 1),
+                 rhs_dilation=(1, 1),
+                 w_init=None,
+                 b_init=jnp.zeros,
+                 use_bias=False,
+                 name=None):
+        super().__init__(name=name)
+        self.out_channels      = out_channels
+        self.kernel_shape      = kernel_shape
+        self.stride            = stride
+        self.padding           = padding
+        self.lhs_dilation      = lhs_dilation
+        self.rhs_dilation      = rhs_dilation
+        self.w_init            = w_init if w_init is not None else hk.initializers.VarianceScaling(1.0, 'fan_avg', 'truncated_normal')
+        self.b_init            = b_init
+        self.use_bias          = use_bias
+        self.dimension_numbers = ('NHWC', 'HWIO', 'NHWC')
+
+    def __call__(self, x, **kwargs):
+        in_channels = x.shape[-1]
+
+        w_shape = self.kernel_shape + (in_channels, self.out_channels)
+        w = hk.get_parameter("w", w_shape, x.dtype, init=self.w_init)
+
+        # Spectral norm
+        u = hk.get_state("u", self.kernel_shape + (self.out_channels,), init=hk.initializers.RandomNormal())
+        w, u = sn.spectral_norm_conv_apply(w, u, self.stride, self.padding, 0.9, 1)
+        hk.set_state("u", u)
+
+        out = jax.lax.conv_general_dilated(x,
+                                           w,
+                                           window_strides=self.stride,
+                                           padding=self.padding,
+                                           lhs_dilation=self.lhs_dilation,
+                                           rhs_dilation=self.rhs_dilation,
+                                           dimension_numbers=self.dimension_numbers)
+
+        if(self.use_bias):
+            b = hk.get_parameter("b", (self.out_channels,), x.dtype, init=self.b_init)
+            b = jnp.broadcast_to(b, out.shape)
+            out = out + b
+        return out
+
 class SimpleConv(hk.Module):
 
     def __init__(self, out_shape, n_hidden_channels, is_additive, name=None):
@@ -169,38 +254,33 @@ class SimpleConv(hk.Module):
         self.out_channels = out_channels
         self.n_hidden_channels = n_hidden_channels
         self.is_additive = is_additive
+        self.w_init = hk.initializers.VarianceScaling(1.0, 'fan_avg', 'truncated_normal')
 
         self.last_channels = out_channels if is_additive else 2*out_channels
 
     def __call__(self, x, **kwargs):
         H, W, C = x.shape
 
-        x = WeightNormConv(out_channels=self.n_hidden_channels,
-                           kernel_shape=(3, 3),
-                           stride=(1, 1),
-                           w_init=hk.initializers.VarianceScaling(1.0, 'fan_avg', 'truncated_normal'))(x[None])[0]
+        x = SpectralNormConv(out_channels=self.n_hidden_channels,
+                             kernel_shape=(3, 3),
+                             stride=(1, 1),
+                             w_init=self.w_init)(x[None])[0]
 
-        x = jax.nn.relu(x)
+        x = jax.nn.swish(x)/1.1
+        # x = jax.nn.relu(x)
 
-        x = WeightNormConv(out_channels=self.n_hidden_channels,
-                           kernel_shape=(1, 1),
-                           stride=(1, 1),
-                           w_init=hk.initializers.VarianceScaling(1.0, 'fan_avg', 'truncated_normal'))(x[None])[0]
+        x = SpectralNormConv(out_channels=self.n_hidden_channels,
+                             kernel_shape=(1, 1),
+                             stride=(1, 1),
+                             w_init=self.w_init)(x[None])[0]
 
-        x = jax.nn.relu(x)
+        x = jax.nn.swish(x)/1.1
+        # x = jax.nn.relu(x)
 
-        w_init = hk.initializers.VarianceScaling(1.0, 'fan_avg', 'truncated_normal')
-
-        x = WeightNormConv(out_channels=self.last_channels,
-                           kernel_shape=(3, 3),
-                           stride=(1, 1),
-                           w_init=w_init)(x[None])[0]
-
-        # x = WeightNormConv(out_channels=self.last_channels,
-        #                    kernel_shape=(3, 3),
-        #                    stride=(1, 1),
-        #                    w_init=hk.initializers.Constant(0),
-        #                    b_init=hk.initializers.Constant(0))(x[None])[0]
+        x = SpectralNormConv(out_channels=self.last_channels,
+                             kernel_shape=(3, 3),
+                             stride=(1, 1),
+                             w_init=self.w_init)(x[None])[0]
 
         if(self.is_additive):
             return x

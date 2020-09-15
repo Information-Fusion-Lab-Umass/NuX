@@ -9,8 +9,41 @@ from nux.flows.base import *
 import nux.util as util
 import nux
 
-__all__ = ["GLOW",
-           "MultiscaleGLOW"]
+# __all__ = ["GLOW",
+#            "MultiscaleGLOW"]
+
+__all__ = ["glow",
+           "multiscale_glow"]
+
+def glow(n_blocks: int,
+         n_channels: int=64,
+         coupling_type: str='affine'):
+
+  layers = []
+  for i in range(self.n_blocks):
+    layers.append(nux.ActNorm())
+    layers.append(nux.OneByOneConv())
+    layers.append(nux.Coupling(n_channels=self.n_channels, kind=coupling_type))
+
+  flow = nux.sequential(*layers)
+  return flow
+
+def multiscale_glow(n_scales: int=2,
+                    n_blocks: int=7,
+                    n_channels: int=64,
+                    coupling_type: str='affine'):
+
+  def build_network(flow):
+    return nux.sequential(glow(n_blocks, n_channels=n_channels, coupling_type=coupling_type),
+                          nux.multi_scale(flow))
+
+  flow = glow(n_blocks, n_channels=n_channels, coupling_type=coupling_type)
+  for i in range(n_scales):
+    flow = build_network(flow)
+
+  return flow
+
+################################################################################################################
 
 class GLOW(Layer):
 
