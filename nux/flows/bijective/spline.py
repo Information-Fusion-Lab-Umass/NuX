@@ -7,6 +7,7 @@ import haiku as hk
 from typing import Optional, Mapping, Callable, Sequence
 from nux.flows.base import *
 import nux.util as util
+import nux.networks as net
 
 __all__ = ["NeuralSpline"]
 
@@ -134,25 +135,31 @@ class NeuralSpline(AutoBatchedLayer):
   def __init__(self,
                K: int,
                create_network: Optional[Callable]=None,
-               hidden_layer_sizes: Optional[Sequence[int]]=[1024]*4,
+               layer_sizes: Optional[Sequence[int]]=[1024]*4,
+               parameter_norm: Optional[str]=None,
                bounds: Sequence[float]=((-4.0, 4.0), (-4.0, 4.0)),
                name: str="rq_spline",
                **kwargs
   ):
     super().__init__(name=name, **kwargs)
-    self.K                  = K
-    self.hidden_layer_sizes = hidden_layer_sizes
-    self.bounds             = bounds
-    self.create_network     = create_network
+    self.K              = K
+    self.layer_sizes    = layer_sizes
+    self.bounds         = bounds
+    self.create_network = create_network
+    self.parameter_norm = parameter_norm
 
-    self.forward_spline     = jit(partial(spline, K=K, sample=False, bounds=bounds))
-    self.inverse_spline     = jit(partial(spline, K=K, sample=True, bounds=bounds))
+    self.forward_spline = jit(partial(spline, K=K, sample=False, bounds=bounds))
+    self.inverse_spline = jit(partial(spline, K=K, sample=True, bounds=bounds))
 
   def get_network(self, shape):
     if self.create_network is not None:
       return self.create_network(shape)
     if len(shape) == 1:
-      return util.SimpleMLP(shape, self.hidden_layer_sizes, is_additive=True)
+      out_dim = shape[-1]
+      return net.MLP(out_dim=out_dim,
+                     layer_sizes=self.layer_sizes,
+                     parameter_norm=self.parameter_norm,
+                     nonlinearity="relu")
     else:
       assert 0, "Currently only implemented for 1d inputs"
 

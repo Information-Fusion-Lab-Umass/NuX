@@ -8,6 +8,7 @@ from typing import Optional, Mapping, Callable, Sequence
 from nux.flows.base import *
 import nux.util as util
 from haiku._src.typing import PRNGKey
+import nux.networks as net
 
 ################################################################################################################
 
@@ -21,7 +22,7 @@ def res_flow_estimate(res_block, x, rng):
   def scan_fun(carry, inputs):
     (w, v) = carry
     w, = residual_vjp(w)
-    return (w, v), jnp.sum(w*v)
+    return (w, v), (w, jnp.sum(w*v))
 
   trace_key, roulette_key = random.split(rng, 2)
 
@@ -31,7 +32,7 @@ def res_flow_estimate(res_block, x, rng):
   # Compute the terms in the power series
   n_terms = 6
   k = jnp.arange(1, 1 + n_terms)
-  _, terms = jax.lax.scan(scan_fun, (v, v), k)
+  _, (grad_terms, terms) = jax.lax.scan(scan_fun, (v, v), k)
 
   # Compute the standard scaling terms
   coeff = (-1)**(k + 1)/k
@@ -77,8 +78,8 @@ class ResidualFlow(AutoBatchedLayer):
                res_block_create_fun: Callable=None,
                scale: Optional[float]=0.85,
                spectral_norm_iters: Optional[int]=1,
-               fixed_point_iters: Optional[int]=100,
-               n_hidden_layers: Sequence[int]=[1024]*4,
+               fixed_point_iters: Optional[int]=1000,
+               layer_sizes: Sequence[int]=[1024]*4,
                n_channels: Optional[int]=256,
                exact_log_det: Optional[bool]=False,
                name: str="residual_flow",
@@ -88,17 +89,24 @@ class ResidualFlow(AutoBatchedLayer):
     self.scale                = scale
     self.spectral_norm_iters  = spectral_norm_iters
     self.fixed_point_iters    = fixed_point_iters
-    self.n_hidden_layers      = n_hidden_layers
+    self.layer_sizes          = layer_sizes
     self.n_channels           = n_channels
     self.exact_log_det        = exact_log_det
 
   # Initialize the residual block
   def default_res_block(self, x):
+    out_dim = x.shape[-1]
     if(x.ndim < 3):
-      network = util.SimpleMLP(x.shape[-1:], self.n_hidden_layers, is_additive=True)
+      return net.MLP(out_dim=out_dim,
+                     layer_sizes=self.layer_sizes,
+                     parameter_norm="spectral",
+                     nonlinearity="relu")
     else:
-      network = util.SimpleConv(x.shape[-3:], self.n_channels, is_additive=True)
-    return network
+
+      return net.ConvBlock(out_channel=out_dim,
+                           hidden_channel=self.n_channels,
+                           parameter_norm="spectral",
+                           nonlinearity="relu")
 
   def call(self,
            inputs: Mapping[str, jnp.ndarray],

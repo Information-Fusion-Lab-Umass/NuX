@@ -20,10 +20,10 @@ def glow(n_blocks: int,
          coupling_type: str='affine'):
 
   layers = []
-  for i in range(self.n_blocks):
+  for i in range(n_blocks):
     layers.append(nux.ActNorm())
     layers.append(nux.OneByOneConv())
-    layers.append(nux.Coupling(n_channels=self.n_channels, kind=coupling_type))
+    layers.append(nux.Coupling(n_channels=n_channels, kind=coupling_type))
 
   flow = nux.sequential(*layers)
   return flow

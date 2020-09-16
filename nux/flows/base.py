@@ -41,7 +41,9 @@ def transform_flow(create_fun) -> TransformedWithState:
       outputs = model(inputs, key, **kwargs)
 
       # We also need to run it in reverse to initialize the sample shapes!
-      model(outputs, key, sample=True, **kwargs)
+      inputs_for_reconstr = inputs.copy()
+      inputs_for_reconstr.update(outputs) # We might have condition variables in inputs!
+      model(inputs_for_reconstr, key, sample=True, **kwargs)
 
       # Unset the batch axes
       Layer.batch_axes = ()

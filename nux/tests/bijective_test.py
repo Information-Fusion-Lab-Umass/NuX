@@ -16,7 +16,10 @@ def reconstruction_test(create_fun, inputs, rng, batch_axes):
 
   # Make sure that reconstructions are correct
   outputs, _ = flow.apply(params, state, rng, inputs)
-  reconstr, _ = flow.apply(params, state, rng, outputs, sample=True)
+
+  inputs_for_reconstr = inputs.copy()
+  inputs_for_reconstr.update(outputs) # We might have condition variables in inputs!
+  reconstr, _ = flow.apply(params, state, rng, inputs_for_reconstr, sample=True)
   assert jnp.allclose(inputs["x"], reconstr["x"], atol=1e-4)
   print("Passed reconstruction tests")
 
@@ -30,7 +33,9 @@ def log_det_test(create_fun, inputs, rng):
   # Make sure that the log det terms are correct
   def z_from_x(unflatten, x_flat):
     x = unflatten(x_flat)
-    outputs, _ = flow.apply(params, state, rng, {"x": x})
+    flow_inputs = inputs.copy()
+    flow_inputs["x"] = x
+    outputs, _ = flow.apply(params, state, rng, flow_inputs)
     return ravel_pytree(outputs["x"])[0]
 
   def single_elt_logdet(x):
