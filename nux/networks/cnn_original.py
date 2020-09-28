@@ -9,33 +9,27 @@ from typing import Optional, Mapping, Callable, Sequence, Any
 __all__ = ["Conv",
            "ConvBlock"]
 
-################################################################################################################
+def get_conv_weight(name: str,
+                    in_channels: int,
+                    out_channels: int,
+                    kernel_shape: Sequence[int],
+                    dtype: Any,
+                    init: Callable,
+                    parameter_norm: str=None,
+                    stride: Optional[Sequence[int]]=(1, 1),
+                    padding: str="SAME"):
+  w_shape = kernel_shape + (in_channels, out_channels)
+  w = hk.get_parameter(name, w_shape, dtype, init=init)
 
-def apply_conv(x: jnp.ndarray,
-               w: jnp.ndarray,
-               stride: Sequence[int],
-               padding: Sequence[int],
-               lhs_dilation: Sequence[int],
-               rhs_dilation: Sequence[int],
-               dimension_numbers: Sequence[str],
-               transpose: bool):
+  if parameter_norm == "spectral":
+    u = hk.get_state(f"u_{name}", kernel_shape + (out_channels,), init=hk.initializers.RandomNormal())
+    w, u = sn.spectral_norm_conv_apply(w, u, stride, padding, 0.9, 1)
+    hk.set_state(f"u_{name}", u)
 
-  if transpose == False:
-    return jax.lax.conv_general_dilated(x[None],
-                                        w,
-                                        window_strides=stride,
-                                        padding=padding,
-                                        lhs_dilation=lhs_dilation,
-                                        rhs_dilation=rhs_dilation,
-                                        dimension_numbers=dimension_numbers)[0]
+  elif parameter_norm == "spectral":
+    assert 0, "Not implemented"
 
-  return jax.lax.conv_transpose(x[None],
-                                w,
-                                strides=stride,
-                                padding=padding,
-                                rhs_dilation=rhs_dilation,
-                                dimension_numbers=dimension_numbers,
-                                transpose_kernel=True)[0]
+  return w
 
 ################################################################################################################
 
@@ -47,12 +41,9 @@ class Conv(hk.Module):
                parameter_norm: str=None,
                stride: Optional[Sequence[int]]=(1, 1),
                padding: str="SAME",
-               lhs_dilation: Sequence[int]=(1, 1),
-               rhs_dilation: Sequence[int]=(1, 1),
                w_init: Callable=None,
                b_init: Callable=None,
                use_bias: bool=True,
-               transpose: bool=False,
                name=None):
     super().__init__(name=name)
     self.out_channel = out_channel
@@ -68,84 +59,33 @@ class Conv(hk.Module):
 
     self.use_bias = use_bias
 
-    self.lhs_dilation      = lhs_dilation
-    self.rhs_dilation      = rhs_dilation
+    self.lhs_dilation      = (1, 1)
+    self.rhs_dilation      = (1, 1)
     self.dimension_numbers = ('NHWC', 'HWIO', 'NHWC')
-
-    self.transpose = transpose
 
   def __call__(self, x, **kwargs):
     H, W, C = x.shape
-    in_channel = C
-    w_shape = self.kernel_shape + (in_channel, self.out_channel)
 
-    if self.parameter_norm == "spectral":
-      w = hk.get_parameter("w", w_shape, x.dtype, init=self.w_init)
+    w = get_conv_weight(f"w",
+                        C,
+                        self.out_channel,
+                        self.kernel_shape,
+                        x.dtype,
+                        self.w_init,
+                        parameter_norm=self.parameter_norm,
+                        stride=self.stride,
+                        padding=self.padding)
 
-      u = hk.get_state(f"u_w", kernel_shape + (self.out_channel,), init=hk.initializers.RandomNormal())
-      w, u = sn.spectral_norm_conv_apply(w, u, self.stride, self.padding, 0.9, 1)
-      hk.set_state(f"u_w", u)
-
-      if self.use_bias:
-        b = hk.get_parameter("b", (self.out_channel,), x.dtype, init=self.b_init)
-
-    elif self.parameter_norm == "weight_norm":
-      def dd_w_init(shape, dtype):
-        # Initializing g doesn't work for some reason, so move the initialization here
-        w = self.w_init(shape, dtype)
-        w_for_init = w*jax.lax.rsqrt((w**2).sum(axis=(0, 1, 2)))
-
-        out = apply_conv(x,
-                         w_for_init,
-                         stride=self.stride,
-                         padding=self.padding,
-                         lhs_dilation=self.lhs_dilation,
-                         rhs_dilation=self.rhs_dilation,
-                         dimension_numbers=self.dimension_numbers,
-                         transpose=self.transpose)
-
-        std = jnp.std(out, axis=(0, 1))
-        return w/std
-
-      w = hk.get_parameter("w", w_shape, x.dtype, init=self.w_init)
-      w *= jax.lax.rsqrt((w**2).sum(axis=(0, 1, 2)))
-
-      g = hk.get_parameter("g", (self.out_channel,), x.dtype, init=jnp.ones)
-      w *= g
-
-      def dd_b_init(shape, dtype):
-
-        out = apply_conv(x,
-                         w,
-                         stride=self.stride,
-                         padding=self.padding,
-                         lhs_dilation=self.lhs_dilation,
-                         rhs_dilation=self.rhs_dilation,
-                         dimension_numbers=self.dimension_numbers,
-                         transpose=self.transpose)
-        del x
-        mean, std = jnp.mean(out, axis=(0, 1)), jnp.std(out, axis=(0, 1))
-        return -mean/std
-
-      if self.use_bias:
-        b = hk.get_parameter("b", (self.out_channel,), x.dtype, init=jnp.zeros)
-        # b = hk.get_parameter("b", (self.out_channel,), x.dtype, init=dd_b_init)
-
-    else:
-      w = hk.get_parameter("w", w_shape, x.dtype, init=self.w_init)
-      if self.use_bias:
-        b = hk.get_parameter("b", (self.out_channel,), x.dtype, init=self.b_init)
-
-    out = apply_conv(x,
-                     w,
-                     stride=self.stride,
-                     padding=self.padding,
-                     lhs_dilation=self.lhs_dilation,
-                     rhs_dilation=self.rhs_dilation,
-                     dimension_numbers=self.dimension_numbers,
-                     transpose=self.transpose)
+    out = jax.lax.conv_general_dilated(x[None],
+                                       w,
+                                       window_strides=self.stride,
+                                       padding=self.padding,
+                                       lhs_dilation=self.lhs_dilation,
+                                       rhs_dilation=self.rhs_dilation,
+                                       dimension_numbers=self.dimension_numbers)[0]
 
     if self.use_bias:
+      b = hk.get_parameter("b", (self.out_channel,), x.dtype, init=self.b_init)
       out += b
 
     return out
@@ -178,8 +118,6 @@ class ConvBlock(hk.Module):
 
     if nonlinearity == "relu":
       self.nonlinearity = jax.nn.relu
-    elif nonlinearity == "swish":
-      self.nonlinearity = jax.nn.swish
     elif nonlinearity == "lipswish":
       self.nonlinearity = lambda x: jax.nn.swish(x)/1.1
     else:
@@ -189,11 +127,6 @@ class ConvBlock(hk.Module):
       self.bn0 = hk.BatchNorm(name="bn_0", create_scale=True, create_offset=True, decay_rate=0.9, data_format="channels_last")
       self.bn1 = hk.BatchNorm(name="bn_1", create_scale=True, create_offset=True, decay_rate=0.9, data_format="channels_last")
       self.bn2 = hk.BatchNorm(name="bn_2", create_scale=True, create_offset=True, decay_rate=0.9, data_format="channels_last")
-
-    elif self.norm == "instance_norm":
-      self.in0 = hk.InstanceNorm(name="in_0", create_scale=True, create_offset=True)
-      self.in1 = hk.InstanceNorm(name="in_1", create_scale=True, create_offset=True)
-      self.in2 = hk.InstanceNorm(name="in_2", create_scale=True, create_offset=True)
 
     self.conv0 = Conv(self.hidden_channel,
                       kernel_shape=(3, 3),
@@ -231,27 +164,18 @@ class ConvBlock(hk.Module):
 
     if self.norm == "batch_norm":
       x = self.bn0(x, is_training=is_training)
-    elif self.norm == "instance_norm":
-      x = self.in0(x)
-
 
     x = self.nonlinearity(x)
     x = self.conv0(x)
 
     if self.norm == "batch_norm":
       x = self.bn1(x, is_training=is_training)
-    elif self.norm == "instance_norm":
-      x = self.in1(x)
-
 
     x = self.nonlinearity(x)
     x = self.conv1(x)
 
     if self.norm == "batch_norm":
       x = self.bn2(x, is_training=is_training)
-    elif self.norm == "instance_norm":
-      x = self.in2(x)
-
 
     x = self.nonlinearity(x)
     x = self.conv2(x)

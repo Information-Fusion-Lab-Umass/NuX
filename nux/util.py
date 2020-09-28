@@ -173,11 +173,22 @@ def gaussian_chol_cov_logpdf(x, mean, cov_chol):
     return log_px
 
 @jit
+def gaussian_centered_full_cov_logpdf(x, cov):
+    cov_inv = jnp.linalg.inv(cov)
+    log_px = -0.5*jnp.sum(jnp.dot(x, cov_inv.T)*x, axis=-1)
+    return log_px - 0.5*jnp.linalg.slogdet(cov)[1] - 0.5*x.shape[-1]*jnp.log(2*jnp.pi)
+
+@jit
 def gaussian_full_cov_logpdf(x, mean, cov):
     dx = x - mean
     cov_inv = jnp.linalg.inv(cov)
     log_px = -0.5*jnp.sum(jnp.dot(dx, cov_inv.T)*dx, axis=-1)
     return log_px - 0.5*jnp.linalg.slogdet(cov)[1] - 0.5*x.shape[-1]*jnp.log(2*jnp.pi)
+
+@jit
+def gaussian_centered_diag_cov_logpdf(x, log_diag_cov):
+    log_px = -0.5*jnp.sum(x*jnp.exp(-log_diag_cov)*x, axis=-1)
+    return log_px - 0.5*jnp.sum(log_diag_cov) - 0.5*x.shape[-1]*jnp.log(2*jnp.pi)
 
 @jit
 def gaussian_diag_cov_logpdf(x, mean, log_diag_cov):

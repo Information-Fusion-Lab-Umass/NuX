@@ -37,25 +37,14 @@ class ActNorm(Layer):
       return jnp.prod(jnp.array(shape))
 
     b     = hk.get_parameter("b", shape=(inputs["x"].shape[-1],), dtype=inputs["x"].dtype, init=b_init)
-    log_s = hk.get_parameter("log_s", shape=(inputs["x"].shape[-1],), dtype=inputs["x"].dtype, init=b_init)
+    log_s = hk.get_parameter("log_s", shape=(inputs["x"].shape[-1],), dtype=inputs["x"].dtype, init=log_s_init)
     const = hk.get_state("const", shape=(), dtype=jnp.float32, init=const_init)
 
     log_det = -log_s.sum()*const
     outputs["log_det"] = log_det
 
     if sample == False:
-      x = inputs["x"]
-      flow_norm = kwargs.get("flow_norm", False)
-      if(flow_norm):
-        x = jax.lax.stop_gradient(x)
-
-      z = (x - b)*jnp.exp(-log_s)
-
-      if(flow_norm):
-        axes = -1 if z.ndim < 3 else (-1, -2, -3)
-        outputs["flow_norm"] = -0.5*jnp.sum(z**2, axis=axes) + log_det
-
-      outputs["x"] = z
+      outputs["x"] = (inputs["x"] - b)*jnp.exp(-log_s)
     else:
       z = inputs["x"]
       outputs["x"] = jnp.exp(log_s)*z + b

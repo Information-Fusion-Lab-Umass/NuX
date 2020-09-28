@@ -1,16 +1,20 @@
 import nux
+from nux.flows.base import *
 from typing import Optional, Mapping, Callable, Sequence
 
 __all__ = ["residual_flow",
            "multiscale_residual_flow"]
 
 def residual_flow(n_layers: int=10,
-                  n_hidden_layers: Sequence[int]=[1024]*4,
-                  n_channels: Optional[int]=256):
+                  layer_sizes: Sequence[int]=[1024]*4,
+                  n_channels: Optional[int]=256,
+                  **kwargs):
     layers = []
     for i in range(n_layers):
-        layers.append(nux.ResidualFlow(n_hidden_layers=n_hidden_layers, n_channels=n_channels))
+        layers.append(nux.ResidualFlow(layer_sizes=layer_sizes, n_channels=n_channels, **kwargs))
     return nux.sequential(*layers)
+
+################################################################################################################
 
 def multiscale_residual_flow(n_scales: int=2,
                              n_layers: int=10,

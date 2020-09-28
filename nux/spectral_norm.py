@@ -50,9 +50,17 @@ def spectral_norm_apply(W: jnp.ndarray,
   # Estimate the largest singular value of W
   sigma = jnp.einsum("i,ij,j", u, W, v)
 
+        # factor = torch.max(torch.ones(1).to(weight.device), sigma / self.coeff)
+        # weight = weight / factor
+
+  # factor = 1/jnp.max(1.0, sigma/scale)
+  # factor = 1/jnp.where(sigma/scale > 1.0, 1.0, sigma/scale)
+
+
   # Scale coefficient to account for the fact that sigma can be an under-estimate.
   factor = jnp.where(scale < sigma, scale/sigma, 1.0)
 
+  # return W/sigma, u
   return W*factor, u
 
 ################################################################################################################

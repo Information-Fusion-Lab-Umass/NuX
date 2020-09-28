@@ -42,20 +42,20 @@ class sequential(Layer):
 
     # Run the rest of the layers
     layer_inputs = inputs.copy()
-    for layer, rng in zip(iter_layers, rngs):
+    for i, (layer, rng) in enumerate(zip(iter_layers, rngs)):
       outputs = layer(layer_inputs, rng, sample=sample, **kwargs)
       layer_inputs["x"] = outputs["x"]
       final_outputs.update(outputs)
 
       # Remember to accumulate the outputs
       for name in accumulated_outputs.keys():
-        if(name in outputs):
+        if name in outputs:
           accumulated_outputs[name] += outputs[name]
           accumulated_found[name] = True
 
     # Swap in the accumulated outputs
     for name, val in accumulated_outputs.items():
-      if(accumulated_found[name]):
+      if accumulated_found[name]:
         final_outputs[name] = val
 
     return final_outputs
@@ -86,7 +86,11 @@ class factored(Layer):
     accumulated_found = dict([(name, False) for name in accumulate])
 
     # Split x
-    xs = jnp.split(inputs["x"], n_layers, self.axis)
+    split_size = inputs["x"].shape[self.axis]/n_layers
+    split_size = int(jnp.ceil(split_size))
+    split_idx = jnp.array([i*split_size for i in range(1, n_layers)])
+    xs = jnp.split(inputs["x"], indices_or_sections=split_idx, axis=self.axis)
+    # xs = jnp.split(inputs["x"], n_layers, self.axis)
     zs = []
 
     # Split the random key
@@ -94,7 +98,7 @@ class factored(Layer):
 
     # Run each of the flows on a part of x
     layer_inputs = inputs.copy()
-    for x, layer, rng in zip(xs, self.layers, rngs):
+    for i, (x, layer, rng) in enumerate(zip(xs, self.layers, rngs)):
       layer_inputs["x"] = x
       outputs = layer(layer_inputs, rng, sample=sample, **kwargs)
       final_outputs.update(outputs)
@@ -102,13 +106,13 @@ class factored(Layer):
 
       # Remember to accumulate the outputs
       for name in accumulated_outputs.keys():
-        if(name in outputs):
+        if name in outputs:
           accumulated_outputs[name] += outputs[name]
           accumulated_found[name] = True
 
     # Swap in the accumulated outputs
     for name, val in accumulated_outputs.items():
-      if(accumulated_found[name]):
+      if accumulated_found[name]:
         final_outputs[name] = val
 
     # Recombine the data
@@ -120,7 +124,10 @@ class factored(Layer):
 
 class multi_scale(Layer):
 
-  def __init__(self, flow, name: str="multi_scale", **kwargs):
+  def __init__(self,
+               flow,
+               name: str="multi_scale",
+               **kwargs):
     super().__init__(name=name, **kwargs)
     self.flow = flow
 
@@ -135,7 +142,7 @@ class multi_scale(Layer):
                       factored(self.flow, nux.Identity()),
                       nux.UnSqueeze())
 
-    return flow(inputs, rng, sample=sample)
+    return flow(inputs, rng, sample=sample, **kwargs)
 
 ################################################################################################################
 
@@ -156,7 +163,7 @@ class track(Layer):
 
     flow_outputs = self.flow(inputs, rng, sample=sample, **kwargs)
     outputs = flow_outputs.copy()
-    if(self.reducer is None):
+    if self.reducer is None:
       outputs[self.name] = flow_outputs
     else:
       outputs[self.name] = self.reducer(flow_outputs)

@@ -54,7 +54,6 @@ def flow_test(create_fun, inputs, rng):
   Test if a flow implementation is correct.  Checks if the forward and inverse functions are consistent and
   compares the jacobian determinant calculation against an autograd calculation.
   """
-  # Initialize the flow
   inputs_batched = tree_util.tree_map(lambda x: jnp.broadcast_to(x[None], (3,) + x.shape), inputs)
   inputs_doubly_batched = tree_util.tree_map(lambda x: jnp.broadcast_to(x[None], (3,) + x.shape), inputs_batched)
 

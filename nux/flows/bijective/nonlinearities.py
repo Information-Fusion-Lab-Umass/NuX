@@ -9,9 +9,35 @@ from nux.flows.base import *
 import nux.util as util
 
 __all__ = ["LeakyReLU",
+           "LeakyReLUInv",
            "SneakyReLU",
            "Sigmoid",
-           "Logit"]
+           "Logit",
+           "SoftplusInverse"]
+
+class LeakyReLUInv(AutoBatchedLayer):
+
+  def __init__(self, alpha: float=0.01, name: str="leaky_relu", **kwargs):
+    super().__init__(name=name, **kwargs)
+    self.alpha = alpha
+
+  def call(self, inputs: Mapping[str, jnp.ndarray], rng: jnp.ndarray=None, sample: Optional[bool]=False, **kwargs) -> Mapping[str, jnp.ndarray]:
+    x = inputs["x"]
+
+    if sample == True:
+      z = jnp.where(x > 0, x, self.alpha*x)
+    else:
+      z = jnp.where(x > 0, x, x/self.alpha)
+
+    log_dx_dz = jnp.where(x > 0, 0, jnp.log(self.alpha))
+    log_det = log_dx_dz.sum(axis=-1)
+
+    if log_det.ndim > 1:
+      # Then we have an image and have to sum over the height and width axes
+      log_det = log_det.sum(axis=(-2, -1))
+
+    outputs = {"x": z, "log_det": -log_det}
+    return outputs
 
 class LeakyReLU(AutoBatchedLayer):
 
@@ -38,6 +64,8 @@ class LeakyReLU(AutoBatchedLayer):
     return outputs
 
 class SneakyReLU(AutoBatchedLayer):
+
+  """ Adapted from https://github.com/didriknielsen/survae_flows/blob/master/survae/transforms/bijections/elementwise_nonlinear.py """
 
   def __init__(self, alpha: float=0.1, name: str="sneaky_relu", **kwargs):
     super().__init__(name=name, **kwargs)
@@ -71,6 +99,8 @@ class SneakyReLU(AutoBatchedLayer):
 
     outputs["log_det"] = log_det
     return outputs
+
+################################################################################################################
 
 class Sigmoid(AutoBatchedLayer):
 
@@ -150,4 +180,28 @@ class Logit(AutoBatchedLayer):
 
     outputs["x"] = z
     outputs["log_det"] = log_det
+    return outputs
+
+################################################################################################################
+
+class SoftplusInverse(AutoBatchedLayer):
+
+  """ Adapted from https://github.com/didriknielsen/survae_flows/blob/master/survae/transforms/bijections/elementwise_nonlinear.py """
+
+  def __init__(self, name: str="softplus_inv", **kwargs):
+    super().__init__(name=name, **kwargs)
+
+  def call(self, inputs: Mapping[str, jnp.ndarray], rng: jnp.ndarray=None, sample: Optional[bool]=False, generate_image: Optional[bool]=False, **kwargs) -> Mapping[str, jnp.ndarray]:
+    if sample == False:
+      x = inputs["x"]
+      x = jnp.where(x < 0.0, 1e-5, x)
+      dx = jnp.log1p(-jnp.exp(-x))
+      z = x + dx
+      log_det = -dx.sum()
+      outputs = {"x": z, "log_det": log_det}
+    else:
+      x = jax.nn.softplus(inputs["x"])
+      log_det = -jnp.log1p(-jnp.exp(x)).sum()
+      outputs = {"x": x, "log_det": log_det}
+
     return outputs

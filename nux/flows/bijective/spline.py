@@ -71,7 +71,7 @@ def spline(theta: jnp.ndarray,
   searchsorted = vmap(partial(jnp.searchsorted, side="right"))
   take = vmap(jnp.take)
 
-  if(sample == False):
+  if sample == False:
     indices = searchsorted(knot_x, inputs) - 1
   else:
     indices = searchsorted(knot_y, inputs) - 1

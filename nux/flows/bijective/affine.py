@@ -165,7 +165,7 @@ class OneByOneConv(AutoBatchedLayer):
     W = hk.get_parameter("W", shape=(channel, channel), dtype=dtype, init=self.W_init)
     b = hk.get_parameter("b", shape=shape, dtype=dtype, init=jnp.zeros)
 
-    if(self.weight_norm):
+    if self.weight_norm:
       W *= jax.lax.rsqrt(jnp.sum(W**2, axis=0))
 
     if sample == False:

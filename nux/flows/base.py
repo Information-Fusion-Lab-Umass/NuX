@@ -214,12 +214,12 @@ class AutoBatchedLayer(Layer):
 
     # Evaluate the function or do flow norm initialization
     flow_norm = kwargs.get("flow_norm", False)
-    if flow_norm is False:
-      outputs = self.call(inputs, rng, sample=sample, no_batching=no_batching, **kwargs)
-    else:
+    outputs = self.call(inputs, rng, sample=sample, no_batching=no_batching, **kwargs)
+
+    if flow_norm:
       input_no_grad = jax.lax.stop_gradient(inputs)
-      outputs = self.call(input_no_grad, rng, sample=sample, no_batching=no_batching, **kwargs)
-      outputs["flow_norm"] = -0.5*jnp.sum(outputs["x"]**2) + outputs.get("log_det", jnp.array(0.0))
+      fn_outputs = self.call(input_no_grad, rng, sample=sample, no_batching=no_batching, **kwargs)
+      outputs["flow_norm"] = -0.5*jnp.sum(fn_outputs["x"]**2) + fn_outputs.get("log_det", jnp.array(0.0))
 
     # Record the output shapes.  outputs is unbatched!
     if sample == False:

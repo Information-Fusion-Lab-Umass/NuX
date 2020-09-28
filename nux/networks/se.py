@@ -28,7 +28,7 @@ class SqueezeExcitation(hk.Module):
     w2 = hk.get_parameter("w2", (C, c), x.dtype, init=self.w_init)
 
     # Apply the SE transforms
-    z = np.mean(x, axis=(-2, -3))
+    z = jnp.mean(x, axis=(-2, -3))
     z = w1@z
     z = jax.nn.relu(z)
     z = w2@z

@@ -76,9 +76,9 @@ class ResidualFlow(AutoBatchedLayer):
 
   def __init__(self,
                res_block_create_fun: Callable=None,
-               scale: Optional[float]=0.85,
+               scale: Optional[float]=0.9,
                spectral_norm_iters: Optional[int]=1,
-               fixed_point_iters: Optional[int]=1000,
+               fixed_point_iters: Optional[int]=5000,
                layer_sizes: Sequence[int]=[1024]*4,
                n_channels: Optional[int]=256,
                exact_log_det: Optional[bool]=False,
@@ -96,17 +96,17 @@ class ResidualFlow(AutoBatchedLayer):
   # Initialize the residual block
   def default_res_block(self, x):
     out_dim = x.shape[-1]
-    if(x.ndim < 3):
+    if x.ndim < 3:
       return net.MLP(out_dim=out_dim,
                      layer_sizes=self.layer_sizes,
                      parameter_norm="spectral",
-                     nonlinearity="relu")
+                     nonlinearity="lipswish")
     else:
 
       return net.ConvBlock(out_channel=out_dim,
                            hidden_channel=self.n_channels,
                            parameter_norm="spectral",
-                           nonlinearity="relu")
+                           nonlinearity="lipswish")
 
   def call(self,
            inputs: Mapping[str, jnp.ndarray],
@@ -120,10 +120,10 @@ class ResidualFlow(AutoBatchedLayer):
 
     if sample == False:
       x = inputs["x"]
-      if(self.exact_log_det):
+      if self.exact_log_det:
         z, log_det = res_flow_exact(res_block, x)
 
-        if(compare):
+        if compare:
           rngs = random.split(rng, 1000)
           _, log_det_ests = vmap(partial(res_flow_estimate, res_block, x))(rngs)
           print()

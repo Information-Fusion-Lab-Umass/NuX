@@ -20,12 +20,12 @@ def get_weight(name: str,
                parameter_norm: str=None):
   w = hk.get_parameter(name, (out_dim, in_dim), init=init)
 
-  if(parameter_norm == "spectral"):
+  if parameter_norm == "spectral":
     u = hk.get_state(f"u_{name}", (out_dim,), init=hk.initializers.RandomNormal())
     w, u = sn.spectral_norm_apply(w, u, 0.9, 1)
     hk.set_state(f"u_{name}", u)
 
-  elif(parameter_norm == "spectral"):
+  elif parameter_norm == "spectral":
     w = weight_norm(w)
 
   return w
@@ -47,10 +47,12 @@ class MLP(hk.Module):
     self.layer_sizes    = layer_sizes + [self.out_dim]
     self.parameter_norm = parameter_norm
 
-    if(nonlinearity == "relu"):
+    if nonlinearity == "relu":
       self.nonlinearity = jax.nn.relu
-    elif(nonlinearity == "lipswish"):
+    elif nonlinearity == "lipswish":
       self.nonlinearity = lambda x: jax.nn.swish(x)/1.1
+    else:
+      assert 0, "Invalid nonlinearity"
 
     self.w_init = hk.initializers.VarianceScaling(1.0, "fan_avg", "truncated_normal") if w_init is None else w_init
     self.b_init = jnp.zeros if b_init is None else b_init
@@ -70,7 +72,7 @@ class MLP(hk.Module):
       b = hk.get_parameter(f"b_{i}", [output_size], init=self.b_init)
       x = w@x + b
 
-      if(i < len(self.layer_sizes) - 1):
+      if i < len(self.layer_sizes) - 1:
         x = self.nonlinearity(x)
 
     return x
