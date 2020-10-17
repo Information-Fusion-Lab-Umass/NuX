@@ -138,11 +138,14 @@ class CouplingMixtureCDF(AutoBatchedLayer):
                n_components: int=8,
                create_network: Callable=None,
                name: str="coupling_mixture_cdf",
+               layer_sizes: Sequence[int]=[128]*4,
                **kwargs):
     super().__init__(name=name)
+    self.layer_sizes    = layer_sizes
     self.n_components   = n_components
     self.create_network = create_network
-    self.network_kwargs = kwargs["res_net_kwargs"]
+    if "res_net_kwargs" in kwargs:
+      self.network_kwargs = kwargs["res_net_kwargs"]
 
   def f(self, weight_logits, means, log_scales, x):
     assert 0
@@ -167,7 +170,7 @@ class CouplingMixtureCDF(AutoBatchedLayer):
 
     return net.MLP(out_dim=output_dim*3*n_components,
                    layer_sizes=self.layer_sizes,
-                   parameter_norm=self.parameter_norm,
+                   parameter_norm="weight_norm",
                    nonlinearity="relu")
 
   def call(self, inputs: Mapping[str, jnp.ndarray], rng: jnp.ndarray=None, sample: Optional[bool]=False, **kwargs) -> Mapping[str, jnp.ndarray]:
@@ -401,19 +404,26 @@ class _LogitsticMixtureMixin():
 
 class _LogitsticMixtureLogitMixin():
   """ Combined logistic mixture -> logit """
-  def __init__(self, n_components: int=4, name: str="logistic_mixture_cdf", **kwargs):
+  def __init__(self, n_components: int=4, name: str="logistic_mixture_cdf", restrict_scales: bool=True, **kwargs):
     super().__init__(n_components=n_components, name=name, **kwargs)
+    self.restrict_scales = restrict_scales
 
   def f(self, weight_logits, means, log_scales, x):
-    # log_scales = jnp.tanh(log_scales)
-    z_scores = (x - means)*jnp.exp(-log_scales)
+    if self.restrict_scales:
+      log_scales = 1.5*jnp.tanh(log_scales)
+      z_scores = (x - means)*jnp.exp(-log_scales)
+    else:
+      z_scores = (x - means)/(jnp.exp(log_scales) + 1e-5)
     log_z = logsumexp(weight_logits - jax.nn.softplus(-z_scores))
     log_1mz = logsumexp(weight_logits - jax.nn.softplus(z_scores))
     return log_z - log_1mz
 
   def log_det(self, weight_logits, means, log_scales, x):
-    # log_scales = jnp.tanh(log_scales)
-    z_scores = (x - means)*jnp.exp(-log_scales)
+    if self.restrict_scales:
+      log_scales = 1.5*jnp.tanh(log_scales)
+      z_scores = (x - means)*jnp.exp(-log_scales)
+    else:
+      z_scores = (x - means)/(jnp.exp(log_scales) + 1e-5)
     t1 = -jax.nn.softplus(-z_scores)
     t2 = -jax.nn.softplus(z_scores)
 
@@ -421,7 +431,7 @@ class _LogitsticMixtureLogitMixin():
     b = weight_logits + t2
 
     log_pdf = -log_scales + t1 + t2
-    mixture_log_pdf = logsumexp(weight_logits - log_scales + t1 + t2)
+    mixture_log_pdf = logsumexp(weight_logits + log_pdf)
 
     logit_log_det = logsumexp(jnp.hstack([a, b])) - logsumexp(a) - logsumexp(b)
 

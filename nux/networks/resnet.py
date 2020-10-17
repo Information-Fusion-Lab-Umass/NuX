@@ -41,7 +41,7 @@ class ResNet(hk.Module):
     self.use_projection  = use_projection
     self.zero_last_conv  = zero_last_conv
 
-    if(parameter_norm is "spectral_norm"):
+    if(parameter_norm == "spectral_norm"):
       assert self.identity_init == False, "We will divide by 0 with parameter normalization and zero init!"
 
   def __call__(self, x, **kwargs):

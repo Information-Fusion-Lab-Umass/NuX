@@ -8,6 +8,7 @@ __all__ = ["FlowPP",
 def FlowPP(n_blocks: int=6,
            n_components: int=8,
            mixture_type="logistic",
+           one_dim=False,
            **kwargs):
 
     mixture_kwargs = {}
@@ -15,7 +16,10 @@ def FlowPP(n_blocks: int=6,
     layers = []
     for i in range(n_blocks):
       layers.append(nux.ActNorm())
-      layers.append(nux.OneByOneConv())
+      if one_dim:
+        layers.append(nux.AffineLDU())
+      else:
+        layers.append(nux.OneByOneConv())
       if(mixture_type == "logistic"):
         layers.append(nux.CouplingLogitsticMixtureLogit(n_components=n_components, **kwargs))
       elif(mixture_type == "logistic_linear"):

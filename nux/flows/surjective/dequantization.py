@@ -42,42 +42,48 @@ class UniformDequantization(AutoBatchedLayer):
     log_det = -jnp.log(self.scale)*jnp.prod(jnp.array(x.shape))
     return {"x": z, "log_det": log_det}
 
-class VariationalDequantization(Layer):
+################################################################################################################
 
-  def __init__(self, scale: float, flow: Optional[Callable]=None, name: str="variational_dequantization", **kwargs):
+class VariationalDequantization(AutoBatchedLayer):
+  # This takes up a ton of memory!
+
+  def __init__(self,
+               scale: float,
+               flow: Optional[Callable]=None,
+               name: str="variational_dequantization",
+               **kwargs):
     super().__init__(name=name, **kwargs)
     self.scale = scale
     self.flow  = flow
 
   def default_flow(self):
-      return nux.sequential(nux.Logit(),
-                            nux.OneByOneConv(),
-                            nux.ConditionedCoupling(),
-                            nux.OneByOneConv(),
-                            nux.ConditionedCoupling(),
-                            nux.OneByOneConv(),
-                            nux.ConditionedCoupling(),
-                            nux.UnitGaussianPrior())
+    return nux.sequential(nux.Logit(),
+                          nux.ActNorm(),
+                          nux.OneByOneConv(),
+                          nux.ConditionedCoupling(),
+                          nux.ActNorm(),
+                          nux.OneByOneConv(),
+                          nux.ConditionedCoupling(),
+                          nux.ActNorm(),
+                          nux.OneByOneConv(),
+                          nux.ConditionedCoupling(),
+                          nux.UnitGaussianPrior())
 
   def call(self,
            inputs: Mapping[str, jnp.ndarray],
+           rng: PRNGKey,
            sample: Optional[bool]=False,
            **kwargs
   ) -> Mapping[str, jnp.ndarray]:
 
     x = inputs["x"]
-    log_det = -jnp.log(self.scale)*jnp.prod(jnp.array(self.expected_shapes["x"]))
-
-    # We don't want to auto batch this function because the rest of the flow might be autobatched
-    expected_ndim = len(self.expected_shapes["x"])
-    if expected_ndim < x.ndim:
-      batch_dimensions = x.shape[:x.ndim - expected_ndim]
-      log_det = jnp.ones(batch_dimensions)*log_det
+    log_det = -jnp.log(self.scale)*jnp.prod(jnp.array(x.shape))
 
     if sample == False:
       flow = self.flow if self.flow is not None else self.default_flow()
       flow_inputs = {"x": jnp.zeros(x.shape), "condition": x}
-      outputs = flow(flow_inputs, sample=True)
+      import pdb; pdb.set_trace()
+      outputs = flow(flow_inputs, rng, sample=True, no_batching=True)
 
       noise = outputs["x"]
       z = (x + noise)/self.scale
