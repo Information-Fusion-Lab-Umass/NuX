@@ -16,7 +16,7 @@ from nux.tests.bijective_test import flow_test
 if __name__ == "__main__":
 
   def create_fun():
-    return nux.MultiscaleGLOW(2, 2)
+    return nux.CouplingLogitsticMixtureLogit()
     # return nux.CouplingLogitsticMixtureLogit(reverse=True, use_condition=True)
     return nux.sequential(nux.SurjectiveMaxPool(),
                           nux.UnitGaussianPrior())

@@ -29,7 +29,7 @@ class Identity(Layer):
            sample: Optional[bool]=False,
            **kwargs
   ) -> Mapping[str, jnp.ndarray]:
-    return {"x": inputs["x"], "log_det": jnp.array(0.0)}
+    return {"x": inputs["x"], "log_det": jnp.zeros(self.batch_shape)}
 
 ################################################################################################################
 

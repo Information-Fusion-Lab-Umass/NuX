@@ -66,6 +66,24 @@ def mixture_forward(eval_fun, log_det_fun, x, theta):
   # Apply the mixture
   return f(weight_logits, means, log_scales, x), log_det(weight_logits, means, log_scales, x).sum()
 
+def mixture_forward2(f_and_log_det_fun, x, theta):
+  # Split the parameters
+  n_components = theta.shape[-1]//3
+  weight_logits, means, log_scales = jnp.split(theta, jnp.array([n_components, 2*n_components]), axis=-1)
+  weight_logits = jax.nn.log_softmax(weight_logits)
+
+  # We're going to have a set of parameters for each element of x
+  assert means.shape[:-1] == x.shape
+
+  # We are going to vmap over each pixel
+  f_and_log_det = f_and_log_det_fun
+  for i in range(len(x.shape)):
+    f_and_log_det = vmap(f_and_log_det)
+
+  # Apply the mixture
+  z, log_det = f_and_log_det(weight_logits, means, log_scales, x)
+  return z, log_det.sum()
+
 def mixture_inverse(eval_fun, log_det_fun, x, theta):
   # Split the parameters
   n_components = theta.shape[-1]//3
@@ -116,6 +134,9 @@ class MixtureCDF(Layer):
   def log_det(self, weight_logits, means, log_scales, x):
     assert 0
 
+  def f_and_log_det(self, weight_logits, means, log_scales, x):
+    return self.f(weight_logits, means, log_scales, x), self.log_det(weight_logits, means, log_scales, x)
+
   def call(self, inputs: Mapping[str, jnp.ndarray], rng: jnp.ndarray=None, sample: Optional[bool]=False, **kwargs) -> Mapping[str, jnp.ndarray]:
     x = inputs["x"]
     outputs = {}
@@ -148,7 +169,8 @@ class CouplingMixtureCDF(Layer):
     self.reverse        = reverse
     self.use_condition  = use_condition
 
-    self.forward = partial(mixture_forward, self.f, self.log_det)
+    self.forward = partial(mixture_forward2, self.f_and_log_det)
+    # self.forward = partial(mixture_forward, self.f, self.log_det)
     self.inverse = partial(mixture_inverse, self.f, self.log_det)
 
   def f(self, weight_logits, means, log_scales, x):
@@ -156,6 +178,9 @@ class CouplingMixtureCDF(Layer):
 
   def log_det(self, weight_logits, means, log_scales, x):
     assert 0
+
+  def f_and_log_det(self, weight_logits, means, log_scales, x):
+    return self.f(weight_logits, means, log_scales, x), self.log_det(weight_logits, means, log_scales, x)
 
   def get_network(self, image_in, x2, n_components):
 
@@ -307,6 +332,31 @@ class _LogitsticMixtureLogitMixin():
 
     return mixture_log_pdf + logit_log_det
 
+  def f_and_log_det(self, weight_logits, means, log_scales, x):
+    if self.restrict_scales:
+      log_scales = 1.5*jnp.tanh(log_scales)
+      z_scores = (x - means)*jnp.exp(-log_scales)
+    else:
+      z_scores = (x - means)/(jnp.exp(log_scales) + 1e-5)
+
+    t1 = -jax.nn.softplus(-z_scores)
+    t2 = -jax.nn.softplus(z_scores)
+
+    a = weight_logits + t1
+    b = weight_logits + t2
+
+    log_z = logsumexp(a)
+    log_1mz = logsumexp(b)
+    z = log_z - log_1mz
+
+    log_pdf = -log_scales + t1 + t2
+    mixture_log_pdf = logsumexp(weight_logits + log_pdf)
+
+    logit_log_det = logsumexp(jnp.hstack([a, b])) - log_z - log_1mz
+
+    log_det = mixture_log_pdf + logit_log_det
+    return z, log_det
+
 ################################################################################################################
 
 class GaussianMixtureCDF(_GaussianMixtureMixin, MixtureCDF):
@@ -325,7 +375,4 @@ class LogitsticMixtureLogit(_LogitsticMixtureLogitMixin, MixtureCDF):
   pass
 
 class CouplingLogitsticMixtureLogit(_LogitsticMixtureLogitMixin, CouplingMixtureCDF):
-  pass
-
-class CouplingGaussianMixtureLogit(_LogitsticMixtureLogitMixin, CouplingMixtureCDF):
   pass
