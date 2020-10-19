@@ -15,7 +15,7 @@ from haiku._src.typing import PRNGKey
 __all__ = ["UnitGaussianPrior",
            "GMMPrior"]
 
-class UnitGaussianPrior(AutoBatchedLayer):
+class UnitGaussianPrior(Layer):
 
   def __init__(self, name: str="unit_gaussian_prior", **kwargs):
     super().__init__(name=name, **kwargs)
@@ -29,26 +29,29 @@ class UnitGaussianPrior(AutoBatchedLayer):
            **kwargs
   ) -> Mapping[str, jnp.ndarray]:
     outputs = {}
+    x_shape = self.get_unbatched_shapes(sample)["x"]
+    sum_axes = tuple(-jnp.arange(1, 1 + len(x_shape)))
 
     normal = dists.Normal(0, t)
 
     if sample == False:
       x = inputs["x"]
-      log_pz = normal.log_prob(x).sum()
+      log_pz = normal.log_prob(x).sum(axis=sum_axes)
       outputs = {"x": x, "log_pz": log_pz}
     else:
       z = inputs["x"]
       if ignore_prior:
-        outputs = {"x": z, "log_pz": jnp.array(0.0)}
+        outputs = {"x": z, "log_pz": jnp.zeros(self.batch_shape)}
       else:
         x = normal.sample(rng, z.shape)
-        log_pz = normal.log_prob(x).sum()
+        log_pz = normal.log_prob(x).sum(axis=sum_axes)
         outputs = {"x": x, "log_pz": log_pz}
+
     return outputs
 
 ################################################################################################################
 
-class GMMPrior(AutoBatchedLayer):
+class GMMPrior(Layer):
 
   def __init__(self, n_classes: int, name: str="gmm_prior", **kwargs):
     super().__init__(name=name, **kwargs)
@@ -64,21 +67,27 @@ class GMMPrior(AutoBatchedLayer):
     x = inputs["x"]
     y = inputs.get("y", -1)
     outputs = {}
+    x_shape = self.get_unbatched_shapes(sample)["x"]
+    sum_axes = tuple(-jnp.arange(1, 1 + len(x_shape)))
+    x_flat = x.reshape(self.batch_shape + (-1,))
 
     # Keep these fixed.  Learning doesn't make much difference apparently.
-    means         = hk.get_state("means", shape=(self.n_classes, x.shape[-1]), dtype=x.dtype, init=hk.initializers.RandomNormal())
-    log_diag_covs = hk.get_state("log_diag_covs", shape=(self.n_classes, x.shape[-1]), dtype=x.dtype, init=jnp.zeros)
+    means         = hk.get_state("means", shape=(self.n_classes, x_flat.shape[-1]), dtype=x.dtype, init=hk.initializers.RandomNormal())
+    log_diag_covs = hk.get_state("log_diag_covs", shape=(self.n_classes, x_flat.shape[-1]), dtype=x.dtype, init=jnp.zeros)
 
     # Compute the log pdfs of each mixture component
     normal = dists.Normal(means, jnp.exp(log_diag_covs))
-    log_pdfs = normal.log_prob(x).sum(axis=-1)
+    log_pdfs = self.auto_batch(normal.log_prob)(x_flat)
+    log_pdfs = log_pdfs.sum(axis=-1)
 
     if sample == False:
       # Compute p(x,y) = p(x|y)p(y) if we have a label, p(x) otherwise
-      outputs["log_pz"] = jax.lax.cond(y >= 0,
-                                       lambda a: log_pdfs[y] + jnp.log(self.n_classes),
-                                       lambda a: logsumexp(log_pdfs) - jnp.log(self.n_classes),
-                                       None)
+      def log_prob(y, log_pdfs):
+        return jax.lax.cond(y >= 0,
+                            lambda a: log_pdfs[y] + jnp.log(self.n_classes),
+                            lambda a: logsumexp(log_pdfs) - jnp.log(self.n_classes),
+                            None)
+      outputs["log_pz"] = self.auto_batch(log_prob)(y, log_pdfs)
       outputs["x"] = x
 
     else:
@@ -88,19 +97,24 @@ class GMMPrior(AutoBatchedLayer):
         # Sample from all of the clusters
         xs = normal.sample(rng)
 
-        def no_label(y):
-          rng = hk.next_rng_key() # NEED TO SPLIT THE KEY
-          y = dists.CategoricalLogits(jnp.zeros(self.n_classes)).sample(rng, (1,))[0]
-          return y, logsumexp(log_pdfs) - jnp.log(self.n_classes)
+        def sample(log_pdfs, y, rng):
 
-        def with_label(y):
-          return y, log_pdfs[y] - jnp.log(self.n_classes)
+          def no_label(y):
+            y = dists.CategoricalLogits(jnp.zeros(self.n_classes)).sample(rng, (1,))[0]
+            return y, logsumexp(log_pdfs) - jnp.log(self.n_classes)
 
-        # Either sample or use a specified cluster
-        y, log_pz = jax.lax.cond(y < 0, no_label, with_label, y)
+          def with_label(y):
+            return y, log_pdfs[y] - jnp.log(self.n_classes)
+
+          # Either sample or use a specified cluster
+          return jax.lax.cond(y < 0, no_label, with_label, y)
+
+        n_keys = int(jnp.prod(jnp.array(self.batch_shape)))
+        rngs = random.split(rng, n_keys).reshape(self.batch_shape + (-1,))
+        y, log_pz = self.auto_batch(sample)(log_pdfs, y, rngs)
 
         # Take a specific cluster
-        outputs = {"x": xs[y], "log_pz": log_pz}
+        outputs = {"x": xs[y].reshape(x.shape), "log_pz": log_pz}
 
     outputs["prediction"] = jnp.argmax(log_pdfs)
 

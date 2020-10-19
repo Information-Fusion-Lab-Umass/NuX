@@ -15,14 +15,21 @@ __all__ = ["LeakyReLU",
            "Logit",
            "SoftplusInverse"]
 
-class LeakyReLUInv(AutoBatchedLayer):
+class LeakyReLUInv(Layer):
 
   def __init__(self, alpha: float=0.01, name: str="leaky_relu", **kwargs):
     super().__init__(name=name, **kwargs)
     self.alpha = alpha
 
-  def call(self, inputs: Mapping[str, jnp.ndarray], rng: jnp.ndarray=None, sample: Optional[bool]=False, **kwargs) -> Mapping[str, jnp.ndarray]:
+  def call(self,
+           inputs: Mapping[str, jnp.ndarray],
+           rng: jnp.ndarray=None,
+           sample: Optional[bool]=False,
+           **kwargs
+  ) -> Mapping[str, jnp.ndarray]:
     x = inputs["x"]
+    x_shape = self.get_unbatched_shapes(sample)["x"]
+    sum_axes = tuple(-jnp.arange(1, 1 + len(x_shape)))
 
     if sample == True:
       z = jnp.where(x > 0, x, self.alpha*x)
@@ -30,23 +37,26 @@ class LeakyReLUInv(AutoBatchedLayer):
       z = jnp.where(x > 0, x, x/self.alpha)
 
     log_dx_dz = jnp.where(x > 0, 0, jnp.log(self.alpha))
-    log_det = log_dx_dz.sum(axis=-1)
-
-    if log_det.ndim > 1:
-      # Then we have an image and have to sum over the height and width axes
-      log_det = log_det.sum(axis=(-2, -1))
+    log_det = log_dx_dz.sum(axis=sum_axes)*jnp.ones(self.batch_shape)
 
     outputs = {"x": z, "log_det": -log_det}
     return outputs
 
-class LeakyReLU(AutoBatchedLayer):
+class LeakyReLU(Layer):
 
   def __init__(self, alpha: float=0.01, name: str="leaky_relu", **kwargs):
     super().__init__(name=name, **kwargs)
     self.alpha = alpha
 
-  def call(self, inputs: Mapping[str, jnp.ndarray], rng: jnp.ndarray=None, sample: Optional[bool]=False, **kwargs) -> Mapping[str, jnp.ndarray]:
+  def call(self,
+           inputs: Mapping[str, jnp.ndarray],
+           rng: jnp.ndarray=None,
+           sample: Optional[bool]=False,
+           **kwargs
+  ) -> Mapping[str, jnp.ndarray]:
     x = inputs["x"]
+    x_shape = self.get_unbatched_shapes(sample)["x"]
+    sum_axes = tuple(-jnp.arange(1, 1 + len(x_shape)))
 
     if sample == False:
       z = jnp.where(x > 0, x, self.alpha*x)
@@ -54,16 +64,12 @@ class LeakyReLU(AutoBatchedLayer):
       z = jnp.where(x > 0, x, x/self.alpha)
 
     log_dx_dz = jnp.where(x > 0, 0, jnp.log(self.alpha))
-    log_det = log_dx_dz.sum(axis=-1)
-
-    if log_det.ndim > 1:
-      # Then we have an image and have to sum over the height and width axes
-      log_det = log_det.sum(axis=(-2, -1))
+    log_det = log_dx_dz.sum(axis=sum_axes)*jnp.ones(self.batch_shape)
 
     outputs = {"x": z, "log_det": log_det}
     return outputs
 
-class SneakyReLU(AutoBatchedLayer):
+class SneakyReLU(Layer):
 
   """ Adapted from https://github.com/didriknielsen/survae_flows/blob/master/survae/transforms/bijections/elementwise_nonlinear.py """
 
@@ -73,9 +79,16 @@ class SneakyReLU(AutoBatchedLayer):
     # Sneaky ReLU uses a different convention
     self.alpha = (1.0 - alpha)/(1.0 + alpha)
 
-  def call(self, inputs: Mapping[str, jnp.ndarray], rng: jnp.ndarray=None, sample: Optional[bool]=False, **kwargs) -> Mapping[str, jnp.ndarray]:
+  def call(self,
+           inputs: Mapping[str, jnp.ndarray],
+           rng: jnp.ndarray=None,
+           sample: Optional[bool]=False,
+           **kwargs
+  ) -> Mapping[str, jnp.ndarray]:
 
     outputs = {}
+    x_shape = self.get_unbatched_shapes(sample)["x"]
+    sum_axes = tuple(-jnp.arange(1, 1 + len(x_shape)))
 
     if sample == False:
       x = inputs["x"]
@@ -91,26 +104,29 @@ class SneakyReLU(AutoBatchedLayer):
       sqrt_1px2 = jnp.sqrt(1 + x**2)
 
     log_det = jnp.log(1 + self.alpha*x/sqrt_1px2) - jnp.log(1 + self.alpha)
-    log_det = log_det.sum(axis=-1)
-
-    if log_det.ndim > 1:
-      # Then we have an image and have to sum over the height and width axes
-      log_det = log_det.sum(axis=(-2, -1))
+    log_det = log_det.sum(axis=sum_axes)*jnp.ones(self.batch_shape)
 
     outputs["log_det"] = log_det
     return outputs
 
 ################################################################################################################
 
-class Sigmoid(AutoBatchedLayer):
+class Sigmoid(Layer):
 
   def __init__(self, scale: Optional[float]=None, name: str="sigmoid", **kwargs):
     super().__init__(name=name, **kwargs)
     self.scale = scale
     self.has_scale = scale is not None
 
-  def call(self, inputs: Mapping[str, jnp.ndarray], rng: jnp.ndarray=None, sample: Optional[bool]=False, **kwargs) -> Mapping[str, jnp.ndarray]:
+  def call(self,
+           inputs: Mapping[str, jnp.ndarray],
+           rng: jnp.ndarray=None,
+           sample: Optional[bool]=False,
+           **kwargs
+  ) -> Mapping[str, jnp.ndarray]:
     x = inputs["x"]
+    x_shape = self.get_unbatched_shapes(sample)["x"]
+    sum_axes = tuple(-jnp.arange(1, 1 + len(x_shape)))
 
     if sample == False:
       z = jax.nn.sigmoid(x)
@@ -131,25 +147,29 @@ class Sigmoid(AutoBatchedLayer):
     if self.has_scale == True:
       log_det -= jnp.log(1.0 - 2*self.scale)
 
-    log_det = log_det.sum(axis=-1)
-
-    if log_det.ndim > 1:
-      # Then we have an image and have to sum over the height and width axes
-      log_det = log_det.sum(axis=(-2, -1))
+    log_det = log_det.sum(axis=sum_axes)*jnp.ones(self.batch_shape)
 
     outputs = {"x": z, "log_det": log_det}
     return outputs
 
-class Logit(AutoBatchedLayer):
+class Logit(Layer):
 
   def __init__(self, scale: Optional[float]=0.05, name: str="logit", **kwargs):
     super().__init__(name=name, **kwargs)
     self.scale = scale
     self.has_scale = scale is not None
 
-  def call(self, inputs: Mapping[str, jnp.ndarray], rng: jnp.ndarray=None, sample: Optional[bool]=False, generate_image: Optional[bool]=False, **kwargs) -> Mapping[str, jnp.ndarray]:
+  def call(self,
+           inputs: Mapping[str, jnp.ndarray],
+           rng: jnp.ndarray=None,
+           sample: Optional[bool]=False,
+           generate_image: Optional[bool]=False,
+           **kwargs
+  ) -> Mapping[str, jnp.ndarray]:
     x = inputs["x"]
     outputs = {}
+    x_shape = self.get_unbatched_shapes(sample)["x"]
+    sum_axes = tuple(-jnp.arange(1, 1 + len(x_shape)))
 
     if sample == False:
       if self.has_scale == True:
@@ -173,10 +193,7 @@ class Logit(AutoBatchedLayer):
     if self.has_scale == True:
       log_det += jnp.log(1.0 - 2*self.scale)
 
-    log_det = log_det.sum(axis=-1)
-    if log_det.ndim > 1:
-      # Then we have an image and have to sum more
-      log_det = log_det.sum(axis=(-2, -1))
+    log_det = log_det.sum(axis=sum_axes)*jnp.ones(self.batch_shape)
 
     outputs["x"] = z
     outputs["log_det"] = log_det
@@ -184,24 +201,33 @@ class Logit(AutoBatchedLayer):
 
 ################################################################################################################
 
-class SoftplusInverse(AutoBatchedLayer):
+class SoftplusInverse(Layer):
 
   """ Adapted from https://github.com/didriknielsen/survae_flows/blob/master/survae/transforms/bijections/elementwise_nonlinear.py """
 
   def __init__(self, name: str="softplus_inv", **kwargs):
     super().__init__(name=name, **kwargs)
 
-  def call(self, inputs: Mapping[str, jnp.ndarray], rng: jnp.ndarray=None, sample: Optional[bool]=False, generate_image: Optional[bool]=False, **kwargs) -> Mapping[str, jnp.ndarray]:
+  def call(self,
+           inputs: Mapping[str, jnp.ndarray],
+           rng: jnp.ndarray=None,
+           sample: Optional[bool]=False,
+           generate_image: Optional[bool]=False,
+           **kwargs
+  ) -> Mapping[str, jnp.ndarray]:
+    x_shape = self.get_unbatched_shapes(sample)["x"]
+    sum_axes = tuple(-jnp.arange(1, 1 + len(x_shape)))
+
     if sample == False:
       x = inputs["x"]
       x = jnp.where(x < 0.0, 1e-5, x)
       dx = jnp.log1p(-jnp.exp(-x))
       z = x + dx
-      log_det = -dx.sum()
+      log_det = -dx.sum(axis=sum_axes)*jnp.ones(self.batch_shape)
       outputs = {"x": z, "log_det": log_det}
     else:
       x = jax.nn.softplus(inputs["x"])
-      log_det = -jnp.log1p(-jnp.exp(x)).sum()
+      log_det = -jnp.log1p(-jnp.exp(x)).sum(axis=sum_axes)*jnp.ones(self.batch_shape)
       outputs = {"x": x, "log_det": log_det}
 
     return outputs

@@ -87,9 +87,9 @@ class GaussianMADE(hk.Module):
 
 ################################################################################################################
 
-class MAF(AutoBatchedLayer):
+class MAF(Layer):
 
-  def __init__(self, hidden_layer_sizes:Sequence[int], method: str='sequential', name: str="maf", **kwargs):
+  def __init__(self, hidden_layer_sizes: Sequence[int], method: str='sequential', name: str="maf", **kwargs):
     super().__init__(name=name, **kwargs)
     self.hidden_layer_sizes = hidden_layer_sizes
     self.method = method
@@ -111,26 +111,31 @@ class MAF(AutoBatchedLayer):
 
     if sample == False:
       x = inputs["x"]
-      mu, alpha = made(x)
+      mu, alpha = self.auto_batch(made)(x)
       z = (x - mu)*jnp.exp(-alpha)
-      log_det = -alpha.sum(axis=-1)
+      log_det = -alpha.sum(axis=-1)*jnp.ones(self.batch_shape)
       outputs = {"x": z, "log_det": log_det}
     else:
       z = inputs["x"]
-      x = jnp.zeros_like(z)
-      u = z
 
-      # We need to build output a dimension at a time
-      def carry_body(carry, inputs):
-        x, idx = carry, inputs
-        mu, alpha = made(x)
-        w = mu + u*jnp.exp(alpha)
-        x = jax.ops.index_update(x, idx, w[idx])
-        return x, alpha[idx]
+      def inverse(z):
+        x = jnp.zeros_like(z)
+        u = z
 
-      indices = jnp.nonzero(input_sel == (1 + jnp.arange(x.shape[0])[:,None]))[1]
-      x, alpha_diag = jax.lax.scan(carry_body, x, indices)
-      log_det = -alpha_diag.sum(axis=-1)
+        # We need to build output a dimension at a time
+        def carry_body(carry, inputs):
+          x, idx = carry, inputs
+          mu, alpha = made(x)
+          w = mu + u*jnp.exp(alpha)
+          x = jax.ops.index_update(x, idx, w[idx])
+          return x, alpha[idx]
+
+        indices = jnp.nonzero(input_sel == (1 + jnp.arange(x.shape[0])[:,None]))[1]
+        x, alpha_diag = jax.lax.scan(carry_body, x, indices)
+        log_det = -alpha_diag.sum(axis=-1)
+        return x, log_det
+
+      x, log_det = self.auto_batch(inverse)(z)
       outputs = {"x": x, "log_det": log_det}
 
     return outputs

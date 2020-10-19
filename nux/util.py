@@ -63,7 +63,7 @@ def whiten(x):
 
 ################################################################################################################
 
-def dilated_squeeze(x, filter_shape, dilation):
+def dilated_squeeze(x, filter_shape=(2, 2), dilation=(1, 1)):
     H, W, C = x.shape
 
     fh, fw = filter_shape
@@ -82,7 +82,7 @@ def dilated_squeeze(x, filter_shape, dilation):
     x = x.reshape((H//fh, W//fw, C*fh*fw))
     return x
 
-def dilated_unsqueeze(x, filter_shape, dilation):
+def dilated_unsqueeze(x, filter_shape=(2, 2), dilation=(1, 1)):
 
     fh, fw = filter_shape
     dh, dw = dilation

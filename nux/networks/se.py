@@ -21,7 +21,7 @@ class SqueezeExcitation(hk.Module):
     self.w_init = hk.initializers.VarianceScaling(1.0, "fan_avg", "truncated_normal") if w_init is None else w_init
 
   def __call__(self, x, **kwargs):
-    H, W, C = x.shape
+    H, W, C = x.shape[-3:]
     c = C//self.reduce_ratio
 
     w1 = hk.get_parameter("w1", (c, C), x.dtype, init=self.w_init)
@@ -29,10 +29,10 @@ class SqueezeExcitation(hk.Module):
 
     # Apply the SE transforms
     z = jnp.mean(x, axis=(-2, -3))
-    z = w1@z
+    z = jnp.dot(z, w1.T)
     z = jax.nn.relu(z)
-    z = w2@z
+    z = jnp.dot(z, w2.T)
     z = jax.nn.sigmoid(z)
 
     # Scale the input
-    return x*z[None,None,:]
+    return x*z[...,None,None,:]

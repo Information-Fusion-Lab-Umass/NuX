@@ -4,7 +4,7 @@ from functools import partial
 import jax
 import haiku as hk
 import nux.spectral_norm as sn
-from nux.networks.cnn import Conv, ConvBlock
+from nux.networks.cnn import Conv, ConvBlock, BottleneckConv, ReverseBottleneckConv
 from nux.networks.se import SqueezeExcitation
 from typing import Optional, Mapping, Callable, Sequence, Any
 
@@ -14,83 +14,50 @@ class ResNet(hk.Module):
 
   def __init__(self,
                n_blocks: int,
-               hidden_channel: Sequence[int],
-               out_channel: Optional[int]=None,
+               hidden_channel: int,
+               out_channel: int,
                parameter_norm: str=None,
-               norm: str=None,
+               normalization: str=None,
                nonlinearity: str="relu",
-               w_init: Callable=None,
-               b_init: Callable=None,
-               identity_init: bool=True,
                squeeze_excite: bool=False,
-               use_projection: bool=False,
-               zero_last_conv: bool=False,
+               block_type: str="reverse_bottleneck",
                name=None):
     super().__init__(name=name)
 
-    self.n_blocks        = n_blocks
-    self.hidden_channel  = hidden_channel
-    self.parameter_norm  = parameter_norm
-    self.norm            = norm
-    self.nonlinearity    = nonlinearity
-    self.w_init          = w_init
-    self.b_init          = b_init
-    self.out_channel     = out_channel
-    self.identity_init   = identity_init
+    self.conv_block_kwargs = dict(hidden_channel=hidden_channel,
+                                  parameter_norm=parameter_norm,
+                                  normalization=normalization,
+                                  nonlinearity=nonlinearity)
+
+    self.n_blocks       = n_blocks
+    self.out_channel    = out_channel
     self.squeeze_excite = squeeze_excite
-    self.use_projection  = use_projection
-    self.zero_last_conv  = zero_last_conv
 
-    if(parameter_norm == "spectral_norm"):
-      assert self.identity_init == False, "We will divide by 0 with parameter normalization and zero init!"
+    if block_type == "bottleneck":
+      self.conv_block = BottleneckConv
+    elif block_type == "reverse_bottleneck":
+      self.conv_block = ReverseBottleneckConv
+    else:
+      assert 0, "Invalid block type"
 
-  def __call__(self, x, **kwargs):
+  def __call__(self, x, is_training=True, **kwargs):
     channel = x.shape[-1]
     for i in range(self.n_blocks):
-      conv = ConvBlock(out_channel=channel,
-                       hidden_channel=self.hidden_channel,
-                       parameter_norm=self.parameter_norm,
-                       norm=self.norm,
-                       nonlinearity=self.nonlinearity,
-                       w_init=self.w_init,
-                       b_init=self.b_init,
-                       use_bias=False,
-                       zero_init=self.identity_init)
-      z = conv(x)
+      z = self.conv_block(out_channel=channel,
+                          **self.conv_block_kwargs)(x, is_training=is_training)
 
       if self.squeeze_excite:
-        z = SqueezeExcitation(reduce_ratio=8)(z)
+        z = SqueezeExcitation(reduce_ratio=4)(z)
 
-      if self.use_projection:
-        conv = Conv(channel,
-                    kernel_shape=(1, 1),
-                    parameter_norm=self.parameter_norm,
-                    stride=(1, 1),
-                    padding="SAME",
-                    w_init=self.w_init,
-                    b_init=self.b_init,
-                    use_bias=False)
-        x_proj = conv(x)
+      x += z
 
-        x = x_proj + z
-
-      else:
-        x += z
-
-    if self.out_channel is not None:
-      # Add an extra convolution to change the out channels
-      if self.zero_last_conv:
-        w_init = hk.initializers.RandomNormal(stddev=0.1)
-      else:
-        w_init = self.w_init
-      conv = Conv(self.out_channel,
-                  kernel_shape=(1, 1),
-                  parameter_norm=self.parameter_norm,
-                  stride=(1, 1),
-                  padding="SAME",
-                  w_init=w_init,
-                  b_init=self.b_init,
-                  use_bias=False)
-      x = conv(x)
+    # Add an extra convolution to change the out channels
+    conv = Conv(self.out_channel,
+                kernel_shape=(1, 1),
+                stride=(1, 1),
+                padding="SAME",
+                parameter_norm=self.conv_block_kwargs["parameter_norm"],
+                use_bias=False)
+    x = conv(x, is_training=is_training)
 
     return x

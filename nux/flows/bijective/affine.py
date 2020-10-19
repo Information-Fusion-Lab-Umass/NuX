@@ -4,7 +4,7 @@ import nux.util as util
 from jax import random, vmap
 from functools import partial
 import haiku as hk
-from typing import Optional, Mapping, Tuple, Sequence, Union, Any
+from typing import Optional, Mapping, Tuple, Sequence, Union, Any, Callable
 from nux.flows.base import *
 import nux.util as util
 
@@ -14,29 +14,37 @@ __all__ = ["Identity",
            "AffineLDU",
            "AffineSVD",
            "OneByOneConv",
-           "LocalDense",
-           "SmoothHeightWidth",
-           "ConstantConv"]
+           "LocalDense"]
 
 ################################################################################################################
 
-class Identity(AutoBatchedLayer):
+class Identity(Layer):
 
   def __init__(self, name: str="identity", **kwargs):
     super().__init__(name=name, **kwargs)
 
-  def call(self, inputs: Mapping[str, jnp.ndarray], rng: jnp.ndarray=None, **kwargs) -> Mapping[str, jnp.ndarray]:
+  def call(self,
+           inputs: Mapping[str, jnp.ndarray],
+           rng: jnp.ndarray=None,
+           sample: Optional[bool]=False,
+           **kwargs
+  ) -> Mapping[str, jnp.ndarray]:
     return {"x": inputs["x"], "log_det": jnp.array(0.0)}
 
 ################################################################################################################
 
-class Scale(AutoBatchedLayer):
+class Scale(Layer):
 
   def __init__(self, tau, name: str="scale", **kwargs):
     super().__init__(name=name, **kwargs)
     self.tau = tau
 
-  def call(self, inputs: Mapping[str, jnp.ndarray], rng: jnp.ndarray=None, sample: Optional[bool]=False, **kwargs) -> Mapping[str, jnp.ndarray]:
+  def call(self,
+           inputs: Mapping[str, jnp.ndarray],
+           rng: jnp.ndarray=None,
+           sample: Optional[bool]=False,
+           **kwargs
+  ) -> Mapping[str, jnp.ndarray]:
     outputs = {}
 
     if sample == False:
@@ -44,44 +52,60 @@ class Scale(AutoBatchedLayer):
     else:
       outputs["x"] = inputs["x"]*self.tau
 
-    shape = util.tree_shapes(inputs)
-    outputs["log_det"] = -jnp.log(self.tau)*jnp.prod(jnp.array(shape["x"]))
+    shape = self.get_unbatched_shapes(sample)["x"]
+    outputs["log_det"] = jnp.ones(self.batch_shape)
+    outputs["log_det"] *= -jnp.log(self.tau)*jnp.prod(jnp.array(shape))
 
     return outputs
 
 ################################################################################################################
 
-class AffineDense(AutoBatchedLayer):
+class AffineDense(Layer):
 
-  def __init__(self, name: str="affine_dense", **kwargs):
+  def __init__(self,
+               name: str="affine_dense",
+               **kwargs):
     super().__init__(name=name, **kwargs)
 
-  def call(self, inputs: Mapping[str, jnp.ndarray], rng: jnp.ndarray=None, sample: Optional[bool]=False, **kwargs) -> Mapping[str, jnp.ndarray]:
+  def call(self,
+           inputs: Mapping[str, jnp.ndarray],
+           rng: jnp.ndarray=None,
+           sample: Optional[bool]=False,
+           **kwargs
+  ) -> Mapping[str, jnp.ndarray]:
     x = inputs["x"]
     outputs = {}
 
-    W_init = hk.initializers.TruncatedNormal(1/jnp.sqrt(x.shape[-1]))
-    W = hk.get_parameter("W", shape=(x.shape[-1], x.shape[-1]), dtype=inputs["x"].dtype, init=W_init)
-    b = hk.get_parameter("b", shape=(x.shape[-1],), dtype=inputs["x"].dtype, init=jnp.zeros)
+    x_dim, dtype = x.shape[-1], inputs["x"].dtype
+    W_init = hk.initializers.TruncatedNormal(1/jnp.sqrt(x_dim))
+    W = hk.get_parameter("W", shape=(x_dim, x_dim), dtype=dtype, init=W_init)
+    b = hk.get_parameter("b", shape=(x_dim,), dtype=dtype, init=jnp.zeros)
 
     if sample == False:
-      outputs["x"] = W@x + b
+      outputs["x"] = jnp.dot(x, W.T) + b
     else:
       w_inv = jnp.linalg.inv(W)
-      outputs["x"] = w_inv@(x - b)
+      outputs["x"] = jnp.dot(x - b, w_inv.T)
 
-    outputs["log_det"] = jnp.linalg.slogdet(W)[1]
+    outputs["log_det"] = jnp.linalg.slogdet(W)[1]*jnp.ones(self.batch_shape)
 
     return outputs
 
 ################################################################################################################
 
-class AffineLDU(AutoBatchedLayer):
+class AffineLDU(Layer):
 
-  def __init__(self, name: str="affine_ldu", **kwargs):
+  def __init__(self,
+               name: str="affine_ldu",
+               **kwargs):
     super().__init__(name=name, **kwargs)
 
-  def call(self, inputs: Mapping[str, jnp.ndarray], rng: jnp.ndarray=None, sample: Optional[bool]=False, **kwargs) -> Mapping[str, jnp.ndarray]:
+  def call(self,
+           inputs: Mapping[str, jnp.ndarray],
+           rng: jnp.ndarray=None,
+           sample: Optional[bool]=False,
+           **kwargs
+  ) -> Mapping[str, jnp.ndarray]:
     outputs = {}
 
     init = hk.initializers.VarianceScaling(1.0, 'fan_avg', 'truncated_normal')
@@ -97,28 +121,38 @@ class AffineLDU(AutoBatchedLayer):
 
     if sample == False:
       x = inputs["x"]
-      z = (U*lower_mask.T)@x + x
+      z = jnp.dot(x, (U*lower_mask.T).T) + x
       z *= jnp.exp(log_d)
-      z = (L*lower_mask)@z + z
+      z = jnp.dot(z, (L*lower_mask).T) + z
       outputs["x"] = z + b
     else:
       z = inputs["x"]
-      x = util.L_solve(L, z - b)
-      x = x*jnp.exp(-log_d)
-      outputs["x"] = util.U_solve(U, x)
 
-    outputs["log_det"] = jnp.sum(log_d, axis=-1)
+      @self.auto_batch
+      def invert(z):
+        x = util.L_solve(L, z - b)
+        x = x*jnp.exp(-log_d)
+        return util.U_solve(U, x)
+
+      outputs["x"] = invert(z)
+
+    outputs["log_det"] = jnp.sum(log_d, axis=-1)*jnp.ones(self.batch_shape)
     return outputs
 
 ################################################################################################################
 
-class AffineSVD(AutoBatchedLayer):
+class AffineSVD(Layer):
 
   def __init__(self, n_householders: int, name: str="affine_svd", **kwargs):
     super().__init__(name=name, **kwargs)
     self.n_householders = n_householders
 
-  def call(self, inputs: Mapping[str, jnp.ndarray], rng: jnp.ndarray=None, sample: Optional[bool]=False, **kwargs) -> Mapping[str, jnp.ndarray]:
+  def call(self,
+           inputs: Mapping[str, jnp.ndarray],
+           rng: jnp.ndarray=None,
+           sample: Optional[bool]=False,
+           **kwargs
+  ) -> Mapping[str, jnp.ndarray]:
     outputs = {}
 
     dim, dtype = inputs["x"].shape[-1], inputs["x"].dtype
@@ -131,21 +165,33 @@ class AffineSVD(AutoBatchedLayer):
 
     if sample == False:
       x = inputs["x"]
-      z = util.householder_prod(x, VT)
-      z = z*jnp.exp(log_s)
-      outputs["x"] = util.householder_prod(z, U) + b
+
+      @self.auto_batch
+      def forward(x):
+        O = jnp.eye(x.size) - 2*VT.T@jnp.linalg.inv(VT@VT.T)@VT
+        l = x - 2*VT.T@jnp.linalg.inv(VT@VT.T)@VT@x
+        z = util.householder_prod(x, VT)
+        z = z*jnp.exp(log_s)
+        return util.householder_prod(z, U) + b
+
+      outputs["x"] = forward(x)
     else:
       z = inputs["x"]
-      x = util.householder_prod_transpose(z - b, U)
-      x = x*jnp.exp(-log_s)
-      outputs["x"] = util.householder_prod_transpose(x, VT)
 
-    outputs["log_det"] = log_s.sum()
+      @self.auto_batch
+      def inverse(z):
+        x = util.householder_prod_transpose(z - b, U)
+        x = x*jnp.exp(-log_s)
+        return util.householder_prod_transpose(x, VT)
+
+      outputs["x"] = inverse(z)
+
+    outputs["log_det"] = log_s.sum()*jnp.ones(self.batch_shape)
     return outputs
 
 ################################################################################################################
 
-class OneByOneConv(AutoBatchedLayer):
+class OneByOneConv(Layer):
 
   def __init__(self, weight_norm: bool=True, name: str="one_by_one_conv", **kwargs):
     super().__init__(name=name, **kwargs)
@@ -159,44 +205,41 @@ class OneByOneConv(AutoBatchedLayer):
 
   def call(self, inputs: Mapping[str, jnp.ndarray], rng: jnp.ndarray=None, sample: Optional[bool]=False, **kwargs) -> Mapping[str, jnp.ndarray]:
     outputs = {}
-    height, width, channel = inputs["x"].shape
+    height, width, channel = inputs["x"].shape[-3:]
 
-    shape, dtype = inputs["x"].shape, inputs["x"].dtype
+    dtype = inputs["x"].dtype
     W = hk.get_parameter("W", shape=(channel, channel), dtype=dtype, init=self.W_init)
-    b = hk.get_parameter("b", shape=shape, dtype=dtype, init=jnp.zeros)
+    b = hk.get_parameter("b", shape=(channel,), dtype=dtype, init=jnp.zeros)
 
     if self.weight_norm:
       W *= jax.lax.rsqrt(jnp.sum(W**2, axis=0))
 
+    @partial(self.auto_batch, in_axes=(None, 0), expected_depth=1)
+    def conv(W, x):
+      return jax.lax.conv_general_dilated(x,
+                                          W[None,None,...],
+                                          (1, 1),
+                                          'SAME',
+                                          (1, 1),
+                                          (1, 1),
+                                          dimension_numbers=('NHWC', 'HWIO', 'NHWC'))
     if sample == False:
       x = inputs["x"]
-      z = jax.lax.conv_general_dilated(x[None],
-                                       W[None,None,...],
-                                       (1, 1),
-                                       'SAME',
-                                       (1, 1),
-                                       (1, 1),
-                                       dimension_numbers=('NHWC', 'HWIO', 'NHWC'))[0]
+      z = conv(W, x)
       outputs["x"] = z + b
     else:
       W_inv = jnp.linalg.inv(W)
       z = inputs["x"]
-      x = jax.lax.conv_general_dilated((z - b)[None],
-                                       W_inv[None,None,...],
-                                       (1, 1),
-                                       'SAME',
-                                       (1, 1),
-                                       (1, 1),
-                                       dimension_numbers=('NHWC', 'HWIO', 'NHWC'))[0]
+      x = conv(W_inv, z - b)
       outputs["x"] = x
 
-    outputs["log_det"] = jnp.linalg.slogdet(W)[1]*height*width
+    outputs["log_det"] = jnp.linalg.slogdet(W)[1]*height*width*jnp.ones(self.batch_shape)
 
     return outputs
 
 ################################################################################################################
 
-class LocalDense(AutoBatchedLayer):
+class LocalDense(Layer):
 
   def __init__(self,
                filter_shape: Tuple[int]=(2, 2),
@@ -211,8 +254,8 @@ class LocalDense(AutoBatchedLayer):
 
   def call(self, inputs: Mapping[str, jnp.ndarray], rng: jnp.ndarray=None, sample: Optional[bool]=False, **kwargs) -> Mapping[str, jnp.ndarray]:
     outputs = {}
-    x_shape, x_dtype = inputs["x"].shape, inputs["x"].dtype
-    h, w, c = inputs["x"].shape
+    x_dtype = inputs["x"].dtype
+    h, w, c = inputs["x"].shape[-3:]
     fh, fw = self.filter_shape
     dh, dw = self.dilation
 
@@ -220,98 +263,38 @@ class LocalDense(AutoBatchedLayer):
     H_sq, W_sq, C_sq = (h//fh, w//fw, c*fh*fw)
 
     W = hk.get_parameter("W", shape=(C_sq, C_sq), dtype=x_dtype, init=self.W_init)
-    b = hk.get_parameter("b", shape=x_shape, dtype=x_dtype, init=jnp.zeros)*0.0
+    b = hk.get_parameter("b", shape=(c,), dtype=x_dtype, init=jnp.zeros)
 
     if sample == False:
       x = inputs["x"]
-      x = util.dilated_squeeze(x, self.filter_shape, self.dilation)
-      z = jax.lax.conv_general_dilated(x[None],
-                                       W[None,None,...],
-                                       (1, 1),
-                                       'SAME',
-                                       (1, 1),
-                                       (1, 1),
-                                       dimension_numbers=('NHWC', 'HWIO', 'NHWC'))[0]
-      z = util.dilated_unsqueeze(z, self.filter_shape, self.dilation)
-      outputs["x"] = z + b
+      @self.auto_batch
+      def forward(x):
+        x = util.dilated_squeeze(x, self.filter_shape, self.dilation)
+        z = jax.lax.conv_general_dilated(x[None],
+                                         W[None,None,...],
+                                         (1, 1),
+                                         'SAME',
+                                         (1, 1),
+                                         (1, 1),
+                                         dimension_numbers=('NHWC', 'HWIO', 'NHWC'))[0]
+        return util.dilated_unsqueeze(z, self.filter_shape, self.dilation) + b
+      outputs["x"] = forward(x)
     else:
       W_inv = jnp.linalg.inv(W)
       z = inputs["x"]
-      zmb = util.dilated_squeeze(z - b, self.filter_shape, self.dilation)
-      x = jax.lax.conv_general_dilated(zmb[None],
-                                       W_inv[None,None,...],
-                                       (1, 1),
-                                       'SAME',
-                                       (1, 1),
-                                       (1, 1),
-                                       dimension_numbers=('NHWC', 'HWIO', 'NHWC'))[0]
-      x = util.dilated_unsqueeze(x, self.filter_shape, self.dilation)
-      outputs["x"] = x
+      @self.auto_batch
+      def inverse(z):
+        zmb = util.dilated_squeeze(z - b, self.filter_shape, self.dilation)
+        x = jax.lax.conv_general_dilated(zmb[None],
+                                         W_inv[None,None,...],
+                                         (1, 1),
+                                         'SAME',
+                                         (1, 1),
+                                         (1, 1),
+                                         dimension_numbers=('NHWC', 'HWIO', 'NHWC'))[0]
+        return util.dilated_unsqueeze(x, self.filter_shape, self.dilation)
+      outputs["x"] = inverse(z)
 
-    outputs["log_det"] = jnp.linalg.slogdet(W)[1]*h*w
-
-    return outputs
-
-################################################################################################################
-
-class ConstantConv(AutoBatchedLayer):
-
-  def __init__(self,
-               filter_shape: Tuple[int]=(2, 2),
-               name: str="constant_conv",
-               W_init=None,
-               **kwargs):
-    super().__init__(name=name, **kwargs)
-    self.filter_shape = filter_shape
-    self.W_init = hk.initializers.VarianceScaling(1.0, 'fan_avg', 'truncated_normal') if W_init is None else W_init
-
-  def call(self, inputs: Mapping[str, jnp.ndarray], rng: jnp.ndarray=None, sample: Optional[bool]=False, **kwargs) -> Mapping[str, jnp.ndarray]:
-
-    outputs = {}
-    x_shape, x_dtype = inputs["x"].shape, inputs["x"].dtype
-    h, w, c = inputs["x"].shape
-    fh, fw = self.filter_shape
-
-    W = hk.get_state("W", shape=(fh, fw, c, c), dtype=x_dtype, init=self.W_init)
-    b = hk.get_state("b", shape=x_shape, dtype=x_dtype, init=jnp.zeros)*0.0
-
-    if sample == False:
-      x = inputs["x"]
-      z = jax.lax.conv_general_dilated(x[None],
-                                       W,
-                                       (1, 1),
-                                       'SAME',
-                                       (1, 1),
-                                       (1, 1),
-                                       dimension_numbers=('NHWC', 'HWIO', 'NHWC'))[0]
-      outputs["x"] = z + b
-    else:
-      z = inputs["x"]
-      zmb = z - b
-
-      W_ = W.transpose((2, 3, 0, 1))
-      z_ = zmb.transpose((2, 0, 1))
-
-      x, r_sq, iters = util.CTC_solve(W_, (0, 1, 0, 1), (1, 1), 1000, z_, jnp.zeros_like(z_))
-      outputs["x"] = x.transpose((1, 2, 0))
-
-    outputs["log_det"] = jnp.array(0.0)
+    outputs["log_det"] = jnp.linalg.slogdet(W)[1]*h*w*jnp.ones(self.batch_shape)
 
     return outputs
-
-################################################################################################################
-
-class SmoothHeightWidth(ConstantConv):
-
-  def __init__(self,
-               filter_shape: Sequence[int]=(2, 2),
-               name: str="smooth_height_width",
-               **kwargs):
-
-    def W_init(shape, dtype):
-      h, w, cin, cout = shape
-      return jnp.broadcast_to(jnp.eye(cin, cout)[None,None], shape).astype(dtype)/(h*w)
-
-    super().__init__(filter_shape=filter_shape, name=name, W_init=W_init, **kwargs)
-
-################################################################################################################

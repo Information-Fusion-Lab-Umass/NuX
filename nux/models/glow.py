@@ -15,60 +15,17 @@ __all__ = ["GLOW",
 ################################################################################################################
 
 def GLOW(n_blocks: int,
-         n_channels: int=64,
          coupling_type: str="affine",
-         parameter_norm: Optional[str]=None,
-         split_kind: str="channel"):
+         actnorm=True,
+         network_kwargs: Optional=None):
 
   layers = []
   for i in range(n_blocks):
-    layers.append(nux.ActNorm())
+    if actnorm:
+      layers.append(nux.ActNorm())
     layers.append(nux.OneByOneConv())
-    layers.append(nux.Coupling(n_channels=n_channels,
-                               kind=coupling_type,
-                               parameter_norm=parameter_norm,
-                               split_kind=split_kind))
-
-  return nux.sequential(*layers)
-
-def GLOW2(n_blocks: int,
-          n_channels: int=64,
-          coupling_type: str="affine",
-          parameter_norm: Optional[str]=None,
-          filter_shape: Sequence[int]=(2, 2),
-          dilation: Sequence[int]=(1, 1)):
-
-  layers = []
-  for i in range(n_blocks):
-    layers.append(nux.Squeeze(filter_shape=filter_shape, dilation=dilation))
-    layers.append(nux.ActNorm())
-    layers.append(nux.OneByOneConv())
-    layers.append(nux.UnSqueeze(filter_shape=filter_shape, dilation=dilation))
-    layers.append(nux.Coupling(n_channels=n_channels,
-                               kind=coupling_type,
-                               parameter_norm=parameter_norm,
-                               split_kind="checkerboard"))
-
-  return nux.sequential(*layers)
-
-################################################################################################################
-
-def multiscale_glow(n_blocks: int,
-                    n_channels: int=64,
-                    coupling_type: str="affine",
-                    parameter_norm: Optional[str]=None,
-                    split_kind="checkerboard"):
-
-  def create_block():
-    transform = nux.sequential(nux.ActNorm(),
-                               nux.OneByOneConv(),
-                               nux.Coupling(n_channels=n_channels, kind=coupling_type, parameter_norm=parameter_norm))
-    return nux.multi_scale(transform, split_kind=split_kind)
-
-  layers = []
-  for i in range(n_blocks):
-    layers.append(create_block())
-    layers.append(nux.Reverse())
+    layers.append(nux.Coupling(kind=coupling_type,
+                               network_kwargs=network_kwargs))
 
   return nux.sequential(*layers)
 
@@ -76,15 +33,15 @@ def multiscale_glow(n_blocks: int,
 
 def MultiscaleGLOW(n_scales: int,
                    n_blocks: int,
-                   n_channels: int=64,
                    coupling_type: str="affine",
-                   parameter_norm: Optional[str]=None):
+                   actnorm=True,
+                   network_kwargs: Optional=None):
 
   def build_network(flow):
-    return nux.sequential(GLOW(n_blocks, n_channels, coupling_type, parameter_norm),
+    return nux.sequential(GLOW(n_blocks, coupling_type, actnorm, network_kwargs),
                           nux.multi_scale(flow))
 
-  flow = GLOW(n_blocks, n_channels, coupling_type, parameter_norm)
+  flow = GLOW(n_blocks, coupling_type, actnorm, network_kwargs)
   for i in range(n_scales):
     flow = build_network(flow)
 

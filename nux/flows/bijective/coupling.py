@@ -9,29 +9,26 @@ from nux.flows.base import *
 import nux.util as util
 import nux.networks as net
 
-__all__ = ["Coupling",
-           "ConditionedCoupling"]
+__all__ = ["Coupling"]
 
-class Coupling(AutoBatchedLayer):
+class Coupling(Layer):
 
   def __init__(self,
                create_network: Optional[Callable]=None,
-               layer_sizes: Optional[Sequence[int]]=[1024]*4,
-               n_channels: Optional[int]=256,
                kind: Optional[str]="affine",
-               parameter_norm: Optional[str]=None,
                axis: Optional[int]=-1,
                split_kind: str="channel",
+               use_condition: bool=False,
                name: str="coupling",
+               network_kwargs: Optional=None,
                **kwargs
   ):
     super().__init__(name=name, **kwargs)
-    self.layer_sizes        = layer_sizes
-    self.n_channels         = n_channels
     self.kind               = kind
     self.axis               = axis
     self.create_network     = create_network
-    self.parameter_norm     = parameter_norm
+    self.network_kwargs     = network_kwargs
+    self.use_condition      = use_condition
 
     self.split_kind         = split_kind
     assert split_kind in ["checkerboard", "channel"]
@@ -45,276 +42,117 @@ class Coupling(AutoBatchedLayer):
 
     # Otherwise, use default networks
     if len(out_shape) == 1:
-      return net.MLP(out_dim=out_dim,
-                     layer_sizes=self.layer_sizes,
-                     parameter_norm=self.parameter_norm,
-                     nonlinearity="relu")
+      network_kwargs = self.network_kwargs
+      if network_kwargs is None:
+
+        network_kwargs = dict(layer_sizes=[128]*4,
+                              nonlinearity="relu",
+                              parameter_norm="weight_norm")
+      network_kwargs["out_dim"] = out_dim
+
+      return net.MLP(**network_kwargs)
 
     else:
+      network_kwargs = self.network_kwargs
+      if network_kwargs is None:
 
-      return net.ResNet(n_blocks=7,
-                        hidden_channel=self.n_channels,
-                        out_channel=out_dim,
-                        parameter_norm="weight_norm",
-                        # parameter_norm=None,
-                        # norm=None,
-                        norm="instance",
-                        nonlinearity="relu",
-                        identity_init=True,
-                        squeeze_excite=False,
-                        use_projection=False,
-                        zero_last_conv=False)
+        network_kwargs = dict(n_blocks=2,
+                              hidden_channel=16,
+                              nonlinearity="relu",
+                              normalization="instance_norm",
+                              parameter_norm="weight_norm",
+                              block_type="reverse_bottleneck",
+                              squeeze_excite=True)
+      network_kwargs["out_channel"] = out_dim
 
-      # return net.ConvBlock(out_channel=out_dim,
-      #                      hidden_channel=self.n_channels,
-      #                      parameter_norm="weight_norm",
-      #                      norm="instance",
-      #                      nonlinearity="relu")
+      return net.ResNet(**network_kwargs)
 
   def call(self, inputs: Mapping[str, jnp.ndarray], rng: jnp.ndarray=None, sample: Optional[bool]=False, **kwargs) -> Mapping[str, jnp.ndarray]:
     x = inputs["x"]
+    if self.use_condition:
+      assert "condition" in inputs
+      condition = inputs["condition"]
 
     if(self.split_kind == "checkerboard"):
-      x = util.dilated_squeeze(x, (2, 2), (1, 1))
+      x = self.auto_batch(util.dilated_squeeze)(x)
+      if self.use_condition:
+        condition = self.auto_batch(util.dilated_squeeze)(condition)
 
-    x_shape = x.shape
+    # Figure out the output shape
+    x_shape = self.get_unbatched_shapes(sample)["x"]
     ax = self.axis%len(x_shape)
     split_index = x_shape[ax]//2
     xa, xb = jnp.split(x, indices_or_sections=jnp.array([split_index]), axis=self.axis)
+    xa_shape = xa.shape[len(self.batch_shape):]
+    xb_shape = xb.shape[len(self.batch_shape):]
 
     # Initialize the coupling layer to the identity
-    scale_scale = hk.get_parameter("scale_scale", shape=xa.shape, dtype=xa.dtype, init=hk.initializers.RandomNormal(stddev=0.01))
-    shift_scale = hk.get_parameter("shift_scale", shape=xa.shape, dtype=xa.dtype, init=hk.initializers.RandomNormal(stddev=0.01))
-    network = self.get_network(xa.shape)
+    scale_init = hk.initializers.RandomNormal(stddev=0.01)
+    if self.kind == "affine":
+      scale_scale = hk.get_parameter("scale_scale", shape=(), dtype=x.dtype, init=scale_init)
+    shift_scale = hk.get_parameter("shift_scale", shape=(), dtype=x.dtype, init=scale_init)
+    network = self.get_network(xa_shape)
+
+    # Initialize parameters for the other half of the input so that the transformation is consistent
+    if self.kind == "affine":
+      log_s_b = hk.get_parameter("log_s_b", shape=xb_shape, dtype=x.dtype, init=scale_init)
+    t_b = hk.get_parameter("t_b", shape=xb_shape, dtype=x.dtype, init=scale_init)
 
     # Apply the transformation
     if self.kind == "affine":
-      network_out = network(xb)
+
+      # First invert the part of the input that gets conditioned on
+      if sample == False:
+        zb = (xb - t_b)*jnp.exp(-log_s_b)
+        network_in = jnp.concatenate([xb, condition], axis=self.axis) if self.use_condition else xb
+      else:
+        zb = xb*jnp.exp(log_s_b) + t_b
+        network_in = jnp.concatenate([zb, condition], axis=self.axis) if self.use_condition else zb
+
+      # Run the conditioner network
+      network_out = self.auto_batch(network, expected_depth=1)(network_in)
 
       # Split the output and bound the scaling term
-      t, log_s = jnp.split(network_out, 2, axis=-1)
-      log_s = jnp.tanh(log_s)
+      t_a, log_s_a = jnp.split(network_out, 2, axis=self.axis)
+      log_s_a = jnp.tanh(log_s_a)
 
       # Scale the parameters so that we can initialize this function to the identity
-      t = shift_scale*t
-      log_s = scale_scale*log_s
+      t_a = shift_scale*t_a
+      log_s_a = scale_scale*log_s_a
 
+      # Apply the reult to the other half of the input
       if sample == False:
-          za = (xa - t)*jnp.exp(-log_s)
+        za = (xa - t_a)*jnp.exp(-log_s_a)
       else:
-          za = xa*jnp.exp(log_s) + t
-      log_det = -jnp.sum(log_s)
+        za = xa*jnp.exp(log_s_a) + t_a
+
+      log_det = jnp.ones(self.batch_shape)
+      log_det *= -(jnp.sum(log_s_a) + jnp.sum(log_s_b))
     else:
-      t = network(xb)
-      t = shift_scale*t
-
+      # First invert the part of the input that gets conditioned on
       if sample == False:
-          za = xa - t
+        zb = xb - t_b
+        network_in = jnp.concatenate([xb, condition], axis=self.axis) if self.use_condition else xb
       else:
-          za = xa + t
-      log_det = jnp.array(0.0)
+        zb = xb + t_b
+        network_in = jnp.concatenate([zb, condition], axis=self.axis) if self.use_condition else zb
+
+      # Run the conditioner network
+      t_a = self.auto_batch(network, expected_depth=1)(network_in)
+      t_a = shift_scale*t_a
+
+      # Apply the reult to the other half of the input
+      if sample == False:
+        za = xa - t_a
+      else:
+        za = xa + t_a
+      log_det = jnp.zeros(self.batch_shape)
 
     # Recombine
-    z = jnp.concatenate([za, xb], axis=self.axis)
+    z = jnp.concatenate([za, zb], axis=self.axis)
 
     if(self.split_kind == "checkerboard"):
-      z = util.dilated_unsqueeze(z, (2, 2), (1, 1))
-
-    outputs = {"x": z, "log_det": log_det}
-    return outputs
-
-################################################################################################################
-
-# class Coupling(AutoBatchedLayer):
-
-#   def __init__(self,
-#                create_network: Optional[Callable]=None,
-#                layer_sizes: Optional[Sequence[int]]=[1024]*4,
-#                n_channels: Optional[int]=256,
-#                kind: Optional[str]="affine",
-#                parameter_norm: Optional[str]=None,
-#                axis: Optional[int]=-1,
-#                name: str="coupling",
-#                **kwargs
-#   ):
-#     super().__init__(name=name, **kwargs)
-#     self.layer_sizes        = layer_sizes
-#     self.n_channels         = n_channels
-#     self.kind               = kind
-#     self.axis               = axis
-#     self.create_network     = create_network
-#     self.parameter_norm     = parameter_norm
-
-#   def get_network(self, out_shape):
-#     # The user can specify a custom network
-#     if self.create_network is not None:
-#       return self.create_network(out_shape)
-
-#     out_dim = out_shape[-1] if self.kind == "additive" else 2*out_shape[-1]
-
-#     # Otherwise, use default networks
-#     if len(out_shape) == 1:
-#       return net.MLP(out_dim=out_dim,
-#                      layer_sizes=self.layer_sizes,
-#                      parameter_norm=self.parameter_norm,
-#                      nonlinearity="relu")
-
-#     else:
-#       return net.ResNet(n_blocks=7,
-#                         hidden_channel=self.n_channels,
-#                         out_channel=out_dim,
-#                         parameter_norm=None,
-#                         norm="instance",
-#                         nonlinearity="relu",
-#                         identity_init=True,
-#                         squeeze_excite=False,
-#                         use_projection=False,
-#                         zero_last_conv=False)
-
-#       # return net.ConvBlock(out_channel=out_dim,
-#       #                      hidden_channel=self.n_channels,
-#       #                      parameter_norm=self.parameter_norm,
-#       #                      nonlinearity="relu")
-
-#   def call(self, inputs: Mapping[str, jnp.ndarray], rng: jnp.ndarray=None, sample: Optional[bool]=False, **kwargs) -> Mapping[str, jnp.ndarray]:
-#     x = inputs["x"]
-#     x_shape = x.shape
-#     ax = self.axis%len(x_shape)
-#     split_index = x_shape[ax]//2
-#     xa, xb = jnp.split(x, indices_or_sections=jnp.array([split_index]), axis=self.axis)
-
-#     # Initialize the coupling layer to the identity
-#     scale_scale = hk.get_parameter("scale_scale", shape=xa.shape, dtype=xa.dtype, init=hk.initializers.RandomNormal(stddev=0.01))
-#     shift_scale = hk.get_parameter("shift_scale", shape=xa.shape, dtype=xa.dtype, init=hk.initializers.RandomNormal(stddev=0.01))
-#     network = self.get_network(xa.shape)
-
-#     # Apply the transformation
-#     if self.kind == "affine":
-#       network_out = network(xb)
-
-#       # Split the output and bound the scaling term
-#       t, log_s = jnp.split(network_out, 2, axis=-1)
-#       log_s = jnp.tanh(log_s)
-
-#       # Scale the parameters so that we can initialize this function to the identity
-#       t = shift_scale*t
-#       log_s = scale_scale*log_s
-
-#       if sample == False:
-#           za = (xa - t)*jnp.exp(-log_s)
-#       else:
-#           za = xa*jnp.exp(log_s) + t
-#       log_det = -jnp.sum(log_s)
-#     else:
-#       t = network(xb)
-#       t = shift_scale*t
-
-#       if sample == False:
-#           za = xa - t
-#       else:
-#           za = xa + t
-#       log_det = jnp.array(0.0)
-
-#     # Recombine
-#     z = jnp.concatenate([za, xb], axis=self.axis)
-
-#     outputs = {"x": z, "log_det": log_det}
-#     return outputs
-
-# ################################################################################################################
-
-class ConditionedCoupling(AutoBatchedLayer):
-
-  def __init__(self,
-               create_network: Optional[Callable]=None,
-               layer_sizes: Optional[Sequence[int]]=[1024]*4,
-               n_channels: Optional[int]=64,
-               kind: Optional[str]="affine",
-               parameter_norm: Optional[str]=None,
-               axis: Optional[int]=-1,
-               name: str="conditioned_coupling",
-               **kwargs
-  ):
-    super().__init__(name=name, **kwargs)
-    self.layer_sizes = layer_sizes
-    self.n_channels         = n_channels
-    self.kind               = kind
-    self.axis               = axis
-    self.create_network     = create_network
-    self.parameter_norm     = parameter_norm
-
-  def get_network(self, out_shape):
-    # The user can specify a custom network
-    if self.create_network is not None:
-      return self.create_network(out_shape)
-
-    out_dim = out_shape[-1] if self.kind == "additive" else 2*out_shape[-1]
-
-    # Otherwise, use default networks
-    if len(out_shape) == 1:
-      return net.MLP(out_dim=out_dim,
-                     layer_sizes=self.layer_sizes,
-                     parameter_norm=self.parameter_norm,
-                     nonlinearity="relu")
-
-    else:
-
-      # return net.ConvBlock(out_channel=out_dim,
-      #                      hidden_channel=self.n_channels,
-      #                      parameter_norm=self.parameter_norm,
-      #                      nonlinearity="relu")
-
-      return net.ResNet(n_blocks=7,
-                        hidden_channel=self.n_channels,
-                        out_channel=out_dim,
-                        parameter_norm=None,
-                        nonlinearity="swish",
-                        identity_init=True,
-                        squeeze_excite=False,
-                        use_projection=False)
-
-  def call(self, inputs: Mapping[str, jnp.ndarray], rng: jnp.ndarray=None, sample: Optional[bool]=False, **kwargs) -> Mapping[str, jnp.ndarray]:
-    x, condition = inputs["x"], inputs["condition"]
-    x_shape = x.shape
-    ax = self.axis%len(x_shape)
-    split_index = x_shape[ax]//2
-    xa, xb = jnp.split(x, indices_or_sections=jnp.array([split_index]), axis=self.axis)
-
-    scale_scale = hk.get_parameter("scale_scale", shape=xa.shape, dtype=xa.dtype, init=jnp.zeros)
-    shift_scale = hk.get_parameter("shift_scale", shape=xa.shape, dtype=xa.dtype, init=jnp.zeros)
-
-    network = self.get_network(xa.shape)
-    network_input = jnp.concatenate([xb, condition], axis=self.axis)
-
-    # Apply the transformation
-    if self.kind == "affine":
-      network_out = network(network_input)
-
-      # Split the output and bound the scaling term
-      t, log_s = jnp.split(network_out, 2, axis=-1)
-      log_s = jnp.tanh(log_s)
-
-      # Scale the parameters so that we can initialize this function to the identity
-      t = shift_scale*t
-      log_s = scale_scale*log_s
-
-      if sample == False:
-          za = (xa - t)*jnp.exp(-log_s)
-      else:
-          za = xa*jnp.exp(log_s) + t
-      log_det = -jnp.sum(log_s)
-    else:
-      t = network(network_input)
-      t = shift_scale*t
-
-      if sample == False:
-          za = xa - t
-      else:
-          za = xa + t
-      log_det = jnp.array(0.0)
-
-    # Recombine
-    z = jnp.concatenate([za, xb], axis=self.axis)
+      z = self.auto_batch(util.dilated_unsqueeze)(z)
 
     outputs = {"x": z, "log_det": log_det}
     return outputs

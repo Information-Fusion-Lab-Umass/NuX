@@ -13,7 +13,7 @@ from haiku._src.typing import PRNGKey
 __all__ = ["UniformDequantization",
            "VariationalDequantization"]
 
-class UniformDequantization(AutoBatchedLayer):
+class UniformDequantization(Layer):
 
   def __init__(self, scale: float, name: str="uniform_dequantization", **kwargs):
     super().__init__(name=name, **kwargs)
@@ -26,8 +26,8 @@ class UniformDequantization(AutoBatchedLayer):
            no_dequantization=False,
            **kwargs
   ) -> Mapping[str, jnp.ndarray]:
-
     x = inputs["x"]
+    x_shape = self.get_unbatched_shapes(sample)["x"]
 
     if(sample == False):
       if(no_dequantization == False):
@@ -39,34 +39,35 @@ class UniformDequantization(AutoBatchedLayer):
       z = x*self.scale
       # z = jnp.floor(x*self.scale)
 
-    log_det = -jnp.log(self.scale)*jnp.prod(jnp.array(x.shape))
+    log_det = -jnp.log(self.scale)*jnp.prod(jnp.array(x_shape))*jnp.ones(self.batch_shape)
     return {"x": z, "log_det": log_det}
 
 ################################################################################################################
 
-class VariationalDequantization(AutoBatchedLayer):
-  # This takes up a ton of memory!
-
+class VariationalDequantization(Layer):
   def __init__(self,
                scale: float,
                flow: Optional[Callable]=None,
                name: str="variational_dequantization",
+               network_kwargs: Optional=None,
                **kwargs):
     super().__init__(name=name, **kwargs)
-    self.scale = scale
-    self.flow  = flow
+    self.scale          = scale
+    self.flow           = flow
+    self.network_kwargs = network_kwargs
 
   def default_flow(self):
-    return nux.sequential(nux.Logit(),
-                          nux.ActNorm(),
+    return nux.sequential(nux.Logit(scale=None),
                           nux.OneByOneConv(),
-                          nux.ConditionedCoupling(),
-                          nux.ActNorm(),
+                          nux.CouplingLogitsticMixtureLogit(n_components=4,
+                                                            network_kwargs=self.network_kwargs,
+                                                            reverse=True,
+                                                            use_condition=True),
                           nux.OneByOneConv(),
-                          nux.ConditionedCoupling(),
-                          nux.ActNorm(),
-                          nux.OneByOneConv(),
-                          nux.ConditionedCoupling(),
+                          nux.CouplingLogitsticMixtureLogit(n_components=4,
+                                                            network_kwargs=self.network_kwargs,
+                                                            reverse=True,
+                                                            use_condition=True),
                           nux.UnitGaussianPrior())
 
   def call(self,
@@ -75,15 +76,15 @@ class VariationalDequantization(AutoBatchedLayer):
            sample: Optional[bool]=False,
            **kwargs
   ) -> Mapping[str, jnp.ndarray]:
-
     x = inputs["x"]
-    log_det = -jnp.log(self.scale)*jnp.prod(jnp.array(x.shape))
+    x_shape = self.get_unbatched_shapes(sample)["x"]
+
+    log_det = -jnp.log(self.scale)*jnp.prod(jnp.array(x_shape))*jnp.ones(self.batch_shape)
+    flow = self.flow if self.flow is not None else self.default_flow()
 
     if sample == False:
-      flow = self.flow if self.flow is not None else self.default_flow()
       flow_inputs = {"x": jnp.zeros(x.shape), "condition": x}
-      import pdb; pdb.set_trace()
-      outputs = flow(flow_inputs, rng, sample=True, no_batching=True)
+      outputs = flow(flow_inputs, rng, sample=True)
 
       noise = outputs["x"]
       z = (x + noise)/self.scale
@@ -91,7 +92,13 @@ class VariationalDequantization(AutoBatchedLayer):
       log_qugx = outputs["log_det"] + outputs["log_pz"]
       log_det -= log_qugx
     else:
-      z = jnp.floor(x*self.scale).astype(jnp.int32)
+      z_continuous = x*self.scale
+      z = jnp.floor(z_continuous).astype(jnp.int32)
+      noise = z_continuous - z
+      flow_inputs = {"x": noise, "condition": x}
+      outputs = flow(flow_inputs, rng, sample=False)
+      log_qugx = outputs["log_det"] + outputs["log_pz"]
+      log_det -= log_qugx
 
     return {"x": z, "log_det": log_det}
 

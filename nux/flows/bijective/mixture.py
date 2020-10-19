@@ -15,8 +15,6 @@ __all__ = ["GaussianMixtureCDF",
            "LogisticMixtureCDF",
            "CoupingGaussianMixtureCDF",
            "CoupingLogisticMixtureCDF",
-           "CoupingGaussianMixtureCDFWithLogitLinear",
-           "CoupingLogisticMixtureCDFWithLogitLinear",
            "LogitsticMixtureLogit",
            "CouplingLogitsticMixtureLogit"]
 
@@ -103,14 +101,14 @@ def mixture_inverse(eval_fun, log_det_fun, x, theta):
 
 ################################################################################################################
 
-class MixtureCDF(AutoBatchedLayer):
+class MixtureCDF(Layer):
 
   def __init__(self, n_components: int=4, name: str="mixture_cdf", **kwargs):
     super().__init__(name=name, **kwargs)
     self.n_components = n_components
-    self.weight_init  = hk.initializers.RandomNormal()
-    self.means_init   = hk.initializers.RandomNormal()
-    self.vars_init    = hk.initializers.RandomNormal()
+
+    self.forward = partial(mixture_forward, self.f, self.log_det)
+    self.inverse = partial(mixture_inverse, self.f, self.log_det)
 
   def f(self, weight_logits, means, log_scales, x):
     assert 0
@@ -122,30 +120,36 @@ class MixtureCDF(AutoBatchedLayer):
     x = inputs["x"]
     outputs = {}
 
-    theta = hk.get_parameter("theta", shape=x.shape + (3*self.n_components,), dtype=x.dtype, init=hk.initializers.RandomNormal())
+    x_shape = self.get_unbatched_shapes(sample)["x"]
+    theta = hk.get_parameter("theta", shape=x_shape + (3*self.n_components,), dtype=x.dtype, init=hk.initializers.RandomNormal())
     if sample == False:
-      outputs["x"], outputs["log_det"] = mixture_forward(self.f, self.log_det, x, theta)
+      outputs["x"], outputs["log_det"] = self.auto_batch(self.forward, in_axes=(0, None))(x, theta)
     else:
-      outputs["x"], outputs["log_det"] = mixture_inverse(self.f, self.log_det, x, theta)
+      outputs["x"], outputs["log_det"] = self.auto_batch(self.inverse, in_axes=(0, None))(x, theta)
 
     return outputs
 
 ################################################################################################################
 
-class CouplingMixtureCDF(AutoBatchedLayer):
+class CouplingMixtureCDF(Layer):
 
   def __init__(self,
                n_components: int=8,
                create_network: Callable=None,
                name: str="coupling_mixture_cdf",
-               layer_sizes: Sequence[int]=[128]*4,
+               network_kwargs: Optional=None,
+               reverse: Optional[bool]=False,
+               use_condition: bool=False,
                **kwargs):
     super().__init__(name=name)
-    self.layer_sizes    = layer_sizes
     self.n_components   = n_components
     self.create_network = create_network
-    if "res_net_kwargs" in kwargs:
-      self.network_kwargs = kwargs["res_net_kwargs"]
+    self.network_kwargs = network_kwargs
+    self.reverse        = reverse
+    self.use_condition  = use_condition
+
+    self.forward = partial(mixture_forward, self.f, self.log_det)
+    self.inverse = partial(mixture_inverse, self.f, self.log_det)
 
   def f(self, weight_logits, means, log_scales, x):
     assert 0
@@ -153,214 +157,80 @@ class CouplingMixtureCDF(AutoBatchedLayer):
   def log_det(self, weight_logits, means, log_scales, x):
     assert 0
 
-  def get_network(self, x1, x2, n_components):
-    if(x1.ndim == 3):
-      image_in = True
-    else:
-      image_in = False
+  def get_network(self, image_in, x2, n_components):
 
-    output_dim = x2.shape[-1]
+    out_dim = x2.shape[-1]
 
     if self.create_network is not None:
-      return self.create_network(output_dim)
+      return self.create_network(out_dim)
+
+    network_kwargs = self.network_kwargs
 
     if(image_in):
-      return net.ResNet(out_channel=output_dim*3*n_components,
-                        **self.network_kwargs)
+      if network_kwargs is None:
+        network_kwargs = dict(n_blocks=2,
+                              hidden_channel=16,
+                              nonlinearity="relu",
+                              normalization="instance_norm",
+                              parameter_norm="weight_norm",
+                              block_type="reverse_bottleneck",
+                              squeeze_excite=True)
+      network_kwargs["out_channel"] = out_dim*3*n_components
 
-    return net.MLP(out_dim=output_dim*3*n_components,
-                   layer_sizes=self.layer_sizes,
-                   parameter_norm="weight_norm",
-                   nonlinearity="relu")
+      return net.ResNet(**network_kwargs)
+
+    else:
+      if network_kwargs is None:
+        network_kwargs = dict(layer_sizes=[128]*4,
+                              nonlinearity="relu",
+                              parameter_norm="weight_norm")
+      network_kwargs["out_dim"] = out_dim*3*n_components
+
+      return net.MLP(**network_kwargs)
+
 
   def call(self, inputs: Mapping[str, jnp.ndarray], rng: jnp.ndarray=None, sample: Optional[bool]=False, **kwargs) -> Mapping[str, jnp.ndarray]:
     x = inputs["x"]
+    if self.use_condition:
+      assert "condition" in inputs
+      condition = inputs["condition"]
 
-    x1, x2 = jnp.split(x, jnp.array([x.shape[-1]//2]), axis=-1)
+    x_shape = self.get_unbatched_shapes(sample)["x"]
+    split_index = x_shape[-1]//2
+    x1, x2 = jnp.split(x, indices_or_sections=jnp.array([split_index]), axis=-1)
+    x1_shape = x1.shape[len(self.batch_shape):]
+    x2_shape = x2.shape[len(self.batch_shape):]
 
     # We will transform the first half of the pixels with fixed parametes
-    theta1 = hk.get_parameter("theta1", shape=x1.shape + (3*self.n_components,), dtype=x1.dtype, init=hk.initializers.RandomNormal())
+    theta1 = hk.get_parameter("theta1", shape=x1_shape + (3*self.n_components,), dtype=x1.dtype, init=hk.initializers.RandomNormal())
 
     # Get the conditioner network
-    network = self.get_network(x1, x2, self.n_components)
+    image_in = len(x_shape) == 3
+    network = self.get_network(image_in, x2, self.n_components)
 
-    if sample == False:
+    if sample == self.reverse:
       # Run the first part of the mixture
-      z1, log_det1 = mixture_forward(self.f, self.log_det, x1, theta1)
+      z1, log_det1 = self.auto_batch(self.forward, in_axes=(0, None))(x1, theta1)
 
       # Run the second part
-      theta2 = network(x1).reshape(x2.shape + (3*self.n_components,))
-      z2, log_det2 = mixture_forward(self.f, self.log_det, x2, theta2)
+      network_in = jnp.concatenate([x1, condition], axis=-1) if self.use_condition else x1
+      theta2 = self.auto_batch(network, expected_depth=1)(x1).reshape(x2.shape + (3*self.n_components,))
+      z2, log_det2 = self.auto_batch(self.forward, in_axes=(0, 0))(x2, theta2)
 
     else:
       # Run the first part of the mixture
-      z1, log_det1 = mixture_inverse(self.f, self.log_det, x1, theta1)
+      z1, log_det1 = self.auto_batch(self.inverse, in_axes=(0, None))(x1, theta1)
 
       # Run the second part
-      theta2 = network(z1).reshape(x2.shape + (3*self.n_components,))
-      z2, log_det2 = mixture_inverse(self.f, self.log_det, x2, theta2)
+      network_in = jnp.concatenate([z1, condition], axis=-1) if self.use_condition else z1
+      theta2 = self.auto_batch(network, expected_depth=1)(z1).reshape(x2.shape + (3*self.n_components,))
+      z2, log_det2 = self.auto_batch(self.inverse, in_axes=(0, 0))(x2, theta2)
 
     z = jnp.concatenate([z1, z2], axis=-1)
     log_det = log_det1 + log_det2
 
-    return {"x": z, "log_det": log_det}
-
-################################################################################################################
-
-class CouplingMixtureCDFWithLogitLinear(AutoBatchedLayer):
-
-  def __init__(self,
-               n_components: int=8,
-               create_network: Callable=None,
-               name: str="coupling_mixture_cdf_logit_linear",
-               **kwargs):
-    super().__init__(name=name)
-    self.n_components   = n_components
-    self.create_network = create_network
-    self.network_kwargs = kwargs["res_net_kwargs"]
-
-  def f(self, weight_logits, means, log_scales, x):
-    assert 0
-
-  def log_det(self, weight_logits, means, log_scales, x):
-    assert 0
-
-  def get_network(self, x1, x2, n_components):
-    if(x1.ndim == 3):
-      image_in = True
-    else:
-      image_in = False
-
-    output_dim = x2.shape[-1]
-
-    if self.create_network is not None:
-      return self.create_network(output_dim)
-
-    if(image_in):
-      return net.ResNet(out_channel=output_dim*(3*n_components + 2),
-                        **self.network_kwargs)
-
-    return net.MLP(out_dim=output_dim*(3*n_components + 2),
-                   layer_sizes=self.layer_sizes,
-                   parameter_norm=self.parameter_norm,
-                   nonlinearity="relu")
-
-  def separate_outputs(self, theta_and_linear):
-    theta, linear = jnp.split(theta_and_linear, jnp.array([3*self.n_components]), axis=-1)
-    log_scale, bias = jnp.split(linear, 2, axis=-1)
-    log_scale, bias = log_scale.squeeze(axis=-1), bias.squeeze(axis=-1)
-    return theta, (log_scale, bias)
-
-  def call(self,
-           inputs: Mapping[str, jnp.ndarray],
-           rng: jnp.ndarray=None,
-           sample: Optional[bool]=False,
-           **kwargs
-  ) -> Mapping[str, jnp.ndarray]:
-    x = inputs["x"]
-
-    x1, x2 = jnp.split(x, jnp.array([x.shape[-1]//2]), axis=-1)
-
-    # We will transform the first half of the pixels with fixed parametes
-    theta1_and_linear = hk.get_parameter("theta1", shape=x1.shape + (3*self.n_components + 2,), dtype=x1.dtype, init=hk.initializers.RandomNormal(stddev=0.5))
-    theta1, (log_scale1, bias1) = self.separate_outputs(theta1_and_linear)
-    log_scale1 = jnp.tanh(log_scale1)
-
-    # Get the conditioner network
-    network = self.get_network(x1, x2, self.n_components)
-
-    # Define the logit flow to go from (0,1) -> R
-    logit = nux.Logit(scale=0.001)
-
-    ################################################################################
-
-    # Transform the first part of the input
-    if sample == False:
-
-      # Apply the mixture
-      z1, log_det1 = mixture_forward(self.f, self.log_det, x1, theta1)
-      z1_1 = z1
-
-      # Apply the logit
-      logit_outputs = logit({"x": z1}, sample=False, no_batching=True)
-      z1 = logit_outputs["x"]
-      log_det1 += logit_outputs["log_det"]
-      z1_2 = z1
-
-      # Apply the shift and scale
-      z1 = (z1 - bias1)*jnp.exp(-log_scale1)
-      log_det1 += -log_scale1.sum()
-
-      z1_3 = z1
-
-    else:
-
-      # Undo the shift and scale
-      z1 = jnp.exp(log_scale1)*x1 + bias1
-      z1_1 = z1
-      log_det1 = -log_scale1.sum()
-
-      # Undo the logit
-      logit_outputs = logit({"x": z1}, sample=True, no_batching=True)
-      z1 = logit_outputs["x"]
-      z1_2 = z1
-      log_det1 += logit_outputs["log_det"]
-
-      # Undo the mixture
-      z1, log_det_mix1 = mixture_inverse(self.f, self.log_det, z1, theta1)
-      z1_3 = z1
-      log_det1 += log_det_mix1
-
-    ################################################################################
-
-    # Transform the second part of the input
-    if sample == False:
-
-      # Apply the mixture
-      theta2_and_linear = network(x1).reshape(x2.shape + (3*self.n_components + 2,))
-      theta2, (log_scale2, bias2) = self.separate_outputs(theta2_and_linear)
-      log_scale2 = jnp.tanh(log_scale2)
-
-      z2, log_det2 = mixture_forward(self.f, self.log_det, x2, theta2)
-      z2_1 = z2
-
-      # Apply the logit
-      logit_outputs = logit({"x": z2}, sample=False, no_batching=True)
-      z2 = logit_outputs["x"]
-      log_det2 += logit_outputs["log_det"]
-      z2_2 = z2
-
-      # Apply the shift and scale
-      z2 = (z2 - bias2)*jnp.exp(-log_scale2)
-      log_det2 += -log_scale2.sum()
-
-      z2_3 = z2
-
-    else:
-      # Get the parameters of for the inverse
-      theta2_and_linear = network(z1).reshape(x2.shape + (3*self.n_components + 2,))
-      theta2, (log_scale2, bias2) = self.separate_outputs(theta2_and_linear)
-      log_scale2 = jnp.tanh(log_scale2)
-
-      # Undo the shift and scale
-      z2 = jnp.exp(log_scale2)*x2 + bias2
-      z2_1 = z2
-      log_det2 = -log_scale2.sum()
-
-      # Undo the logit
-      logit_outputs = logit({"x": z2}, sample=True, no_batching=True)
-      z2 = logit_outputs["x"]
-      z2_2 = z2
-      log_det2 += logit_outputs["log_det"]
-
-      # Run the second part
-      z2, log_det_mix2 = mixture_inverse(self.f, self.log_det, z2, theta2)
-      log_det2 += log_det_mix2
-      z2_3 = z2
-
-
-    z = jnp.concatenate([z1, z2], axis=-1)
-    log_det = log_det1 + log_det2
+    if self.reverse:
+      log_det *= -1
 
     return {"x": z, "log_det": log_det}
 
@@ -451,14 +321,11 @@ class CoupingGaussianMixtureCDF(_GaussianMixtureMixin, CouplingMixtureCDF):
 class CoupingLogisticMixtureCDF(_LogitsticMixtureMixin, CouplingMixtureCDF):
   pass
 
-class CoupingGaussianMixtureCDFWithLogitLinear(_GaussianMixtureMixin, CouplingMixtureCDFWithLogitLinear):
-  pass
-
-class CoupingLogisticMixtureCDFWithLogitLinear(_LogitsticMixtureMixin, CouplingMixtureCDFWithLogitLinear):
-  pass
-
 class LogitsticMixtureLogit(_LogitsticMixtureLogitMixin, MixtureCDF):
   pass
 
 class CouplingLogitsticMixtureLogit(_LogitsticMixtureLogitMixin, CouplingMixtureCDF):
+  pass
+
+class CouplingGaussianMixtureLogit(_LogitsticMixtureLogitMixin, CouplingMixtureCDF):
   pass
