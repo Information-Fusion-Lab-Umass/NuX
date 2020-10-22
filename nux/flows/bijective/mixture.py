@@ -152,7 +152,9 @@ class MixtureCDF(Layer):
 
 ################################################################################################################
 
-class CouplingMixtureCDF(Layer):
+from nux.flows.bijective.coupling_base import CouplingBase
+
+class CouplingMixtureCDF(CouplingBase):
 
   def __init__(self,
                n_components: int=8,
@@ -182,82 +184,29 @@ class CouplingMixtureCDF(Layer):
   def f_and_log_det(self, weight_logits, means, log_scales, x):
     return self.f(weight_logits, means, log_scales, x), self.log_det(weight_logits, means, log_scales, x)
 
-  def get_network(self, image_in, x2, n_components):
+  def get_out_shape(self, x):
+    x_shape = x.shape[len(self.batch_shape):]
+    out_dim = x_shape[-1]*3*self.n_components
+    return x_shape[:-1] + (out_dim,)
 
-    out_dim = x2.shape[-1]
-
-    if self.create_network is not None:
-      return self.create_network(out_dim)
-
-    network_kwargs = self.network_kwargs
-
-    if(image_in):
-      if network_kwargs is None:
-        network_kwargs = dict(n_blocks=2,
-                              hidden_channel=16,
-                              nonlinearity="relu",
-                              normalization="instance_norm",
-                              parameter_norm="weight_norm",
-                              block_type="reverse_bottleneck",
-                              squeeze_excite=True)
-      network_kwargs["out_channel"] = out_dim*3*n_components
-
-      return net.ResNet(**network_kwargs)
-
+  def transform(self, x, params=None, sample=False):
+    if params is None:
+      x_shape = x.shape[len(self.batch_shape):]
+      theta = hk.get_parameter("theta", shape=x_shape + (3*self.n_components,), dtype=x.dtype, init=hk.initializers.RandomNormal())
+      in_axes = (0, None)
     else:
-      if network_kwargs is None:
-        network_kwargs = dict(layer_sizes=[128]*4,
-                              nonlinearity="relu",
-                              parameter_norm="weight_norm")
-      network_kwargs["out_dim"] = out_dim*3*n_components
-
-      return net.MLP(**network_kwargs)
-
-
-  def call(self, inputs: Mapping[str, jnp.ndarray], rng: jnp.ndarray=None, sample: Optional[bool]=False, **kwargs) -> Mapping[str, jnp.ndarray]:
-    x = inputs["x"]
-    if self.use_condition:
-      assert "condition" in inputs
-      condition = inputs["condition"]
-
-    x_shape = self.get_unbatched_shapes(sample)["x"]
-    split_index = x_shape[-1]//2
-    x1, x2 = jnp.split(x, indices_or_sections=jnp.array([split_index]), axis=-1)
-    x1_shape = x1.shape[len(self.batch_shape):]
-    x2_shape = x2.shape[len(self.batch_shape):]
-
-    # We will transform the first half of the pixels with fixed parametes
-    theta1 = hk.get_parameter("theta1", shape=x1_shape + (3*self.n_components,), dtype=x1.dtype, init=hk.initializers.RandomNormal())
-
-    # Get the conditioner network
-    image_in = len(x_shape) == 3
-    network = self.get_network(image_in, x2, self.n_components)
+      theta = params.reshape(x.shape + (3*self.n_components,))
+      in_axes = (0, 0)
 
     if sample == self.reverse:
-      # Run the first part of the mixture
-      z1, log_det1 = self.auto_batch(self.forward, in_axes=(0, None))(x1, theta1)
-
-      # Run the second part
-      network_in = jnp.concatenate([x1, condition], axis=-1) if self.use_condition else x1
-      theta2 = self.auto_batch(network, expected_depth=1)(x1).reshape(x2.shape + (3*self.n_components,))
-      z2, log_det2 = self.auto_batch(self.forward, in_axes=(0, 0))(x2, theta2)
-
+      z, log_det = self.auto_batch(self.forward, in_axes=in_axes)(x, theta)
     else:
-      # Run the first part of the mixture
-      z1, log_det1 = self.auto_batch(self.inverse, in_axes=(0, None))(x1, theta1)
-
-      # Run the second part
-      network_in = jnp.concatenate([z1, condition], axis=-1) if self.use_condition else z1
-      theta2 = self.auto_batch(network, expected_depth=1)(z1).reshape(x2.shape + (3*self.n_components,))
-      z2, log_det2 = self.auto_batch(self.inverse, in_axes=(0, 0))(x2, theta2)
-
-    z = jnp.concatenate([z1, z2], axis=-1)
-    log_det = log_det1 + log_det2
+      z, log_det = self.auto_batch(self.inverse, in_axes=in_axes)(x, theta)
 
     if self.reverse:
       log_det *= -1
 
-    return {"x": z, "log_det": log_det}
+    return z, log_det
 
 ################################################################################################################
 
@@ -299,28 +248,34 @@ class _LogitsticMixtureMixin():
 
 class _LogitsticMixtureLogitMixin():
   """ Combined logistic mixture -> logit """
-  def __init__(self, n_components: int=4, name: str="logistic_mixture_cdf", restrict_scales: bool=True, **kwargs):
+  def __init__(self, n_components: int=4, name: str="logistic_mixture_cdf_logit", restrict_scales: bool=False, **kwargs):
     super().__init__(n_components=n_components, name=name, **kwargs)
     self.restrict_scales = restrict_scales
 
   def f(self, weight_logits, means, log_scales, x):
+    log_scales = jnp.logaddexp(log_scales, -12)
     if self.restrict_scales:
       log_scales = 1.5*jnp.tanh(log_scales)
-      z_scores = (x - means)*jnp.exp(-log_scales)
-    else:
-      z_scores = (x - means)/(jnp.exp(log_scales) + 1e-5)
-    log_z = logsumexp(weight_logits - jax.nn.softplus(-z_scores))
-    log_1mz = logsumexp(weight_logits - jax.nn.softplus(z_scores))
+
+    z_scores = (x - means)*jnp.exp(-log_scales)
+
+    t1 = -jax.nn.softplus(-z_scores)
+    t2 = t1 - z_scores
+
+    log_z = logsumexp(weight_logits + t1)
+    log_1mz = logsumexp(weight_logits + t2)
     return log_z - log_1mz
 
   def log_det(self, weight_logits, means, log_scales, x):
+    log_scales = jnp.logaddexp(log_scales, -12)
     if self.restrict_scales:
       log_scales = 1.5*jnp.tanh(log_scales)
-      z_scores = (x - means)*jnp.exp(-log_scales)
-    else:
-      z_scores = (x - means)/(jnp.exp(log_scales) + 1e-5)
+
+    z_scores = (x - means)*jnp.exp(-log_scales)
+
     t1 = -jax.nn.softplus(-z_scores)
-    t2 = -jax.nn.softplus(z_scores)
+    t2 = t1 - z_scores
+    # t2 = -jax.nn.softplus(z_scores)
 
     a = weight_logits + t1
     b = weight_logits + t2
@@ -333,14 +288,14 @@ class _LogitsticMixtureLogitMixin():
     return mixture_log_pdf + logit_log_det
 
   def f_and_log_det(self, weight_logits, means, log_scales, x):
+    log_scales = jnp.logaddexp(log_scales, -12)
     if self.restrict_scales:
       log_scales = 1.5*jnp.tanh(log_scales)
-      z_scores = (x - means)*jnp.exp(-log_scales)
-    else:
-      z_scores = (x - means)/(jnp.exp(log_scales) + 1e-5)
+
+    z_scores = (x - means)*jnp.exp(-log_scales)
 
     t1 = -jax.nn.softplus(-z_scores)
-    t2 = -jax.nn.softplus(z_scores)
+    t2 = t1 - z_scores
 
     a = weight_logits + t1
     b = weight_logits + t2

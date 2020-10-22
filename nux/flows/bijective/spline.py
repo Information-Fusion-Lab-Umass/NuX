@@ -7,6 +7,7 @@ import haiku as hk
 from typing import Optional, Mapping, Callable, Sequence
 from nux.flows.base import *
 import nux.util as util
+from nux.flows.bijective.coupling_base import CouplingBase
 import nux.networks as net
 
 __all__ = ["NeuralSpline"]
@@ -130,7 +131,7 @@ def spline(theta: jnp.ndarray,
 
 ################################################################################################################
 
-class NeuralSpline(Layer):
+class NeuralSpline(CouplingBase):
 
   def __init__(self,
                K: int=4,
@@ -149,59 +150,27 @@ class NeuralSpline(Layer):
     self.forward_spline = jit(partial(spline, K=K, sample=False, bounds=bounds))
     self.inverse_spline = jit(partial(spline, K=K, sample=True, bounds=bounds))
 
-  def get_network(self, shape):
-    out_dim = shape[-1]
+  def get_out_shape(self, x):
+    x_shape = x.shape[len(self.batch_shape):]
+    out_dim = x_shape[-1]*(3*self.K - 1)
+    return x_shape[:-1] + (out_dim,)
 
-    if self.create_network is not None:
-      return self.create_network(shape)
-    if len(shape) == 1:
-      network_kwargs = self.network_kwargs
-      if network_kwargs is None:
-
-        network_kwargs = dict(layer_sizes=[128]*4,
-                              nonlinearity="relu",
-                              parameter_norm="weight_norm")
-      network_kwargs["out_dim"] = out_dim
-
-      return net.MLP(**network_kwargs)
-
+  def transform(self, x, params=None, sample=False):
+    x_flat = x.reshape(self.batch_shape + (-1,))
+    param_dim = (3*self.K - 1)
+    if params is None:
+      x_shape = x_flat.shape[len(self.batch_shape):]
+      theta = hk.get_parameter("theta", shape=(x_flat.shape[-1],) + (param_dim,), dtype=x_flat.dtype, init=hk.initializers.RandomNormal())
+      in_axes = (None, 0)
     else:
-      assert 0, "Currently only implemented for 1d inputs"
-
-  def call(self, inputs: Mapping[str, jnp.ndarray], rng: jnp.ndarray=None, sample: Optional[bool]=False, **kwargs) -> Mapping[str, jnp.ndarray]:
-    x = inputs["x"]
-    x_shape = self.get_unbatched_shapes(sample)["x"]
-    split_index = x_shape[-1]//2
-    x1, x2 = jnp.split(x, jnp.array([split_index]), axis=-1)
-    x1_shape = x1.shape[len(self.batch_shape):]
-    x2_shape = x2.shape[len(self.batch_shape):]
-    param_dim = 3*self.K - 1
-
-    # Define the network
-    network_out_shape = (x2_shape[-1]*param_dim,)
-    network = self.get_network(network_out_shape)
-
-    # Define the extra parameters for the other half of the input
-    theta1 = hk.get_parameter("theta1", shape=(x1_shape[-1], param_dim), dtype=x.dtype, init=hk.initializers.RandomNormal())
+      theta = params.reshape(self.batch_shape + (x_flat.shape[-1],) + (param_dim,))
+      in_axes = (0, 0)
 
     if sample == False:
-      # Run the first part of the spline
-      z1, log_det1 = self.auto_batch(self.forward_spline, in_axes=(None, 0))(theta1, x1)
-
-      # Run the second part
-      theta2 = self.auto_batch(network, expected_depth=1)(x1).reshape(self.batch_shape + (-1, param_dim))
-      z2, log_det2 = self.auto_batch(self.forward_spline, in_axes=(0, 0))(theta2, x2)
+      z, log_det = self.auto_batch(self.forward_spline, in_axes=in_axes)(theta, x_flat)
     else:
-      # Run the first part of the spline
-      z1, log_det1 = self.auto_batch(self.inverse_spline, in_axes=(None, 0))(theta1, x1)
+      z, log_det = self.auto_batch(self.inverse_spline, in_axes=in_axes)(theta, x_flat)
 
-      # Run the second part and condition on the result of the first part
-      theta2 = self.auto_batch(network, expected_depth=1)(z1).reshape(self.batch_shape + (-1, param_dim))
-      z2, log_det2 = self.auto_batch(self.inverse_spline, in_axes=(0, 0))(theta2, x2)
+    z = z.reshape(x.shape)
 
-    z = jnp.concatenate([z1, z2], axis=-1)
-
-    outputs = {"x": z, "log_det": log_det1 + log_det2}
-
-    return outputs
-
+    return z, log_det

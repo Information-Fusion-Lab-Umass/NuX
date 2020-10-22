@@ -16,23 +16,27 @@ from nux.tests.bijective_test import flow_test
 if __name__ == "__main__":
 
   def create_fun():
-    return nux.CouplingLogitsticMixtureLogit()
-    # return nux.CouplingLogitsticMixtureLogit(reverse=True, use_condition=True)
+    # return Coupling2(split_kind="channel", use_condition=True, kind="additive")
+    # return nux.NeuralSpline()
+    return nux.CouplingLogitsticMixtureLogit(use_condition=True)
+    return nux.GMMPrior(3)
     return nux.sequential(nux.SurjectiveMaxPool(),
                           nux.UnitGaussianPrior())
 
   rng = random.PRNGKey(0)
   # x = random.normal(rng, (10, 4))
-  x = random.normal(rng, (10, 16, 16, 3))
+  x = random.normal(rng, (5, 4, 4, 3))
+  # x = random.normal(rng, (5, 16, 16, 3))
   x = jax.nn.sigmoid(x)
   inputs = {"x": x[0], "condition": x[0]}
 
   flow_test(create_fun, inputs, rng)
+  assert 0
 
   ################################################
   ################################################
 
-  inputs = {"x": x, "condition": x}
+  inputs = {"x": x, "condition": x, "y": random.randint(rng, minval=0, maxval=3, shape=(x.shape[0],))}
 
   flow = nux.transform_flow(create_fun)
   params, state = flow.init(rng, inputs, batch_axes=(0,))
