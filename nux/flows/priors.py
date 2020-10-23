@@ -24,7 +24,7 @@ class UnitGaussianPrior(Layer):
            inputs: Mapping[str, jnp.ndarray],
            rng: PRNGKey,
            sample: Optional[bool]=False,
-           t: Optional[float]=0.2,
+           t: Optional[float]=1.0,
            ignore_prior: Optional[bool]=False,
            **kwargs
   ) -> Mapping[str, jnp.ndarray]:
@@ -127,7 +127,7 @@ class GMMPrior(Layer):
           # Either sample or use a specified cluster
           return jax.lax.cond(y < 0, no_label, with_label, y)
 
-        n_keys = int(jnp.prod(jnp.array(self.batch_shape)))
+        n_keys = util.list_prod(self.batch_shape)
         rngs = random.split(rng, n_keys).reshape(self.batch_shape + (-1,))
         y, log_pz = self.auto_batch(sample)(log_pdfs, y, rngs)
 

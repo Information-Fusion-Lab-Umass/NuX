@@ -254,7 +254,8 @@ def get_tree_shapes(name: str,
     return x_shape
 
   def apply_get_shapes(x):
-    return partial(jax.tree_map, get_unbatched_shape)(x)
+    return jax.tree_map(get_unbatched_shape, x)
+    # return partial(jax.tree_map, get_unbatched_shape)(x)
 
   return get_constant(name, pytree, init=apply_get_shapes, do_not_set=do_not_set)
 
@@ -277,12 +278,10 @@ class Layer(hk.Module, ABC):
                inputs: Mapping[str, jnp.ndarray],
                rng: jnp.ndarray=None,
                sample: Optional[bool]=False,
-               no_batching: Optional[bool]=False,
                **kwargs
     ) -> Mapping[str, jnp.ndarray]:
 
-    # We can force the code to not batch.  This is useful if we define an unbatched layer inside an auto-batched layer
-    batch_axes = Layer.batch_axes if no_batching == False else ()
+    batch_axes = Layer.batch_axes
 
     if sample == False:
       self.unbatched_input_shapes = get_tree_shapes("unbatched_input_shapes", inputs, batch_axes=batch_axes)
@@ -298,7 +297,7 @@ class Layer(hk.Module, ABC):
       self.batch_shape = inputs["x"].shape[:-len(self.unbatched_output_shapes["x"])]
 
     # Run the actual function
-    outputs = self.call(inputs, rng, sample=sample, no_batching=no_batching, **kwargs)
+    outputs = self.call(inputs, rng, sample=sample, **kwargs)
 
     if sample == False:
       # Keep track of the initial output shapes
@@ -367,7 +366,6 @@ class Layer(hk.Module, ABC):
            inputs: Mapping[str, jnp.ndarray],
            rng: jnp.ndarray=None,
            sample: Optional[bool]=False,
-           no_batching: Optional[bool]=False,
            **kwargs
     ) -> Mapping[str, jnp.ndarray]:
     """ The expectation is that inputs will be a dicionary with

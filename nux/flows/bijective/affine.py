@@ -8,7 +8,8 @@ from typing import Optional, Mapping, Tuple, Sequence, Union, Any, Callable
 from nux.flows.base import *
 import nux.util as util
 
-__all__ = ["Identity",
+__all__ = ["Bias",
+           "Identity",
            "Scale",
            "AffineDense",
            "AffineLDU",
@@ -17,6 +18,29 @@ __all__ = ["Identity",
            "LocalDense"]
 
 ################################################################################################################
+
+class Bias(Layer):
+
+  def __init__(self, axis: int=-1, name: str="bias", **kwargs):
+    super().__init__(name=name, **kwargs)
+    if isinstance(axis, int):
+      axis = [axis]
+    self.axis = axis
+
+  def call(self,
+           inputs: Mapping[str, jnp.ndarray],
+           rng: jnp.ndarray=None,
+           sample: Optional[bool]=False,
+           **kwargs
+  ) -> Mapping[str, jnp.ndarray]:
+    shape = self.get_unbatched_shapes(sample)["x"][self.axis]
+    b = hk.get_parameter("b", shape=shape)
+    x = inputs["x"]
+    if sample:
+      z = x + b
+    else:
+      z = x - b
+    return {"x": z, "log_det": jnp.zeros(self.batch_shape)}
 
 class Identity(Layer):
 
@@ -54,7 +78,7 @@ class Scale(Layer):
 
     shape = self.get_unbatched_shapes(sample)["x"]
     outputs["log_det"] = jnp.ones(self.batch_shape)
-    outputs["log_det"] *= -jnp.log(self.tau)*jnp.prod(jnp.array(shape))
+    outputs["log_det"] *= -jnp.log(self.tau)*util.list_prod(shape)
 
     return outputs
 

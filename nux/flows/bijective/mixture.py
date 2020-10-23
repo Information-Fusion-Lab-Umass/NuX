@@ -253,7 +253,7 @@ class _LogitsticMixtureLogitMixin():
     self.restrict_scales = restrict_scales
 
   def f(self, weight_logits, means, log_scales, x):
-    log_scales = jnp.logaddexp(log_scales, -12)
+    log_scales = jnp.logaddexp(log_scales, -10)
     if self.restrict_scales:
       log_scales = 1.5*jnp.tanh(log_scales)
 
@@ -267,7 +267,7 @@ class _LogitsticMixtureLogitMixin():
     return log_z - log_1mz
 
   def log_det(self, weight_logits, means, log_scales, x):
-    log_scales = jnp.logaddexp(log_scales, -12)
+    log_scales = jnp.logaddexp(log_scales, -10)
     if self.restrict_scales:
       log_scales = 1.5*jnp.tanh(log_scales)
 
@@ -288,7 +288,7 @@ class _LogitsticMixtureLogitMixin():
     return mixture_log_pdf + logit_log_det
 
   def f_and_log_det(self, weight_logits, means, log_scales, x):
-    log_scales = jnp.logaddexp(log_scales, -12)
+    log_scales = jnp.logaddexp(log_scales, -10)
     if self.restrict_scales:
       log_scales = 1.5*jnp.tanh(log_scales)
 

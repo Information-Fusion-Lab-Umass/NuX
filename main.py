@@ -16,18 +16,20 @@ from nux.tests.bijective_test import flow_test
 if __name__ == "__main__":
 
   def create_fun():
-    # return Coupling2(split_kind="channel", use_condition=True, kind="additive")
-    # return nux.NeuralSpline()
-    return nux.CouplingLogitsticMixtureLogit(use_condition=True)
-    return nux.GMMPrior(3)
-    return nux.sequential(nux.SurjectiveMaxPool(),
-                          nux.UnitGaussianPrior())
+    network_kwargs = dict(n_blocks=4,
+                          hidden_channel=64,
+                          parameter_norm="weight_norm",
+                          normalization="instance_norm",
+                          nonlinearity="swish")
+    return nux.UniformDequantization(scale=256)
+    return nux.Logit()
+    return nux.Coupling(network_kwargs=network_kwargs)
 
   rng = random.PRNGKey(0)
   # x = random.normal(rng, (10, 4))
   x = random.normal(rng, (5, 4, 4, 3))
   # x = random.normal(rng, (5, 16, 16, 3))
-  x = jax.nn.sigmoid(x)
+  x = jax.nn.sigmoid(x)*256
   inputs = {"x": x[0], "condition": x[0]}
 
   flow_test(create_fun, inputs, rng)

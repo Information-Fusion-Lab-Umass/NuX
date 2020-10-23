@@ -87,8 +87,8 @@ class Flatten(Layer):
 
     if sample == False:
       unbatched_shape = self.unbatched_input_shapes["x"]
-      flat_dim = jnp.prod(jnp.array(unbatched_shape))
-      flat_shape = self.batch_shape + (int(flat_dim),)
+      flat_dim = util.list_prod(unbatched_shape)
+      flat_shape = self.batch_shape + (flat_dim,)
       z = x.reshape(flat_shape)
     else:
       original_shape = self.batch_shape + self.unbatched_input_shapes["x"]
@@ -116,8 +116,8 @@ class Reshape(Layer):
     x = inputs["x"]
 
     if sample == False:
-      out_dim = jnp.prod(jnp.array(self.output_shape))
-      expected_out_dim = jnp.prod(jnp.array(self.unbatched_input_shapes["x"]))
+      out_dim = util.list_prod(self.output_shape)
+      expected_out_dim = util.list_prod(self.unbatched_input_shapes["x"])
       assert out_dim == expected_out_dim, f"Dimension mismatch"
 
       z = x.reshape(self.batch_shape + self.output_shape)

@@ -153,7 +153,7 @@ class ResidualFlow(Layer):
           print("log_det_ests.std()", log_det_ests.std())
 
       else:
-        n_keys = int(jnp.prod(jnp.array(self.batch_shape)))
+        n_keys = util.list_prod(self.batch_shape)
         rngs = random.split(rng, n_keys).reshape(self.batch_shape + (-1,))
         res_fun = partial(res_flow_estimate, res_block)
         z, log_det = self.auto_batch(res_fun)(x, rngs)

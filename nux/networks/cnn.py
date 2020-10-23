@@ -205,7 +205,7 @@ class RepeatedConv(hk.Module):
     elif nonlinearity == "sigmoid":
       self.nonlinearity = jax.nn.sigmoid
     elif nonlinearity == "swish":
-      self.nonlinearity = jax.nn.swish(x)
+      self.nonlinearity = jax.nn.swish
     elif nonlinearity == "lipswish":
       self.nonlinearity = lambda x: jax.nn.swish(x)/1.1
     else:

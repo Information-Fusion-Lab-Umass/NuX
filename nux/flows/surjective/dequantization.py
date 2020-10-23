@@ -29,8 +29,8 @@ class UniformDequantization(Layer):
     x = inputs["x"]
     x_shape = self.get_unbatched_shapes(sample)["x"]
 
-    if(sample == False):
-      if(no_dequantization == False):
+    if sample == False:
+      if no_dequantization == False:
         noise = random.uniform(rng, x.shape)
         z = (x + noise)/self.scale
       else:
@@ -39,7 +39,7 @@ class UniformDequantization(Layer):
       z = x*self.scale
       # z = jnp.floor(x*self.scale)
 
-    log_det = -jnp.log(self.scale)*jnp.prod(jnp.array(x_shape))*jnp.ones(self.batch_shape)
+    log_det = -jnp.log(self.scale)*util.list_prod(x_shape)*jnp.ones(self.batch_shape)
     return {"x": z, "log_det": log_det}
 
 ################################################################################################################
@@ -79,7 +79,7 @@ class VariationalDequantization(Layer):
     x = inputs["x"]
     x_shape = self.get_unbatched_shapes(sample)["x"]
 
-    log_det = -jnp.log(self.scale)*jnp.prod(jnp.array(x_shape))*jnp.ones(self.batch_shape)
+    log_det = -jnp.log(self.scale)*util.list_prod(x_shape)*jnp.ones(self.batch_shape)
     flow = self.flow if self.flow is not None else self.default_flow()
 
     if sample == False:

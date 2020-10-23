@@ -39,6 +39,9 @@ class Coupling(CouplingBase):
     return x_shape[:-1] + (out_dim,)
 
   def transform(self, x, params=None, sample=False):
+    # Remember that self.get_unbatched_shapes(sample)["x"] is NOT the shape of x here!
+
+    # Get the parameters of the transformation
     scale_init = hk.initializers.RandomNormal(stddev=0.01)
     if params is None:
       x_shape = x.shape[len(self.batch_shape):]
@@ -63,11 +66,21 @@ class Coupling(CouplingBase):
       if self.kind == "affine":
         log_s = scale_scale*log_s
 
+    # Evaluate the transformation
     if sample == False:
       z = (x - t)*jnp.exp(-log_s) if self.kind == "affine" else x - t
     else:
       z = x*jnp.exp(log_s) + t if self.kind == "affine" else x + t
 
-    log_det = -jnp.sum(log_s) if self.kind == "affine" else jnp.zeros(self.batch_shape)
+    # Compute the log determinant
+    if self.kind == "affine":
+      if params is None:
+        log_det = -log_s.sum()*jnp.ones(self.batch_shape)
+      else:
+        x_shape = x.shape[len(self.batch_shape):]
+        sum_axes = tuple(range(-1, -1 - len(x_shape), -1))
+        log_det = -log_s.sum(axis=sum_axes)
+    else:
+      log_det = jnp.zeros(self.batch_shape)
 
     return z, log_det

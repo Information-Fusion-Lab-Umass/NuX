@@ -86,11 +86,12 @@ class factored(Layer):
     accumulated_found = dict([(name, False) for name in accumulate])
 
     # Split x
-    split_size = inputs["x"].shape[self.axis]/n_layers
-    split_size = int(jnp.ceil(split_size))
-    split_idx = jnp.array([i*split_size for i in range(1, n_layers)])
-    xs = jnp.split(inputs["x"], indices_or_sections=split_idx, axis=self.axis)
-    # xs = jnp.split(inputs["x"], n_layers, self.axis)
+    # split_size = inputs["x"].shape[self.axis]/n_layers
+    # split_size = jnp.ceil(split_size).astype(int)
+    # split_idx = jnp.array([i*split_size for i in range(1, n_layers)])
+    # xs = jnp.split(inputs["x"], indices_or_sections=split_idx, axis=self.axis)
+
+    xs = jnp.split(inputs["x"], n_layers, self.axis)
     zs = []
 
     # Split the random key
@@ -139,7 +140,7 @@ class multi_scale(Layer):
   ) -> Mapping[str, jnp.ndarray]:
 
     flow = sequential(nux.Squeeze(),
-                      factored(self.flow, nux.Identity()),
+                      factored(nux.Identity(), self.flow),
                       nux.UnSqueeze())
 
     return flow(inputs, rng, sample=sample, **kwargs)

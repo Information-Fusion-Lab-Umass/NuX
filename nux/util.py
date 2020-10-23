@@ -11,6 +11,46 @@ import pickle
 import haiku as hk
 import pathlib
 import nux.spectral_norm as sn
+import nux.networks as net
+from operator import mul
+from functools import reduce
+
+################################################################################################################
+
+def list_prod(x):
+    # We might run into JAX tracer issues if we do something like multiply the elements of a shape tuple
+    return reduce(mul, x, 1)
+
+################################################################################################################
+
+def get_default_network(out_shape, network_kwargs=None):
+
+  out_dim = out_shape[-1]
+
+  # Otherwise, use default networks
+  if len(out_shape) == 1:
+    if network_kwargs is None:
+
+      network_kwargs = dict(layer_sizes=[128]*4,
+                            nonlinearity="relu",
+                            parameter_norm="weight_norm")
+    network_kwargs["out_dim"] = out_dim
+
+    return net.MLP(**network_kwargs)
+
+  else:
+    if network_kwargs is None:
+
+      network_kwargs = dict(n_blocks=2,
+                            hidden_channel=16,
+                            nonlinearity="relu",
+                            normalization="instance_norm",
+                            parameter_norm="weight_norm",
+                            block_type="reverse_bottleneck",
+                            squeeze_excite=True)
+    network_kwargs["out_channel"] = out_dim
+
+    return net.ResNet(**network_kwargs)
 
 ################################################################################################################
 

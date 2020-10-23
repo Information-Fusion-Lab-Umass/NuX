@@ -65,7 +65,7 @@ def extract_max_elts(x):
 ################################################################################################################
 
 def generate_grid_indices(shape, rng):
-  total_dim = jnp.prod(jnp.array(shape))
+  total_dim = util.list_prod(shape)
 
   # Generate the indices for each pixel
   idx = jnp.arange(4).tile((total_dim, 1))
@@ -175,11 +175,11 @@ class SurjectiveMaxPool(Layer):
     else:
       max_elts = inputs["x"]
       max_elts_shape = self.get_unbatched_shapes(sample)["x"]
-      max_elts_size = jnp.prod(jnp.array(max_elts_shape))
+      max_elts_size = util.list_prod(max_elts_shape)
       rng1, rng2 = random.split(rng, 2)
 
       # Sample the max indices from q(k|x)
-      n_keys = int(jnp.prod(jnp.array(self.batch_shape)))
+      n_keys = util.list_prod(self.batch_shape)
       rngs = random.split(rng1, n_keys).reshape(self.batch_shape + (-1,))
       max_idx, non_max_idx = self.auto_batch(partial(generate_grid_indices, max_elts_shape))(rngs)
       log_qkgx = -jnp.log(4)*max_elts_size

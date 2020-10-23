@@ -44,7 +44,7 @@ class ActNorm(Layer):
     else:
       outputs["x"] = jnp.exp(log_s)*x + b
 
-    log_det = -log_s.sum()*jnp.prod(jnp.array(x_shape[:-1]))
+    log_det = -log_s.sum()*util.list_prod(x_shape[:-1])
     outputs["log_det"] = log_det*jnp.ones(self.batch_shape)
 
     return outputs

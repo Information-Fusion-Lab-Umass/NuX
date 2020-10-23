@@ -3,8 +3,8 @@ import jax.numpy as jnp
 import jax
 from jax import random, jit, vmap
 import nux.util as util
-from training.trainer import Trainer
-from training.tester import Tester
+from nux.training.trainer import Trainer
+from nux.training.tester import Tester
 from typing import Optional, Mapping, Callable, Sequence, Tuple, Any
 from haiku._src.typing import Params, State, PRNGKey
 
