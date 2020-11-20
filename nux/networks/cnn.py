@@ -4,40 +4,15 @@ from functools import partial
 import jax
 import haiku as hk
 import nux.spectral_norm as sn
+import nux.util as util
 from typing import Optional, Mapping, Callable, Sequence, Any
+import nux.weight_initializers as init
 
 __all__ = ["Conv",
            "ConvBlock",
            "BottleneckConv",
-           "ReverseBottleneckConv"]
-
-################################################################################################################
-
-def apply_conv(x: jnp.ndarray,
-               w: jnp.ndarray,
-               stride: Sequence[int],
-               padding: Sequence[int],
-               lhs_dilation: Sequence[int],
-               rhs_dilation: Sequence[int],
-               dimension_numbers: Sequence[str],
-               transpose: bool):
-
-  if transpose == False:
-    return jax.lax.conv_general_dilated(x,
-                                        w,
-                                        window_strides=stride,
-                                        padding=padding,
-                                        lhs_dilation=lhs_dilation,
-                                        rhs_dilation=rhs_dilation,
-                                        dimension_numbers=dimension_numbers)
-
-  return jax.lax.conv_transpose(x,
-                                w,
-                                strides=stride,
-                                padding=padding,
-                                rhs_dilation=rhs_dilation,
-                                dimension_numbers=dimension_numbers,
-                                transpose_kernel=True)
+           "ReverseBottleneckConv",
+           "CNN"]
 
 ################################################################################################################
 
@@ -55,40 +30,30 @@ def data_dependent_param_init(x: jnp.ndarray,
   w_shape = kernel_shape + (C, out_channel)
 
   if parameter_norm == "spectral_norm":
-    w = hk.get_parameter(f"w_{name_suffix}", w_shape, x.dtype, init=w_init)
-    if use_bias:
-      b = hk.get_parameter(f"b_{name_suffix}", (out_channel,), init=b_init)
-
-    u = hk.get_state(f"u_{name_suffix}", kernel_shape + (out_channel,), init=hk.initializers.RandomNormal())
-    w, u = sn.spectral_norm_conv_apply(w, u, conv_kwargs["stride"], conv_kwargs["padding"], 0.9, 1)
-    if is_training == True:
-      hk.set_state(f"u_{name_suffix}", u)
-
-    if use_bias:
-      b = hk.get_parameter(f"b_{name_suffix}", (out_channel,), x.dtype, init=b_init)
+    return init.conv_weight_with_spectral_norm(x=x,
+                                               kernel_shape=kernel_shape,
+                                               out_channel=out_channel,
+                                               name_suffix=name_suffix,
+                                               w_init=w_init,
+                                               b_init=b_init,
+                                               use_bias=use_bias,
+                                               is_training=is_training,
+                                               **conv_kwargs)
 
   elif parameter_norm == "weight_norm" and x.shape[0] > 1:
-    w = hk.get_parameter("w", w_shape, x.dtype, init=hk.initializers.RandomNormal(stddev=0.05))
-    w *= jax.lax.rsqrt((w**2).sum(axis=(0, 1, 2)))[None,None,None,:]
+    return init.conv_weight_with_weight_norm(x,
+                                             kernel_shape,
+                                             out_channel,
+                                             name_suffix,
+                                             w_init,
+                                             b_init,
+                                             use_bias,
+                                             is_training,
+                                             **conv_kwargs)
 
-    def g_init(shape, dtype):
-      t = apply_conv(x, w, **conv_kwargs)
-      return 1/(jnp.std(t, axis=(0, 1, 2)) + 1e-5)
-
-    def b_init(shape, dtype):
-      t = apply_conv(x, w, **conv_kwargs)
-      return -jnp.mean(t, axis=(0, 1, 2))/(jnp.std(t, axis=(0, 1, 2)) + 1e-5)
-
-    g = hk.get_parameter(f"g_{name_suffix}", (out_channel,), x.dtype, init=g_init)
-    if use_bias:
-      b = hk.get_parameter(f"b_{name_suffix}", (out_channel,), x.dtype, init=b_init)
-
-    w *= g[None,None,None,:]
-
-  else:
-    w = hk.get_parameter(f"w_{name_suffix}", w_shape, x.dtype, init=w_init)
-    if use_bias:
-      b = hk.get_parameter(f"b_{name_suffix}", (out_channel,), x.dtype, init=b_init)
+  w = hk.get_parameter(f"w_{name_suffix}", w_shape, x.dtype, init=w_init)
+  if use_bias:
+    b = hk.get_parameter(f"b_{name_suffix}", (out_channel,), x.dtype, init=b_init)
 
   if use_bias:
     return w, b
@@ -157,7 +122,7 @@ class Conv(hk.Module):
     else:
       w = params
 
-    out = apply_conv(x, w, **self.conv_kwargs)
+    out = util.apply_conv(x, w, **self.conv_kwargs)
 
     if self.use_bias:
       out += b
@@ -392,3 +357,53 @@ class ConvBlock(hk.Module):
     return x
 
 ################################################################################################################
+
+class CNN(hk.Module):
+
+  def __init__(self,
+               n_blocks: int,
+               hidden_channel: int,
+               out_channel: int,
+               parameter_norm: str=None,
+               normalization: str=None,
+               nonlinearity: str="relu",
+               squeeze_excite: bool=False,
+               block_type: str="reverse_bottleneck",
+               name=None):
+    super().__init__(name=name)
+
+    self.conv_block_kwargs = dict(hidden_channel=hidden_channel,
+                                  parameter_norm=parameter_norm,
+                                  normalization=normalization,
+                                  nonlinearity=nonlinearity)
+
+    self.hidden_channel = hidden_channel
+    self.n_blocks       = n_blocks
+    self.out_channel    = out_channel
+    self.squeeze_excite = squeeze_excite
+
+    if block_type == "bottleneck":
+      self.conv_block = BottleneckConv
+    elif block_type == "reverse_bottleneck":
+      self.conv_block = ReverseBottleneckConv
+    else:
+      assert 0, "Invalid block type"
+
+  def __call__(self, x, is_training=True, **kwargs):
+    for i in range(self.n_blocks):
+      x = self.conv_block(out_channel=self.hidden_channel,
+                          **self.conv_block_kwargs)(x, is_training=is_training)
+
+      if self.squeeze_excite:
+        x = SqueezeExcitation(reduce_ratio=4)(x)
+
+    # Add an extra convolution to change the out channels
+    conv = Conv(self.out_channel,
+                kernel_shape=(1, 1),
+                stride=(1, 1),
+                padding="SAME",
+                parameter_norm=self.conv_block_kwargs["parameter_norm"],
+                use_bias=False)
+    x = conv(x, is_training=is_training)
+
+    return x

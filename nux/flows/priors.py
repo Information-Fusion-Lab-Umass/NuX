@@ -17,8 +17,14 @@ __all__ = ["UnitGaussianPrior",
 
 class UnitGaussianPrior(Layer):
 
-  def __init__(self, name: str="unit_gaussian_prior", **kwargs):
-    super().__init__(name=name, **kwargs)
+  def __init__(self,
+               name: str="unit_gaussian_prior"
+  ):
+    """ Unit Gaussian prior
+    Args:
+      name: Optional name for this module.
+    """
+    super().__init__(name=name)
 
   def call(self,
            inputs: Mapping[str, jnp.ndarray],
@@ -59,8 +65,16 @@ class UnitGaussianPrior(Layer):
 
 class GMMPrior(Layer):
 
-  def __init__(self, n_classes: int, name: str="gmm_prior", **kwargs):
-    super().__init__(name=name, **kwargs)
+  def __init__(self,
+               n_classes: int,
+               name: str="gmm_prior"
+  ):
+    """ Gaussian mixture model prior.  Can be used for classificaiton.
+    Args:
+      n_classes: Number of mixture components.
+      name     : Optional name for this module.
+    """
+    super().__init__(name=name)
     self.n_classes = n_classes
 
   def call(self,

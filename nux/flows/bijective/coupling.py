@@ -20,17 +20,28 @@ class Coupling(CouplingBase):
                axis: Optional[int]=-1,
                split_kind: str="channel",
                use_condition: bool=False,
-               name: str="coupling",
-               network_kwargs: Optional=None,
-               **kwargs
+               network_kwargs: Optional[Mapping]=None,
+               name: str="coupling"
   ):
+    """ Affine/additive coupling.  Transform an input, x = [xa,xb] using
+        za = (xa - t(xb))/s(xb), zb = (xb - t)/s, z = [za, ab]
+        Used in RealNVP https://arxiv.org/pdf/1605.08803.pdf
+    Args:
+      create_network: Function to create the conditioner network.  Should accept a tuple
+                      specifying the output shape.  See coupling_base.py
+      kind          : "affine" or "additive".  If additive, s(.) = 1
+      axis          : Axis to apply the transformation to
+      split_kind    : If we input an image, we can split by "channel" or using a "checkerboard" split
+      use_condition : Should we use inputs["condition"] to form t([xb, condition]), s([xb, condition])?
+      network_kwargs: Dictionary with settings for the default network (see get_default_network in util.py)
+      name          : Optional name for this module.
+    """
     super().__init__(create_network=create_network,
                      axis=axis,
                      split_kind=split_kind,
                      use_condition=use_condition,
                      name=name,
-                     network_kwargs=network_kwargs,
-                     **kwargs)
+                     network_kwargs=network_kwargs)
     self.kind = kind
 
   def get_out_shape(self, x):

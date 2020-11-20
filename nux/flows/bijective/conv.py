@@ -25,12 +25,27 @@ slogdet_height_width_vmap = jit(vmap(vmap(complex_slogdet)))
 
 class CircularConv(Layer):
 
-  def __init__(self, filter_shape: Sequence[int], name: str="circular_conv", **kwargs):
-    super().__init__(name=name, **kwargs)
+  def __init__(self,
+               filter_shape: Sequence[int],
+               name: str="circular_conv"
+  ):
+    """ Circular convolution.  Equivalent to a regular convolution with circular padding.
+        https://papers.nips.cc/paper/2019/file/b1f62fa99de9f27a048344d55c5ef7a6-Paper.pdf
+    Args:
+      filter_shape: Height and width for the convolutional filter, (Kx, Ky).  The full
+                    kernel will have shape (Kx, Ky, C, C)
+      name        : Optional name for this module.
+    """
+    super().__init__(name=name)
     assert len(filter_shape) == 2
     self.filter_shape = filter_shape
 
-  def call(self, inputs: Mapping[str, jnp.ndarray], rng: jnp.ndarray=None, sample: Optional[bool]=False, **kwargs) -> Mapping[str, jnp.ndarray]:
+  def call(self,
+           inputs: Mapping[str, jnp.ndarray],
+           rng: jnp.ndarray=None,
+           sample: Optional[bool]=False,
+           **kwargs
+  ) -> Mapping[str, jnp.ndarray]:
 
     x = inputs["x"]
     outputs = {}

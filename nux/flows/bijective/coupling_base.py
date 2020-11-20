@@ -18,11 +18,23 @@ class CouplingBase(Layer):
                axis: Optional[int]=-1,
                split_kind: str="channel",
                use_condition: bool=False,
-               name: str="coupling",
-               network_kwargs: Optional=None,
-               **kwargs
+               network_kwargs: Optional[Mapping]=None,
+               name: str="coupling"
   ):
-    super().__init__(name=name, **kwargs)
+    """ Coupling transformation.  Transform an input, x = [xa,xb] using
+        za = f(xa; NN(xb)), zb = f(xb; theta), z = [za, ab]
+        Remember that BOTH halves of x/z are transformed in this function.
+    Args:
+      create_network: Function to create the conditioner network.  Should accept a tuple
+                      specifying the output shape.  See coupling_base.py
+      kind          : "affine" or "additive".  If additive, s(.) = 1
+      axis          : Axis to apply the transformation to
+      split_kind    : If we input an image, we can split by "channel" or using a "checkerboard" split
+      use_condition : Should we concatenate inputs["condition"] to xb in NN([xb, condition])?
+      network_kwargs: Dictionary with settings for the default network (see get_default_network in util.py)
+      name          : Optional name for this module.
+    """
+    super().__init__(name=name)
     self.axis               = axis
     self.create_network     = create_network
     self.network_kwargs     = network_kwargs
@@ -36,7 +48,7 @@ class CouplingBase(Layer):
     if self.create_network is not None:
       return self.create_network(out_shape)
 
-    return util.get_default_network(out_shape, self.network_kwargs)
+    return util.get_default_network(out_shape, network_kwargs=self.network_kwargs)
 
   def get_out_shape(self, x):
     assert 0
@@ -71,12 +83,18 @@ class CouplingBase(Layer):
     network = self.get_network(out_shape)
 
     if sample == False:
+      # zb = f(xb; theta)
       zb, log_detb = self.transform(xb, sample=False)
+
+      # za = f(xa; NN(xb))
       network_in = jnp.concatenate([xb, condition], axis=self.axis) if self.use_condition else xb
       network_out = self.auto_batch(network, expected_depth=1)(network_in)
       za, log_deta = self.transform(xa, params=network_out, sample=False)
     else:
+      # xb = f^{-1}(zb; theta).  (x and z are swapped so that the code is a bit cleaner)
       zb, log_detb = self.transform(xb, sample=True)
+
+      # xa = f^{-1}(za; NN(xb)).
       network_in = jnp.concatenate([zb, condition], axis=self.axis) if self.use_condition else zb
       network_out = self.auto_batch(network, expected_depth=1)(network_in)
       za, log_deta = self.transform(xa, params=network_out, sample=True)

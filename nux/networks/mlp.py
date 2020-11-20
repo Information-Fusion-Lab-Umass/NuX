@@ -5,6 +5,7 @@ import jax
 import haiku as hk
 import nux.spectral_norm as sn
 from typing import Optional, Mapping, Callable, Sequence, Any
+import nux.weight_initializers as init
 
 __all__ = ["MLP"]
 
@@ -14,40 +15,41 @@ def data_dependent_param_init(x: jnp.ndarray,
                               w_init: Callable=None,
                               b_init: Callable=None,
                               is_training: bool=True,
-                              parameter_norm: str=None):
-  in_dim, dtype = x.shape[-1], x.dtype
+                              parameter_norm: str=None,
+                              use_bias: bool=True):
 
   if parameter_norm == "spectral_norm":
-    w = hk.get_parameter(f"w_{name_suffix}", (out_dim, in_dim), dtype, init=w_init)
-    b = hk.get_parameter(f"b_{name_suffix}", (out_dim,), dtype, init=b_init)
 
-    u = hk.get_state(f"u_{name_suffix}", (out_dim,), dtype, init=hk.initializers.RandomNormal())
-    w, u = sn.spectral_norm_apply(w, u, 0.9, 1)
-    if is_training == True:
-      hk.set_state(f"u_{name_suffix}", u)
+    return init.weight_with_spectral_norm(x=x,
+                                          out_dim=out_dim,
+                                          name_suffix=name_suffix,
+                                          w_init=w_init,
+                                          b_init=b_init,
+                                          is_training=is_training,
+                                          use_bias=use_bias)
 
   elif parameter_norm == "weight_norm" and x.shape[0] > 1:
-    w = hk.get_parameter(f"w_{name_suffix}", (out_dim, in_dim), dtype, init=hk.initializers.RandomNormal(stddev=0.05))
-    w *= jax.lax.rsqrt(jnp.sum(w**2, axis=1))[:,None]
 
-    def g_init(shape, dtype):
-      t = jnp.dot(x, w.T)
-      return 1/(jnp.std(t, axis=0) + 1e-5)
+    return init.weight_with_weight_norm(x=x,
+                                        out_dim=out_dim,
+                                        name_suffix=name_suffix,
+                                        w_init=w_init,
+                                        b_init=b_init,
+                                        is_training=is_training,
+                                        use_bias=use_bias)
 
-    def b_init(shape, dtype):
-      t = jnp.dot(x, w.T)
-      return -jnp.mean(t, axis=0)/(jnp.std(t, axis=0) + 1e-5)
+  # elif parameter_norm is not None:
+  #   assert 0, "Invalid weight choice.  Expected 'spectral_norm' or 'weight_norm'"
 
-    g = hk.get_parameter(f"g_{name_suffix}", (out_dim,), dtype, init=g_init)
-    b = hk.get_parameter(f"b_{name_suffix}", (out_dim,), dtype, init=b_init)
+  in_dim, dtype = x.shape[-1], x.dtype
 
-    w *= g[:,None]
-
-  else:
-    w = hk.get_parameter(f"w_{name_suffix}", (out_dim, in_dim), init=w_init)
+  w = hk.get_parameter(f"w_{name_suffix}", (out_dim, in_dim), init=w_init)
+  if use_bias:
     b = hk.get_parameter(f"b_{name_suffix}", (out_dim,), init=b_init)
 
-  return w, b
+  if use_bias:
+    return w, b
+  return w
 
 ################################################################################################################
 

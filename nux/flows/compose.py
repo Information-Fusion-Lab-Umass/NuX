@@ -17,15 +17,23 @@ __all__ = ["sequential",
 
 class sequential(Layer):
 
-  def __init__(self, *layers: Iterable[Callable], name: str="sequential", **kwargs):
-    super().__init__(name=name, **kwargs)
+  def __init__(self,
+               *layers: Iterable[Callable],
+               name: str="sequential"
+  ):
+    """ Create a flow sequentially
+    Args:
+      layers: An iterable that contains flow layers
+      name  : Optional name for this module.
+    """
+    super().__init__(name=name)
     self.layers = tuple(layers)
 
   def call(self,
            inputs: Mapping[str, jnp.ndarray],
            rng: jnp.ndarray=None,
            sample: Optional[bool]=False,
-           accumulate: Iterable[str]=["log_det", "flow_norm"],
+           accumulate: Iterable[str]=["log_det"],
            **kwargs
   ) -> Mapping[str, jnp.ndarray]:
 
@@ -64,8 +72,19 @@ class sequential(Layer):
 
 class factored(Layer):
 
-  def __init__(self, *layers: Iterable[Callable], axis: Optional[int]=-1, name: str="sequential", **kwargs):
-    super().__init__(name=name, **kwargs)
+  def __init__(self,
+               *layers: Iterable[Callable],
+               axis: Optional[int]=-1,
+               name: str="sequential"
+  ):
+    """ Create a flow in parallel.  This is basically like using the chain
+        rule and applying a flow to each part.
+    Args:
+      layers: An iterable that contains flow layers
+      axis  : Which axis to factor on
+      name  : Optional name for this module.
+    """
+    super().__init__(name=name)
     self.layers = tuple(layers)
     self.axis   = axis
 
@@ -128,8 +147,15 @@ class multi_scale(Layer):
   def __init__(self,
                flow,
                name: str="multi_scale",
-               **kwargs):
-    super().__init__(name=name, **kwargs)
+  ):
+    """ Use a flow in a multiscale architecture as described in RealNVP https://arxiv.org/pdf/1605.08803.pdf
+        Factors half of the dimensions.
+    Args:
+      layers: An iterable that contains flow layers
+      axis  : Which axis to factor on
+      name  : Optional name for this module.
+    """
+    super().__init__(name=name)
     self.flow = flow
 
   def call(self,

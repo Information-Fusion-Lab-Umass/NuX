@@ -37,7 +37,7 @@ class CustomFrame(NamedTuple):
   # JAX values.
   params: Union[Params, MutableParams]
   state: Optional[MutableState]
-  constants: Optional[MutableConstant]
+  constants: Optional[MutableConstant] # <--- This is the difference between the Frame in Haiku and here
   rng_stack: Stack[Optional["PRNGSequence"]]
 
   # Pure python values.
@@ -162,7 +162,6 @@ def new_custom_context(*,
 ################################################################################################################
 
 from haiku._src.transform import TransformedWithState, to_prng_sequence, check_mapping, INIT_RNG_ERROR, APPLY_RNG_STATE_ERROR, APPLY_RNG_ERROR
-# from haiku._src.base import new_context
 
 def transform_flow(create_fun) -> TransformedWithState:
 
@@ -188,11 +187,6 @@ def transform_flow(create_fun) -> TransformedWithState:
 
       # Initialize the model
       outputs = model(inputs, key, **kwargs)
-
-      # We also need to run it in reverse to initialize the sample shapes!
-      inputs_for_reconstr = inputs.copy()
-      inputs_for_reconstr.update(outputs) # We might have condition variables in inputs!
-      model(inputs_for_reconstr, key, sample=True, **kwargs)
 
       # Unset the batch axes
       Layer.batch_axes = ()
@@ -266,6 +260,10 @@ class Layer(hk.Module, ABC):
   batch_axes = ()
 
   def __init__(self, name=None):
+    """ This base class will keep track of the input and output shapes of each function call
+        so that we can know the batch size of inputs and automatically use vmap to make unbatched
+        code work with batched code.
+    """
     super().__init__(name=name)
 
   def get_unbatched_shapes(self, sample):

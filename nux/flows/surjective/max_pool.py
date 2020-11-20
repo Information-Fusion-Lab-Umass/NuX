@@ -11,22 +11,7 @@ import nux
 
 """ Adapted from the SurVAE repo: https://github.com/didriknielsen/survae_flows/blob/master/survae/transforms/surjections/maxpool2d.py """
 
-__all__=["SurjectiveMaxPool"]
-
-def pool_squeeze(x):
-  # Standard squeezing stacks channel dimensions.  This doesn't do that.
-  H, W, C = x.shape
-  x = x.reshape(H//2, 2, W//2, 2, C)
-  x = x.transpose((0, 2, 4, 1, 3))
-  x = x.reshape(H//2, W//2, C, 4)
-  return x
-
-def pool_unsqueeze(x):
-  H, W, C, _ = x.shape
-  x = x.reshape(H, W, C, 2, 2)
-  x = x.transpose((0, 3, 1, 4, 2))
-  x = x.reshape(H*2, W*2, C)
-  return x
+__all__ = ["MaxPool"]
 
 ################################################################################################################
 
@@ -35,7 +20,7 @@ def extract_max_elts(x):
   assert H%2 == 0 and W%2 == 0
 
   # Squeeze so that the grid elements are aligned on the last axis
-  x_squeeze = pool_squeeze(x)
+  x_squeeze = util.pixel_squeeze(x)
 
   # Sort each grid
   x_sq_argsorted = x_squeeze.argsort(axis=-1)
@@ -112,24 +97,32 @@ def contruct_from_max_elts(max_elts, non_max_elts, max_idx, non_max_idx):
   x_squeeze = ops.index_update(x_squeeze, non_max_coord, non_max_elts.ravel())
 
   # Unsqueeze the image
-  return pool_unsqueeze(x_squeeze)
+  return util.pixel_unsqueeze(x_squeeze)
 
 ################################################################################################################
 
-class SurjectiveMaxPool(Layer):
+class MaxPool(Layer):
 
   def __init__(self,
                decoder: Callable=None,
-               name: str="surjective_max_pool",
                network_kwargs: Optional=None,
-               **kwargs):
+               name: str="surjective_max_pool",
+  ):
+    """ Max pool as described in https://arxiv.org/pdf/2007.02731.pdf
+        This isn't the usual max pool where we pool with overlapping patches.
+        Instead, this pools over non-overlapping patches of pixels.
+    Args:
+      decoder       : The flow to use to learn the non-max elements.
+      network_kwargs: Dictionary with settings for the default network (see get_default_network in util.py)
+      name          : Optional name for this module.
+    """
     self.decoder        = decoder
     self.network_kwargs = network_kwargs
-    super().__init__(name=name, **kwargs)
+    super().__init__(name=name)
 
   def default_decoder(self):
     # Generate positive values only
-    return nux.sequential(nux.Logit(scale=None),
+    return nux.sequential(nux.SoftplusInverse(),
                           nux.OneByOneConv(),
                           nux.CouplingLogitsticMixtureLogit(n_components=4,
                                                             network_kwargs=self.network_kwargs,
@@ -160,7 +153,6 @@ class SurjectiveMaxPool(Layer):
       # See how likely these non-max elements are.  Condition on values and indices
       # so that the decoder has context on what to generate.
       cond = jnp.concatenate([max_elts[...,None], non_max_idx], axis=-1)
-      # import pdb; pdb.set_trace()
       cond = cond.reshape(cond.shape[:-2] + (-1,))
       decoder_inputs = {"x" : non_max_elts, "condition" : cond}
       decoder_outputs = decoder(decoder_inputs, rng, sample=False)

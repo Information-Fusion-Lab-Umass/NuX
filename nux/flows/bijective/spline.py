@@ -135,13 +135,22 @@ class NeuralSpline(CouplingBase):
 
   def __init__(self,
                K: int=4,
-               create_network: Optional[Callable]=None,
                bounds: Sequence[float]=((-4.0, 4.0), (-4.0, 4.0)),
-               name: str="rq_spline",
+               create_network: Optional[Callable]=None,
                network_kwargs: Optional=None,
-               **kwargs
+               name: str="rq_spline"
   ):
-    super().__init__(name=name, **kwargs)
+    """ Neural spline flow https://arxiv.org/pdf/1906.04032.pdf
+        Might take a while to compile.
+    Args:
+      K                : Number of bins to use
+      bounds           : The interval to apply the spline to
+      create_network   : Function to create the conditioner network.  Should accept a tuple
+                         specifying the output shape.  See coupling_base.py
+      network_kwargs   : Dictionary with settings for the default network (see get_default_network in util.py)
+      name             : Optional name for this module.
+    """
+    super().__init__(name=name)
     self.K              = K
     self.bounds         = bounds
     self.create_network = create_network

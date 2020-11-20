@@ -3,7 +3,6 @@ from jax import jit, random
 from functools import partial
 import jax
 import haiku as hk
-import nux.spectral_norm as sn
 from nux.networks.cnn import Conv, ConvBlock, BottleneckConv, ReverseBottleneckConv
 from nux.networks.se import SqueezeExcitation
 from typing import Optional, Mapping, Callable, Sequence, Any

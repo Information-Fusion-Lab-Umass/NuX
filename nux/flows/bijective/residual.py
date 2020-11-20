@@ -61,14 +61,12 @@ def res_flow_exact(res_block, x):
 
   def apply_res_block(flat_x):
     x = unflatten(flat_x)
-    # out = x + res_block(x[None])[0]
     out = x + res_block(x)
     return jax.flatten_util.ravel_pytree(out)[0]
 
   J = jax.jacobian(apply_res_block)(flat_x)
   log_det = jnp.linalg.slogdet(J)[1]
 
-  # z = x + res_block(x[None])[0]
   z = x + res_block(x)
   return z, log_det
 
@@ -77,47 +75,59 @@ def res_flow_exact(res_block, x):
 class ResidualFlow(Layer):
 
   def __init__(self,
-               res_block_create_fun: Callable=None,
-               fixed_point_iters: Optional[int]=15000,
+               create_network: Callable=None,
+               fixed_point_iters: Optional[int]=10000,
                exact_log_det: Optional[bool]=False,
                network_kwargs: Optional=None,
-               name: str="residual_flow"):
+               name: str="residual_flow"
+  ):
+    """ Residual flows https://arxiv.org/pdf/1906.02735.pdf
+        Currently does not use the neumann gradient series
+    Args:
+      create_network   : Function to create the conditioner network.  Should accept a tuple
+                         specifying the output shape.  See coupling_base.py
+      fixed_point_iters: Max number of iterations for inverse
+      exact_log_det    : Whether or not to compute the exact jacobian determinant with autodiff
+      network_kwargs   : Dictionary with settings for the default network (see get_default_network in util.py)
+      name             : Optional name for this module.
+    """
     super().__init__(name=name)
-    self.res_block_create_fun = res_block_create_fun
-    self.fixed_point_iters    = fixed_point_iters
-    self.exact_log_det        = exact_log_det
-    self.network_kwargs       = network_kwargs
+    self.create_network    = create_network
+    self.fixed_point_iters = fixed_point_iters
+    self.exact_log_det     = exact_log_det
+    self.network_kwargs    = network_kwargs
 
   # Initialize the residual block
-  def default_res_block(self, x_shape):
-    out_dim = x_shape[-1]
+  def get_res_block(self, out_shape):
+    # The user can specify a custom network
+    if self.create_network is not None:
+      return self.create_network(out_shape)
 
+    out_dim = out_shape[-1]
+
+    network_kwargs = self.network_kwargs
     # Otherwise, use default networks
-    if len(x_shape) < 3:
-      network_kwargs = self.network_kwargs
+    if len(out_shape) == 1:
       if network_kwargs is None:
 
-        network_kwargs = dict(layer_sizes=[16]*4,
-                              nonlinearity="lipswish",
+        network_kwargs = dict(layer_sizes=[128]*4,
+                              nonlinearity="relu",
                               parameter_norm="spectral_norm")
       network_kwargs["out_dim"] = out_dim
 
-      return net.MLP(**network_kwargs)
-
     else:
-      network_kwargs = self.network_kwargs
       if network_kwargs is None:
 
-        network_kwargs = dict(n_blocks=1,
-                              hidden_channel=16,
-                              nonlinearity="lipswish",
+        network_kwargs = dict(n_blocks=5,
+                              hidden_channel=64,
+                              nonlinearity="relu",
                               normalization=None,
                               parameter_norm="spectral_norm",
                               block_type="reverse_bottleneck",
                               squeeze_excite=False)
       network_kwargs["out_channel"] = out_dim
 
-      return net.ResNet(**network_kwargs)
+    return util.get_default_network(out_shape, network_kwargs=network_kwargs)
 
   def call(self,
            inputs: Mapping[str, jnp.ndarray],
@@ -127,9 +137,8 @@ class ResidualFlow(Layer):
            is_training: bool=True,
            **kwargs
     ) -> Mapping[str, jnp.ndarray]:
-    res_block_create_fun = self.default_res_block if self.res_block_create_fun is None else self.res_block_create_fun
     x_shape = self.get_unbatched_shapes(sample)["x"]
-    res_block_base = res_block_create_fun(x_shape)
+    res_block_base = self.get_res_block(x_shape)
 
     # The res blocks expect a batched input and we're using auto batch.  So give inputs a dummy batch axis
     res_block = lambda x, is_training=True, **kwargs: res_block_base(x[None], is_training=is_training, **kwargs)[0]

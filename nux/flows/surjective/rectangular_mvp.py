@@ -10,7 +10,8 @@ from haiku._src.typing import PRNGKey
 from jax.scipy.special import gammaln, logsumexp
 import nux
 import nux.networks as net
-from haiku._src.base import current_bundle_name
+import nux.weight_initializers as init
+import nux.vae as vae
 
 __all__ = ["RectangularMVP"]
 
@@ -40,32 +41,107 @@ class RectangularMVP(Layer):
 
   def __init__(self,
                output_dim: int,
+               generative_only: bool=False,
                create_network: Optional[Callable]=None,
                reverse_params: bool=True,
                network_kwargs: Optional=None,
                weight_norm: bool=True,
-               name: str="rectangular_dense",
+               name: str="rectangular_mvp",
                **kwargs):
-    self.output_dim     = output_dim
-    self.create_network = create_network
-    self.reverse_params = reverse_params
-    self.network_kwargs = network_kwargs
-    self.weight_norm    = weight_norm
+    if generative_only == False:
+      self._output_dim = output_dim
+    else:
+      self._input_dim = output_dim
+
+    self.generative_only = generative_only
+    self.reverse_params  = reverse_params
+    self.weight_norm     = weight_norm
+    self.create_network  = create_network
+    self.network_kwargs  = network_kwargs
     super().__init__(name=name, **kwargs)
 
   @property
-  def orth_noise_name(self):
-    return current_bundle_name()
+  def input_shape(self):
+    return self.unbatched_input_shapes["x"]
 
-  def get_network(self, out_shape):
+  @property
+  def output_shape(self):
+    return self.unbatched_output_shapes["x"]
 
-    out_shape = out_shape[:-1] + (2*out_shape[-1],)
+  @property
+  def image_in(self):
+    if self.generative_only:
+      return len(self.output_shape) == 3
+    return len(self.input_shape) == 3
 
-    # The user can specify a custom network
-    if self.create_network is not None:
-      return self.create_network(out_shape)
+  @property
+  def input_dim(self):
+    if hasattr(self, "_input_dim"):
+      return self._input_dim
+    return util.list_prod(self.input_shape)
 
-    return util.get_default_network(out_shape, self.network_kwargs)
+  @property
+  def output_dim(self):
+    if hasattr(self, "_output_dim"):
+      return self._output_dim
+    return util.list_prod(self.output_shape)
+
+  @property
+  def kind(self):
+    return "tall" if self.input_dim > self.output_dim else "wide"
+
+  @property
+  def small_dim(self):
+    return self.output_dim if self.input_dim > self.output_dim else self.input_dim
+
+  @property
+  def big_dim(self):
+    return self.input_dim if self.input_dim > self.output_dim else self.output_dim
+
+  def pinv(self, t):
+    if self.reverse_params:
+      s = jnp.dot(t, self.B.T)
+    else:
+      s = jnp.dot(t, self.A)
+      s = jnp.dot(s, self.ATA_inv.T)
+    return s
+
+  def project(self, t=None, s=None):
+    if s is not None:
+      if self.reverse_params:
+        t_proj = jnp.dot(s, self.BBT_inv.T)
+        t_proj = jnp.dot(t_proj, self.B)
+      else:
+        t_proj = jnp.dot(s, self.A.T)
+
+      return t_proj
+    else:
+      s = self.pinv(t)
+      return self.project(s=s)
+
+    assert 0, "Must pass in either s or t"
+
+  def orthogonal_distribution(self, s, t_proj, rng, no_noise):
+    network_in = t_proj.reshape(self.batch_shape + self.input_shape) if self.image_in else s
+    outputs = self.p_gamma_given_s({"x": network_in}, rng=rng, no_noise=no_noise)
+    gamma, mu, log_diag_cov = outputs["x"], outputs["mu"], outputs["log_diag_cov"]
+
+    # If we're going from image -> vector, we need to flatten the image
+    if self.image_in:
+      gamma        = gamma.reshape(self.batch_shape + (-1,))
+      mu           = mu.reshape(self.batch_shape + (-1,))
+      log_diag_cov = log_diag_cov.reshape(self.batch_shape + (-1,))
+
+    return gamma, mu, log_diag_cov
+
+  def likelihood_contribution(self, mu, gamma_perp, log_diag_cov):
+    batched_logZ = self.auto_batch(logZ, in_axes=(0, None, 0))
+    if self.reverse_params:
+      likelihood_contribution = batched_logZ(mu - gamma_perp, self.B.T, log_diag_cov) + jnp.linalg.slogdet(self.BBT)[1]
+    else:
+      likelihood_contribution = batched_logZ(mu - gamma_perp, self.A, log_diag_cov)
+
+    return likelihood_contribution
 
   def call(self,
            inputs: Mapping[str, jnp.ndarray],
@@ -74,73 +150,44 @@ class RectangularMVP(Layer):
            no_noise: Optional[bool]=False,
            **kwargs) -> Mapping[str, jnp.ndarray]:
 
-    dtype = inputs["x"].dtype
-    input_shape = self.unbatched_input_shapes["x"]
-    input_dim = util.list_prod(input_shape)
-    image_in    = len(input_shape) == 3
-
-    if(input_dim > self.output_dim):
-      kind      = "tall"
-      small_dim = self.output_dim
-      big_dim   = input_dim
+    # p(gamma|s) = N(gamma|mu(s), Sigma(s))
+    if self.image_in:
+      out_shape = self.input_shape[:-1] + (2*self.input_shape[-1],)
     else:
-      kind      = "wide"
-      small_dim = input_dim
-      big_dim   = self.output_dim
+      out_shape = (2*self.big_dim,)
+    self.p_gamma_given_s = vae.ParametrizedGaussian(out_shape=out_shape,
+                                                    create_network=self.create_network,
+                                                    network_kwargs=self.network_kwargs)
 
     #######################
 
-    # Initialize the network parameters with weight normalization
+    # Initialize the tall or wide matrix.  We might want to choose to parametrize a tall
+    # matrix as the pseudo-inverse of a wide matrix or vice-versa.  B is wide and A is tall.
     init_fun = hk.initializers.RandomNormal(stddev=0.05)
+    dtype = inputs["x"].dtype
     if self.reverse_params:
-      B = hk.get_parameter("B", shape=(small_dim, big_dim), dtype=dtype, init=init_fun)
-      B *= jax.lax.rsqrt(jnp.sum(B**2, axis=1))[:,None]
-
+      x = inputs["x"].reshape(self.batch_shape + (-1,))
+      if self.weight_norm and self.kind == "tall":
+        self.B = init.weight_with_weight_norm(x, self.small_dim, use_bias=False, force_in_dim=self.big_dim)
+      else:
+        self.B = hk.get_parameter("B", shape=(self.small_dim, self.big_dim), dtype=dtype, init=init_fun)
     else:
-      A = hk.get_parameter("A", shape=(big_dim, small_dim), dtype=dtype, init=init_fun)
-      # A *= jax.lax.rsqrt(jnp.sum(A**2, axis=1))[:,None]
+      self.A = hk.get_parameter("A", shape=(self.big_dim, self.small_dim), dtype=dtype, init=init_fun)
 
-    # Apply weight norm.
-    if self.weight_norm:
-
-      def g_init(shape, dtype):
-        x = inputs["x"]
-        if image_in:
-          x = x.reshape(self.batch_shape + (-1,))
-        t = jnp.dot(x, B.T) if self.reverse_params else jnp.dot(x, A.T)
-        g = 1/(jnp.std(t, axis=0) + 1e-5)
-        return g
-
-      if self.reverse_params:
-        g = hk.get_parameter("g", shape=(small_dim,), dtype=dtype, init=g_init)
-        B *= g[:,None]
-      # else:
-      #   g = hk.get_parameter("g", shape=(big_dim,), dtype=dtype, init=g_init)
-      #   A *= g[:,None]
-
-    # Compute the riemannian metric matrix
+    # Compute the riemannian metric matrix for later use.
     if self.reverse_params:
-      BBT = B@B.T
-      BBT_inv = jnp.linalg.inv(BBT)
+      self.BBT     = self.B@self.B.T
+      self.BBT_inv = jnp.linalg.inv(self.BBT)
     else:
-      ATA_inv = jnp.linalg.inv(A.T@A)
-
-    # Create the haiku network
-    network = self.get_network(self.unbatched_input_shapes["x"])
+      self.ATA_inv = jnp.linalg.inv(self.A.T@self.A)
 
     #######################
 
     # Figure out which direction we should go
     if sample == False:
-      if kind == "tall":
-        big_to_small = True
-      else:
-        big_to_small = False
+      big_to_small = True if self.kind == "tall" else False
     else:
-      if kind == "tall":
-        big_to_small = False
-      else:
-        big_to_small = True
+      big_to_small = False if self.kind == "tall" else True
 
     #######################
 
@@ -149,97 +196,56 @@ class RectangularMVP(Layer):
       t = inputs["x"]
 
       # If we're going from image -> vector, we need to flatten the image
-      if image_in:
+      if self.image_in:
         t = t.reshape(self.batch_shape + (-1,))
 
-      # Compute the pseudo inverse
-      if self.reverse_params:
-        s = jnp.dot(t, B.T)
-        t_proj = jnp.dot(s, BBT_inv.T)
-        t_proj = jnp.dot(t_proj, B)
-
-      else:
-        s = jnp.dot(t, A)
-        s = jnp.dot(s, ATA_inv.T)
-        t_proj = jnp.dot(s, A.T)
+      # Compute the pseudo inverse and projection
+      # s <- self.A^+t
+      s = self.pinv(t)
+      t_proj = self.project(s=s)
 
       # Compute the perpendicular component of t for the log contribution
+      # gamma_perp <- t - AA^+t
       gamma_perp = t - t_proj
 
-      # Compute the parameters of p(gamma)
-      if image_in:
-        network_in = t_proj.reshape(self.batch_shape + input_shape)
-      else:
-        network_in = s
-      network_out = self.auto_batch(network, expected_depth=1)(network_in)
-      mu, log_diag_cov = jnp.split(network_out, 2, axis=-1)
-      log_diag_cov = jnp.logaddexp(log_diag_cov, -10)
-
-      # If we're going from image -> vector, we need to flatten the image
-      if image_in:
-        mu = mu.reshape(self.batch_shape + (-1,))
-        log_diag_cov = log_diag_cov.reshape(self.batch_shape + (-1,))
+      # Find mu(s), Sigma(s).  If we have an image as input, pass in the projected input image
+      # mu, Sigma <- NN(s, theta)
+      _, mu, log_diag_cov = self.orthogonal_distribution(s, t_proj, rng, no_noise=True)
 
       # Compute the log contribution
-      batched_logZ = self.auto_batch(logZ, in_axes=(0, None, 0))
-      if self.reverse_params:
-        log_contribution = batched_logZ(mu - gamma_perp, B.T, log_diag_cov) + jnp.linalg.slogdet(BBT)[1]
-      else:
-        log_contribution = batched_logZ(mu - gamma_perp, A, log_diag_cov)
+      # L <- logZ(mu - gamma_perp|self.A, Sigma)
+      likelihood_contribution = self.likelihood_contribution(mu, gamma_perp, log_diag_cov)
 
-      outputs = {"x": s, "log_det": log_contribution}
+      outputs = {"x": s, "log_det": likelihood_contribution}
 
     else:
       s = inputs["x"]
 
-      # Compute the mean of t
-      if self.reverse_params:
-        t_mean = jnp.dot(s, BBT_inv.T)
-        t_mean = jnp.dot(t_mean, B)
-      else:
-        t_mean = jnp.dot(s, A.T)
+      # Compute the mean of t.  Primarily used if we have an image as input
+      t_mean = self.project(s=s)
 
-      # Compute the parameters of p(gamma)
-      if image_in:
-        network_in = t_mean.reshape(self.batch_shape + input_shape)
-      else:
-        network_in = s
-      network_out = self.auto_batch(network, expected_depth=1)(network_in)
-      mu, log_diag_cov = jnp.split(network_out, 2, axis=-1)
-      log_diag_cov = jnp.logaddexp(log_diag_cov, -10)
+      # Find mu(s), Sigma(s).  If we have an image as input, pass in the projected input image
+      # mu, Sigma <- NN(s, theta)
+      # gamma ~ N(mu, Sigma)
+      gamma, mu, log_diag_cov = self.orthogonal_distribution(s, t_mean, rng, no_noise=no_noise)
 
-      if image_in:
-        mu = mu.reshape(self.batch_shape + (-1,))
-        log_diag_cov = log_diag_cov.reshape(self.batch_shape + (-1,))
-
-      # Sample gamma_perp
-      gamma = mu
-      if no_noise == False:
-        gamma += random.normal(rng, mu.shape)*jnp.exp(0.5*log_diag_cov)
-
-      if self.reverse_params:
-        gamma_proj = jnp.dot(gamma, B.T)
-        gamma_proj = jnp.dot(gamma_proj, BBT_inv.T)
-        gamma_proj = jnp.dot(gamma_proj, B)
-        gamma_perp = gamma - gamma_proj
-      else:
-        gamma_proj = jnp.dot(gamma, A)
-        gamma_proj = jnp.dot(gamma_proj, ATA_inv.T)
-        gamma_proj = jnp.dot(gamma_proj, A.T)
-        gamma_perp = gamma - gamma_proj
+      # Compute the orthogonal component of the noise
+      # gamma_perp <- gamma - AA^+ gamma
+      gamma_proj = self.project(t=gamma)
+      gamma_perp = gamma - gamma_proj
 
       # Add the orthogonal features
+      # t <- As + gamma_perp
       t = t_mean + gamma_perp
 
       # Compute the log contribution
-      batched_logZ = self.auto_batch(logZ, in_axes=(0, None, 0))
-      if self.reverse_params:
-        log_contribution = -batched_logZ(mu - gamma_perp, B.T, log_diag_cov) - jnp.linalg.slogdet(BBT)[1]
-      else:
-        log_contribution = -batched_logZ(mu - gamma_perp, A, log_diag_cov)
+      # L <- logZ(mu - gamma_perp|self.A, Sigma)
+      likelihood_contribution = -self.likelihood_contribution(mu, gamma_perp, log_diag_cov)
 
-      if image_in:
-        t = t.reshape(self.batch_shape + input_shape)
-      outputs = {"x": t, "log_det": log_contribution}
+      # Reshape to an image if needed
+      if self.image_in:
+        t = t.reshape(self.batch_shape + self.input_shape)
+
+      outputs = {"x": t, "log_det": likelihood_contribution}
 
     return outputs

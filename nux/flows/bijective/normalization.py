@@ -14,8 +14,14 @@ __all__ = ["ActNorm"]
 
 class ActNorm(Layer):
 
-  def __init__(self, name: str="act_norm", **kwargs):
-    super().__init__(name=name, **kwargs)
+  def __init__(self,
+               name: str="act_norm"
+  ):
+    """ Act norm.  Used in GLOW https://arxiv.org/pdf/1807.03039.pdf
+    Args:
+      name : Optional name for this module.
+    """
+    super().__init__(name=name)
 
   def call(self,
            inputs: Mapping[str, jnp.ndarray],

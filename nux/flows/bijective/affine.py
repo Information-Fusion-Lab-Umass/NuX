@@ -14,17 +14,22 @@ __all__ = ["Bias",
            "AffineDense",
            "AffineLDU",
            "AffineSVD",
-           "OneByOneConv",
-           "LocalDense"]
+           "OneByOneConv"]
 
 ################################################################################################################
 
 class Bias(Layer):
 
-  def __init__(self, axis: int=-1, name: str="bias", **kwargs):
-    super().__init__(name=name, **kwargs)
-    if isinstance(axis, int):
-      axis = [axis]
+  def __init__(self,
+               axis: int=-1,
+               name: str="bias"
+  ):
+    """ Adds a scalar to the input
+    Args:
+      axis: Which axis of the input to apply to
+      name: Optional name for this module.
+    """
+    super().__init__(name=name)
     self.axis = axis
 
   def call(self,
@@ -33,9 +38,8 @@ class Bias(Layer):
            sample: Optional[bool]=False,
            **kwargs
   ) -> Mapping[str, jnp.ndarray]:
-    shape = self.get_unbatched_shapes(sample)["x"][self.axis]
-    b = hk.get_parameter("b", shape=shape)
     x = inputs["x"]
+    b = hk.get_parameter("b", shape=(x.shape[self.axis],), dtype=x.dtype, init=jnp.zeros)
     if sample:
       z = x + b
     else:
@@ -44,8 +48,14 @@ class Bias(Layer):
 
 class Identity(Layer):
 
-  def __init__(self, name: str="identity", **kwargs):
-    super().__init__(name=name, **kwargs)
+  def __init__(self,
+               name: str="identity"
+  ):
+    """ No-op
+    Args:
+      name: Optional name for this module.
+    """
+    super().__init__(name=name)
 
   def call(self,
            inputs: Mapping[str, jnp.ndarray],
@@ -59,9 +69,17 @@ class Identity(Layer):
 
 class Scale(Layer):
 
-  def __init__(self, tau, name: str="scale", **kwargs):
-    super().__init__(name=name, **kwargs)
-    self.tau = tau
+  def __init__(self,
+               scale: float,
+               name: str="scale"
+  ):
+    """ Scale an input by a specified scalar
+    Args:
+      scale: Value to scale by
+      name : Optional name for this module.
+    """
+    super().__init__(name=name)
+    self.scale = scale
 
   def call(self,
            inputs: Mapping[str, jnp.ndarray],
@@ -72,13 +90,13 @@ class Scale(Layer):
     outputs = {}
 
     if sample == False:
-      outputs["x"] = inputs["x"]/self.tau
+      outputs["x"] = inputs["x"]/self.scale
     else:
-      outputs["x"] = inputs["x"]*self.tau
+      outputs["x"] = inputs["x"]*self.scale
 
     shape = self.get_unbatched_shapes(sample)["x"]
     outputs["log_det"] = jnp.ones(self.batch_shape)
-    outputs["log_det"] *= -jnp.log(self.tau)*util.list_prod(shape)
+    outputs["log_det"] *= -jnp.log(self.scale)*util.list_prod(shape)
 
     return outputs
 
@@ -87,9 +105,13 @@ class Scale(Layer):
 class AffineDense(Layer):
 
   def __init__(self,
-               name: str="affine_dense",
-               **kwargs):
-    super().__init__(name=name, **kwargs)
+               name: str="affine_dense"
+  ):
+    """ Apply a dense matrix multiplication.  Costs O(D^3).
+    Args:
+      name:  Optional name for this module.
+    """
+    super().__init__(name=name)
 
   def call(self,
            inputs: Mapping[str, jnp.ndarray],
@@ -120,9 +142,13 @@ class AffineDense(Layer):
 class AffineLDU(Layer):
 
   def __init__(self,
-               name: str="affine_ldu",
-               **kwargs):
-    super().__init__(name=name, **kwargs)
+               name: str="affine_ldu"
+  ):
+    """ LDU parametrized matrix multiplication.  Costs O(D^2) to invert and O(D) for a regular pass.
+    Args:
+      name:  Optional name for this module.
+    """
+    super().__init__(name=name)
 
   def call(self,
            inputs: Mapping[str, jnp.ndarray],
@@ -143,6 +169,8 @@ class AffineLDU(Layer):
 
     b = hk.get_parameter("b", shape=(dim,), dtype=dtype, init=jnp.zeros)
 
+    # Its way faster to allocate a full matrix for L and U and then mask than it
+    # is to allocate only the lower/upper parts and the reshape.
     if sample == False:
       x = inputs["x"]
       z = jnp.dot(x, (U*lower_mask.T).T) + x
@@ -167,8 +195,16 @@ class AffineLDU(Layer):
 
 class AffineSVD(Layer):
 
-  def __init__(self, n_householders: int, name: str="affine_svd", **kwargs):
-    super().__init__(name=name, **kwargs)
+  def __init__(self,
+               n_householders: int,
+               name: str="affine_svd"
+  ):
+    """ SVD parametrized matrix multiplication.  Costs O(K*D) where K is the number of householders.
+    Args:
+      n_householders: Number of householders to parametrize U and VT.
+      name          : Optional name for this module.
+    """
+    super().__init__(name=name)
     self.n_householders = n_householders
 
   def call(self,
@@ -187,6 +223,7 @@ class AffineSVD(Layer):
 
     b = hk.get_parameter("b", shape=(dim,), dtype=dtype, init=jnp.zeros)
 
+    # TODO: Implement block householders instead of sequential householders.
     if sample == False:
       x = inputs["x"]
 
@@ -217,8 +254,17 @@ class AffineSVD(Layer):
 
 class OneByOneConv(Layer):
 
-  def __init__(self, weight_norm: bool=True, name: str="one_by_one_conv", **kwargs):
-    super().__init__(name=name, **kwargs)
+  def __init__(self,
+               weight_norm: bool=True,
+               name: str="1x1_conv"
+  ):
+    """ 1x1 convolution.  Uses a dense parametrization because the channel dimension will probably
+        never be that big.  Costs O(C^3).  Used in GLOW https://arxiv.org/pdf/1807.03039.pdf
+    Args:
+      weight_norm: Should weight norm be applied to the layer?
+      name       : Optional name for this module.
+    """
+    super().__init__(name=name)
     self.weight_norm = weight_norm
 
     def orthogonal_init(shape, dtype):
@@ -227,17 +273,18 @@ class OneByOneConv(Layer):
       return util.whiten(W)
     self.W_init = orthogonal_init
 
-  def call(self, inputs: Mapping[str, jnp.ndarray], rng: jnp.ndarray=None, sample: Optional[bool]=False, **kwargs) -> Mapping[str, jnp.ndarray]:
+  def call(self,
+           inputs: Mapping[str, jnp.ndarray],
+           rng: jnp.ndarray=None,
+           sample: Optional[bool]=False,
+           **kwargs
+  ) -> Mapping[str, jnp.ndarray]:
     outputs = {}
-    height, width, channel = inputs["x"].shape[-3:]
+    x = inputs["x"]
+    height, width, channel = x.shape[-3:]
 
-    dtype = inputs["x"].dtype
-    W = hk.get_parameter("W", shape=(channel, channel), dtype=dtype, init=self.W_init)
-    b = hk.get_parameter("b", shape=(channel,), dtype=dtype, init=jnp.zeros)
-
-    if self.weight_norm:
-      W *= jax.lax.rsqrt(jnp.sum(W**2, axis=0))
-
+    # Using lax.conv instead of matrix multiplication over the channel dimension
+    # is faster and also more numerically stable for some reason.
     @partial(self.auto_batch, in_axes=(None, 0), expected_depth=1)
     def conv(W, x):
       return jax.lax.conv_general_dilated(x,
@@ -247,78 +294,40 @@ class OneByOneConv(Layer):
                                           (1, 1),
                                           (1, 1),
                                           dimension_numbers=('NHWC', 'HWIO', 'NHWC'))
+
+    dtype = x.dtype
+    W = hk.get_parameter("W", shape=(channel, channel), dtype=dtype, init=self.W_init)
+
+    # Initialize with weight norm https://arxiv.org/pdf/1602.07868.pdf
+    # This seems to improve performance.
+    if self.weight_norm and x.ndim > 3:
+      W *= jax.lax.rsqrt(jnp.sum(W**2, axis=0))
+
+      def g_init(shape, dtype):
+        t = conv(W, x)
+        g = 1/(jnp.std(t, axis=(0, 1, 2)) + 1e-5)
+        return g
+
+      def b_init(shape, dtype):
+        t = conv(W, x)
+        return -jnp.mean(t, axis=(0, 1, 2))/(jnp.std(t, axis=(0, 1, 2)) + 1e-5)
+
+      g = hk.get_parameter("g", (channel,), dtype, init=g_init)
+      b = hk.get_parameter("b", (channel,), dtype, init=b_init)
+
+      W *= g
+
+    else:
+      b = hk.get_parameter("b", shape=(channel,), dtype=dtype, init=jnp.zeros)
+
+    # Run the flow
     if sample == False:
-      x = inputs["x"]
       z = conv(W, x)
       outputs["x"] = z + b
     else:
       W_inv = jnp.linalg.inv(W)
-      z = inputs["x"]
-      x = conv(W_inv, z - b)
-      outputs["x"] = x
+      outputs["x"] = conv(W_inv, x - b)
 
     outputs["log_det"] = jnp.linalg.slogdet(W)[1]*height*width*jnp.ones(self.batch_shape)
-
-    return outputs
-
-################################################################################################################
-
-class LocalDense(Layer):
-
-  def __init__(self,
-               filter_shape: Tuple[int]=(2, 2),
-               dilation: Tuple[int]=(1, 1),
-               name: str="local_dense",
-               W_init=None,
-               **kwargs):
-    super().__init__(name=name, **kwargs)
-    self.filter_shape = filter_shape
-    self.dilation = dilation
-    self.W_init = hk.initializers.VarianceScaling(1.0, 'fan_avg', 'truncated_normal') if W_init is None else W_init
-
-  def call(self, inputs: Mapping[str, jnp.ndarray], rng: jnp.ndarray=None, sample: Optional[bool]=False, **kwargs) -> Mapping[str, jnp.ndarray]:
-    outputs = {}
-    x_dtype = inputs["x"].dtype
-    h, w, c = inputs["x"].shape[-3:]
-    fh, fw = self.filter_shape
-    dh, dw = self.dilation
-
-    # Find the shape of the dilated_squeeze output
-    H_sq, W_sq, C_sq = (h//fh, w//fw, c*fh*fw)
-
-    W = hk.get_parameter("W", shape=(C_sq, C_sq), dtype=x_dtype, init=self.W_init)
-    b = hk.get_parameter("b", shape=(c,), dtype=x_dtype, init=jnp.zeros)
-
-    if sample == False:
-      x = inputs["x"]
-      @self.auto_batch
-      def forward(x):
-        x = util.dilated_squeeze(x, self.filter_shape, self.dilation)
-        z = jax.lax.conv_general_dilated(x[None],
-                                         W[None,None,...],
-                                         (1, 1),
-                                         'SAME',
-                                         (1, 1),
-                                         (1, 1),
-                                         dimension_numbers=('NHWC', 'HWIO', 'NHWC'))[0]
-        return util.dilated_unsqueeze(z, self.filter_shape, self.dilation) + b
-      outputs["x"] = forward(x)
-    else:
-      W_inv = jnp.linalg.inv(W)
-      z = inputs["x"]
-      @self.auto_batch
-      def inverse(z):
-        zmb = util.dilated_squeeze(z - b, self.filter_shape, self.dilation)
-        x = jax.lax.conv_general_dilated(zmb[None],
-                                         W_inv[None,None,...],
-                                         (1, 1),
-                                         'SAME',
-                                         (1, 1),
-                                         (1, 1),
-                                         dimension_numbers=('NHWC', 'HWIO', 'NHWC'))[0]
-        return util.dilated_unsqueeze(x, self.filter_shape, self.dilation)
-      outputs["x"] = inverse(z)
-
-    outputs["log_det"] = jnp.linalg.slogdet(W)[1]*h*w*jnp.ones(self.batch_shape)
 
     return outputs

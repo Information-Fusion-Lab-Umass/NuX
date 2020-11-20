@@ -17,8 +17,16 @@ __all__ = ["LeakyReLU",
 
 class LeakyReLUInv(Layer):
 
-  def __init__(self, alpha: float=0.01, name: str="leaky_relu", **kwargs):
-    super().__init__(name=name, **kwargs)
+  def __init__(self,
+               alpha: float=0.01,
+               name: str="leaky_relu"
+  ):
+    """ Inverse of leaky relu
+    Args:
+      alpha: Slope for negative values
+      name : Optional name for this module.
+    """
+    super().__init__(name=name)
     self.alpha = alpha
 
   def call(self,
@@ -44,8 +52,16 @@ class LeakyReLUInv(Layer):
 
 class LeakyReLU(Layer):
 
-  def __init__(self, alpha: float=0.01, name: str="leaky_relu", **kwargs):
-    super().__init__(name=name, **kwargs)
+  def __init__(self,
+               alpha: float=0.01,
+               name: str="leaky_relu"
+  ):
+    """ Leaky relu
+    Args:
+      alpha: Slope for negative values
+      name : Optional name for this module.
+    """
+    super().__init__(name=name)
     self.alpha = alpha
 
   def call(self,
@@ -71,9 +87,18 @@ class LeakyReLU(Layer):
 
 class SneakyReLU(Layer):
 
-  """ Adapted from https://github.com/didriknielsen/survae_flows/blob/master/survae/transforms/bijections/elementwise_nonlinear.py """
+  """ Adapted from https://github.com/didriknielsen/survae_flows/blob/master/survae/transforms/bijections/elementwise_nonlinear.py
+      Originally from https://invertibleworkshop.github.io/accepted_papers/pdfs/INNF_2019_paper_26.pdf """
 
-  def __init__(self, alpha: float=0.1, name: str="sneaky_relu", **kwargs):
+  def __init__(self,
+               alpha: float=0.1,
+               name: str="sneaky_relu"
+  ):
+    """ Smooth version of leaky relu
+    Args:
+      alpha: Slope for negative values
+      name : Optional name for this module.
+    """
     super().__init__(name=name, **kwargs)
 
     # Sneaky ReLU uses a different convention
@@ -113,7 +138,15 @@ class SneakyReLU(Layer):
 
 class Sigmoid(Layer):
 
-  def __init__(self, scale: Optional[float]=None, name: str="sigmoid", **kwargs):
+  def __init__(self,
+               scale: Optional[float]=None,
+               name: str="sigmoid"
+  ):
+    """ Sigmoid function.  Transforms data to [scale/2, 1 - scale/2]
+    Args:
+      scale: For interval
+      name : Optional name for this module.
+    """
     super().__init__(name=name, **kwargs)
     self.scale = scale
     self.has_scale = scale is not None
@@ -154,7 +187,18 @@ class Sigmoid(Layer):
 
 class Logit(Layer):
 
-  def __init__(self, scale: Optional[float]=0.05, name: str="logit", **kwargs):
+  def __init__(self,
+               scale: Optional[float]=0.05,
+               name: str="logit"
+  ):
+    """ Logit function.  Transforms from [scale/2, 1 - scale/2] to the reals.
+        If this is used in an image pipeline, can pass the keyword arg "generate_image"
+        during sampling to return the the value between 0 and 1 so that it displays
+        properly on matplotlib.
+    Args:
+      scale: For interval
+      name : Optional name for this module.
+    """
     super().__init__(name=name, **kwargs)
     self.scale = scale
     self.has_scale = scale is not None
@@ -205,14 +249,19 @@ class SoftplusInverse(Layer):
 
   """ Adapted from https://github.com/didriknielsen/survae_flows/blob/master/survae/transforms/bijections/elementwise_nonlinear.py """
 
-  def __init__(self, name: str="softplus_inv", **kwargs):
+  def __init__(self,
+               name: str="softplus_inv"
+  ):
+    """ Inverse of softplus
+    Args:
+      name : Optional name for this module.
+    """
     super().__init__(name=name, **kwargs)
 
   def call(self,
            inputs: Mapping[str, jnp.ndarray],
            rng: jnp.ndarray=None,
            sample: Optional[bool]=False,
-           generate_image: Optional[bool]=False,
            **kwargs
   ) -> Mapping[str, jnp.ndarray]:
     x_shape = self.get_unbatched_shapes(sample)["x"]

@@ -15,8 +15,17 @@ __all__ = ["UniformDequantization",
 
 class UniformDequantization(Layer):
 
-  def __init__(self, scale: float, name: str="uniform_dequantization", **kwargs):
-    super().__init__(name=name, **kwargs)
+  def __init__(self,
+               scale: float,
+               name: str="uniform_dequantization"
+  ):
+    """ Uniform dequantization.  See section 3.1 here https://arxiv.org/pdf/1511.01844.pdf
+    Args:
+      scale: This is usually the first layer of image pipelines, so for convenience also
+             scale by the max value a pixel can take.
+      name : Optional name for this module.
+    """
+    super().__init__(name=name)
     self.scale = scale
 
   def call(self,
@@ -48,10 +57,18 @@ class VariationalDequantization(Layer):
   def __init__(self,
                scale: float,
                flow: Optional[Callable]=None,
-               name: str="variational_dequantization",
                network_kwargs: Optional=None,
-               **kwargs):
-    super().__init__(name=name, **kwargs)
+               name: str="variational_dequantization"
+  ):
+    """ Variational dequantization https://arxiv.org/pdf/1902.00275.pdf
+    Args:
+      scale         : This is usually the first layer of image pipelines, so for convenience also
+                      scale by the max value a pixel can take.
+      flow          : The flow to use for dequantization
+      network_kwargs: Dictionary with settings for the default network (see get_default_network in util.py)
+      name          : Optional name for this module.
+    """
+    super().__init__(name=name)
     self.scale          = scale
     self.flow           = flow
     self.network_kwargs = network_kwargs
@@ -59,12 +76,12 @@ class VariationalDequantization(Layer):
   def default_flow(self):
     return nux.sequential(nux.Logit(scale=None),
                           nux.OneByOneConv(),
-                          nux.CouplingLogitsticMixtureLogit(n_components=4,
+                          nux.CouplingLogitsticMixtureLogit(n_components=8,
                                                             network_kwargs=self.network_kwargs,
                                                             reverse=True,
                                                             use_condition=True),
                           nux.OneByOneConv(),
-                          nux.CouplingLogitsticMixtureLogit(n_components=4,
+                          nux.CouplingLogitsticMixtureLogit(n_components=8,
                                                             network_kwargs=self.network_kwargs,
                                                             reverse=True,
                                                             use_condition=True),

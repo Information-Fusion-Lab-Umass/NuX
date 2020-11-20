@@ -19,9 +19,17 @@ class Squeeze(Layer):
   def __init__(self,
                filter_shape: Sequence[int]=(2, 2),
                dilation: Sequence[int]=(1, 1),
-               name: str="squeeze",
-               **kwargs):
-    super().__init__(name=name, **kwargs)
+               name: str="squeeze"
+  ):
+    """ Squeeze operation as described in RealNVP https://arxiv.org/pdf/1605.08803.pdf
+        Stacks consecutive 2x2 patches of pixels (and their channel dims) on top of each other.
+        The dilation argument can allow these 2x2 patches to overlap.
+    Args:
+      filter_shape: Size of patch
+      dilation    : How far each element of a patch is from each other
+      name        : Optional name for this module.
+    """
+    super().__init__(name=name)
     self.filter_shape = filter_shape
     self.dilation     = dilation
 
@@ -48,9 +56,15 @@ class UnSqueeze(Layer):
   def __init__(self,
                filter_shape: Sequence[int]=(2, 2),
                dilation: Sequence[int]=(1, 1),
-               name: str="unsqueeze",
-               **kwargs):
-    super().__init__(name=name, **kwargs)
+               name: str="unsqueeze"
+  ):
+    """ Undo the squeeze operation
+    Args:
+      filter_shape: Size of patch
+      dilation    : How far each element of a patch is from each other
+      name        : Optional name for this module.
+    """
+    super().__init__(name=name)
     self.filter_shape = filter_shape
     self.dilation     = dilation
 
@@ -74,7 +88,15 @@ class UnSqueeze(Layer):
 
 class Flatten(Layer):
 
-  def __init__(self, name: str="flatten", **kwargs):
+  def __init__(self,
+               name: str="flatten",
+               **kwargs
+  ):
+    """ Flatten an input.  NuX will internally keep track of the input
+        shape for inversion.
+    Args:
+      name: Optional name for this module.
+    """
     super().__init__(name=name, **kwargs)
 
   def call(self,
@@ -102,8 +124,15 @@ class Reshape(Layer):
   def __init__(self,
                output_shape: Sequence[int],
                name: str="flatten",
-               **kwargs):
-    self.output_shape   = output_shape
+               **kwargs
+  ):
+    """ Reshape an input.  NuX will internally keep track of the input
+        shape for inversion.
+    Args:
+      output_shape: Target shape
+      name        : Optional name for this module.
+    """
+    self.output_shape = output_shape
 
     super().__init__(name=name, **kwargs)
 
@@ -130,10 +159,22 @@ class Reshape(Layer):
 
 class Reverse(Layer):
 
-  def __init__(self, name: str="reverse", **kwargs):
+  def __init__(self,
+               name: str="reverse",
+               **kwargs
+  ):
+    """ Reverse the last axis of an input.  Useful to put in between coupling layers.
+    Args:
+      name        : Optional name for this module.
+    """
     super().__init__(name=name, **kwargs)
 
-  def call(self, inputs: Mapping[str, jnp.ndarray], rng: jnp.ndarray=None, sample: Optional[bool]=False, **kwargs) -> Mapping[str, jnp.ndarray]:
+  def call(self,
+           inputs: Mapping[str, jnp.ndarray],
+           rng: jnp.ndarray=None,
+           sample: Optional[bool]=False,
+           **kwargs
+  ) -> Mapping[str, jnp.ndarray]:
     x = inputs["x"]
     z = x[...,::-1]
     outputs = {"x": z, "log_det": jnp.zeros(self.batch_shape)}
