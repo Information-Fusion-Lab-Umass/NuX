@@ -7,6 +7,7 @@ import nux.spectral_norm as sn
 import nux.util as util
 from typing import Optional, Mapping, Callable, Sequence, Any
 import nux.weight_initializers as init
+import warnings
 
 __all__ = ["Conv",
            "ConvBlock",
@@ -40,16 +41,20 @@ def data_dependent_param_init(x: jnp.ndarray,
                                                is_training=is_training,
                                                **conv_kwargs)
 
-  elif parameter_norm == "weight_norm" and x.shape[0] > 1:
-    return init.conv_weight_with_weight_norm(x,
-                                             kernel_shape,
-                                             out_channel,
-                                             name_suffix,
-                                             w_init,
-                                             b_init,
-                                             use_bias,
-                                             is_training,
-                                             **conv_kwargs)
+  elif parameter_norm == "weight_norm":
+    if x.shape[0] > 1:
+      return init.conv_weight_with_weight_norm(x,
+                                               kernel_shape,
+                                               out_channel,
+                                               name_suffix,
+                                               w_init,
+                                               b_init,
+                                               use_bias,
+                                               is_training,
+                                               **conv_kwargs)
+    else:
+      warnings.warn("Not using weight normalization!")
+
 
   w = hk.get_parameter(f"w_{name_suffix}", w_shape, x.dtype, init=w_init)
   if use_bias:

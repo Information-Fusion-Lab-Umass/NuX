@@ -99,7 +99,7 @@ class SneakyReLU(Layer):
       alpha: Slope for negative values
       name : Optional name for this module.
     """
-    super().__init__(name=name, **kwargs)
+    super().__init__(name=name)
 
     # Sneaky ReLU uses a different convention
     self.alpha = (1.0 - alpha)/(1.0 + alpha)
@@ -147,7 +147,7 @@ class Sigmoid(Layer):
       scale: For interval
       name : Optional name for this module.
     """
-    super().__init__(name=name, **kwargs)
+    super().__init__(name=name)
     self.scale = scale
     self.has_scale = scale is not None
 
@@ -199,7 +199,7 @@ class Logit(Layer):
       scale: For interval
       name : Optional name for this module.
     """
-    super().__init__(name=name, **kwargs)
+    super().__init__(name=name)
     self.scale = scale
     self.has_scale = scale is not None
 
@@ -256,7 +256,7 @@ class SoftplusInverse(Layer):
     Args:
       name : Optional name for this module.
     """
-    super().__init__(name=name, **kwargs)
+    super().__init__(name=name)
 
   def call(self,
            inputs: Mapping[str, jnp.ndarray],

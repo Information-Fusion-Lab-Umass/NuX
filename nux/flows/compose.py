@@ -11,6 +11,7 @@ import nux
 __all__ = ["sequential",
            "factored",
            "multi_scale",
+           "reverse_flow",
            "track"]
 
 ################################################################################################################
@@ -151,9 +152,8 @@ class multi_scale(Layer):
     """ Use a flow in a multiscale architecture as described in RealNVP https://arxiv.org/pdf/1605.08803.pdf
         Factors half of the dimensions.
     Args:
-      layers: An iterable that contains flow layers
-      axis  : Which axis to factor on
-      name  : Optional name for this module.
+      flow: The flow to use
+      name: Optional name for this module.
     """
     super().__init__(name=name)
     self.flow = flow
@@ -170,6 +170,35 @@ class multi_scale(Layer):
                       nux.UnSqueeze())
 
     return flow(inputs, rng, sample=sample, **kwargs)
+
+################################################################################################################
+
+class reverse_flow(Layer):
+
+  def __init__(self,
+               flow,
+               name: str="reverse_flow",
+  ):
+    """ Reverse the direction of a flow.  Useful if one direction is faster than the other.
+    Args:
+      flow: The flow to use
+      name: Optional name for this module.
+    """
+    super().__init__(name=name)
+    self.flow = flow
+
+  def call(self,
+           inputs: Mapping[str, jnp.ndarray],
+           rng: jnp.ndarray=None,
+           sample: Optional[bool]=False,
+           **kwargs
+  ) -> Mapping[str, jnp.ndarray]:
+
+    outputs = self.flow(inputs, rng, not sample, **kwargs)
+
+    outputs["log_det"] *= -1
+
+    return outputs
 
 ################################################################################################################
 

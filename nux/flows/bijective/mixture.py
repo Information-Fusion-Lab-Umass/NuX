@@ -156,7 +156,6 @@ class CouplingMixtureCDF(CouplingBase):
 
   def __init__(self,
                n_components: int=8,
-               reverse: Optional[bool]=False,
                create_network: Callable=None,
                network_kwargs: Optional=None,
                use_condition: bool=False,
@@ -165,20 +164,19 @@ class CouplingMixtureCDF(CouplingBase):
     """ Base class for a mixture cdf with coupling
     Args:
       n_components  : Number of mixture components to use
-      reverse       : Reverse the flow.  We might want this class for only sampling,
-                      so it wouldn't make sense to always invert with the iterative method.
       create_network: Function to create the conditioner network.  Should accept a tuple
                       specifying the output shape.  See coupling_base.py
       use_condition : Should we use inputs["condition"] to form t([xb, condition]), s([xb, condition])?
       network_kwargs: Dictionary with settings for the default network (see get_default_network in util.py)
       name          : Optional name for this module.
     """
-    super().__init__(name=name)
-    self.n_components   = n_components
-    self.create_network = create_network
-    self.network_kwargs = network_kwargs
-    self.reverse        = reverse
-    self.use_condition  = use_condition
+    super().__init__(create_network=create_network,
+                     axis=-1,
+                     split_kind="channel",
+                     use_condition=use_condition,
+                     name=name,
+                     network_kwargs=network_kwargs)
+    self.n_components = n_components
 
     self.forward = partial(mixture_forward, self.f_and_log_det)
     self.inverse = partial(mixture_inverse, self.f, self.log_det)
@@ -206,13 +204,10 @@ class CouplingMixtureCDF(CouplingBase):
       theta = params.reshape(x.shape + (3*self.n_components,))
       in_axes = (0, 0)
 
-    if sample == self.reverse:
+    if sample == False:
       z, log_det = self.auto_batch(self.forward, in_axes=in_axes)(x, theta)
     else:
       z, log_det = self.auto_batch(self.inverse, in_axes=in_axes)(x, theta)
-
-    if self.reverse:
-      log_det *= -1
 
     return z, log_det
 
@@ -222,14 +217,15 @@ class _GaussianMixtureMixin():
 
   def __init__(self,
                n_components: int=4,
-               name: str="gaussian_mixture_cdf"
+               name: str="gaussian_mixture_cdf",
+               **kwargs
   ):
     """ Mix in class for Gaussian mixture cdf models
     Args:
       n_components  : Number of mixture components to use
       name          : Optional name for this module.
     """
-    super().__init__(n_components=n_components, name=name)
+    super().__init__(n_components=n_components, name=name, **kwargs)
 
   def f(self, weight_logits, means, log_scales, x):
     weight_logits = jax.nn.log_softmax(weight_logits)
@@ -250,14 +246,15 @@ class _LogitsticMixtureMixin():
 
   def __init__(self,
                n_components: int=4,
-               name: str="logistic_mixture_cdf"
+               name: str="logistic_mixture_cdf",
+               **kwargs
   ):
     """ Mix in class for logistic mixture cdf models
     Args:
       n_components  : Number of mixture components to use
       name          : Optional name for this module.
     """
-    super().__init__(n_components=n_components, name=name)
+    super().__init__(n_components=n_components, name=name, **kwargs)
 
   def f(self, weight_logits, means, log_scales, x):
     weight_logits = jax.nn.log_softmax(weight_logits)
@@ -278,8 +275,9 @@ class _LogitsticMixtureLogitMixin():
 
   def __init__(self,
                n_components: int=4,
+               restrict_scales: bool=True,
                name: str="logistic_mixture_cdf_logit",
-               restrict_scales: bool=True
+               **kwargs
   ):
     """ Mix in class for logistic mixture cdf followed by logit models.
         This works pretty well in practice.  See nux/networks/nonlinearities.py
@@ -290,7 +288,7 @@ class _LogitsticMixtureLogitMixin():
                        at the risk of numerical instability.
       name           : Optional name for this module.
     """
-    super().__init__(n_components=n_components, name=name)
+    super().__init__(n_components=n_components, name=name, **kwargs)
     self.restrict_scales = restrict_scales
 
   def f(self, weight_logits, means, log_scales, x):

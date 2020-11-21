@@ -31,7 +31,7 @@ class UnitGaussianPrior(Layer):
            rng: PRNGKey,
            sample: Optional[bool]=False,
            t: Optional[float]=1.0,
-           ignore_prior: Optional[bool]=False,
+           reconstruction: Optional[bool]=False,
            **kwargs
   ) -> Mapping[str, jnp.ndarray]:
     outputs = {}
@@ -50,7 +50,7 @@ class UnitGaussianPrior(Layer):
       outputs = {"x": x, "log_pz": log_pz}
     else:
       z = inputs["x"]
-      if ignore_prior:
+      if reconstruction:
         outputs = {"x": z, "log_pz": jnp.zeros(self.batch_shape)}
       else:
         # x = normal.sample(rng, z.shape)
@@ -81,7 +81,7 @@ class GMMPrior(Layer):
            inputs: Mapping[str, jnp.ndarray],
            rng: PRNGKey,
            sample: Optional[bool]=False,
-           ignore_prior: Optional[bool]=False,
+           reconstruction: Optional[bool]=False,
            **kwargs
   ) -> Mapping[str, jnp.ndarray]:
     x = inputs["x"]
@@ -121,7 +121,7 @@ class GMMPrior(Layer):
       outputs["x"] = x
 
     else:
-      if ignore_prior:
+      if reconstruction:
         outputs = {"x": x, "log_pz": jnp.array(0.0)}
       else:
         # Sample from all of the clusters

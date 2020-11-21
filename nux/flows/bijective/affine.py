@@ -256,7 +256,7 @@ class OneByOneConv(Layer):
 
   def __init__(self,
                weight_norm: bool=True,
-               name: str="1x1_conv"
+               name: str="one_by_one_conv"
   ):
     """ 1x1 convolution.  Uses a dense parametrization because the channel dimension will probably
         never be that big.  Costs O(C^3).  Used in GLOW https://arxiv.org/pdf/1807.03039.pdf
