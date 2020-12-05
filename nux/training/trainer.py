@@ -72,10 +72,10 @@ class Trainer():
 
       chain = []
       chain.append(util.scale_by_belief())
-      if warmup is not None:
+      if warmup > 0:
         warmup_schedule = partial(util.linear_warmup_lr_schedule, warmup=warmup, lr_decay=1.0, lr=-lr)
         chain.append(optax.scale_by_schedule(warmup_schedule))
-      if cosine_decay_steps is not None:
+      if cosine_decay_steps > 0:
         cosine_lr = optax.cosine_decay_schedule(init_value=1.0, decay_steps=cosine_decay_steps, alpha=0.0)
         chain.append(optax.scale_by_schedule(cosine_lr))
       if clip is not None:
@@ -91,6 +91,7 @@ class Trainer():
 
     self.training_steps = 0
     self.losses = []
+    self.all_outputs = None
 
     self.fast_train = partial(train_loop, self.valgrad, self.opt_update)
     self.fast_train = jit(self.fast_train)
@@ -116,7 +117,7 @@ class Trainer():
 
     return loss, outputs, params, state
 
-  def multi_grad_step(self, key, inputs, params, state):
+  def multi_grad_step(self, key, inputs, params, state, store_outputs=False):
     # Assumes that we are passing things in correctly
     n_iters = inputs['x'].shape[0]
     iter_numbers = jnp.arange(self.training_steps, self.training_steps + n_iters)
@@ -125,6 +126,11 @@ class Trainer():
     self.losses.extend(list(train_losses))
     self.training_steps += n_iters
     self.opt_state = opt_state
+    if store_outputs:
+      if self.all_outputs is None:
+        self.all_outputs = outputs
+      else:
+        self.all_outputs = jax.tree_multimap(lambda x, y: jnp.hstack([x, y]), self.all_outputs, outputs)
     return (train_losses, outputs), params, state
 
   def save_opt_state_to_file(self, path=None):

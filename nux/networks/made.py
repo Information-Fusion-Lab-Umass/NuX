@@ -152,7 +152,7 @@ class MADE(hk.Module):
 
       prev_sel = sel
 
-    w_mu = hk.get_parameter("w_mu", [self.dim, self.dim], jnp.float32, init=w_init)
+    w_mu = hk.get_parameter("w_mu", [self.dim, self.dim], x.dtype, init=w_init)
     mu = jnp.dot(x, w_mu*self.out_mask)
 
     if self.triangular_jacobian:
@@ -160,7 +160,7 @@ class MADE(hk.Module):
       dmu = jnp.dot(dx, (w_mu*diag_mask))
       return mu, dmu
 
-    w_alpha = hk.get_parameter("w_alpha", [self.dim, self.dim], jnp.float32, init=w_init)
+    w_alpha = hk.get_parameter("w_alpha", [self.dim, self.dim], x.dtype, init=w_init)
     alpha = jnp.dot(x, w_alpha*self.out_mask)
     alpha_bounded = jnp.tanh(alpha)
 

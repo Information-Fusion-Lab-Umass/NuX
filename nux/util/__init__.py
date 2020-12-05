@@ -10,3 +10,4 @@ from nux.util.optimizer import *
 from nux.util.misc import *
 from nux.util.logistic_cdf_mixture import *
 from nux.util.fixed_point import *
+from nux.util.mmd import *

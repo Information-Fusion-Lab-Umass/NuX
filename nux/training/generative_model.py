@@ -38,7 +38,8 @@ class GenerativeModel():
 
     if test_aggregate_fun is None:
       def test_aggregate_fun(inputs, outputs):
-        return jnp.mean(outputs.get("log_pz", 0.0) + outputs["log_det"])
+        log_px = jnp.mean(outputs.get("log_pz", 0.0) + outputs["log_det"])
+        return log_px
     self.tester = Tester(self.flow.apply, aggregate_fun=test_aggregate_fun)
 
   #############################################################################
@@ -71,11 +72,12 @@ class GenerativeModel():
 
   def multi_grad_step(self,
                       key: PRNGKey,
-                      inputs: Mapping[str, jnp.ndarray]
+                      inputs: Mapping[str, jnp.ndarray],
+                      store_outputs: bool=False
     ) -> Tuple[float, Mapping[str, jnp.ndarray]]:
 
     # This function expects doubly batched inputs!!
-    (train_losses, outputs), params, state = self.trainer.multi_grad_step(key, inputs, self.params, self.state)
+    (train_losses, outputs), params, state = self.trainer.multi_grad_step(key, inputs, self.params, self.state, store_outputs=store_outputs)
     self.params = params
     self.state = state
     return train_losses, outputs
@@ -133,6 +135,7 @@ class GenerativeModel():
     save_items = {"params": self.params,
                   "state": self.state,
                   "opt_state": self.trainer.opt_state,
+                  "train_all_outputs": self.trainer.all_outputs,
                   "train_losses": self.trainer.losses,
                   "test_losses": self.tester.losses,
                   "training_steps": self.trainer.training_steps}
@@ -143,6 +146,7 @@ class GenerativeModel():
     self.params = loaded_items["params"]
     self.state = loaded_items["state"]
     self.trainer.opt_state = loaded_items["opt_state"]
+    self.trainer.all_outputs = loaded_items.get("train_all_outputs", ())
     self.trainer.losses = loaded_items["train_losses"]
     self.tester.losses = loaded_items["test_losses"]
     self.trainer.training_steps = loaded_items["training_steps"]

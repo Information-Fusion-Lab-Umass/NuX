@@ -29,7 +29,7 @@ def weight_with_spectral_norm(x: jnp.ndarray,
 
   u = hk.get_state(f"u_{name_suffix}", (out_dim,), dtype, init=hk.initializers.RandomNormal())
   v = hk.get_state(f"v_{name_suffix}", (in_dim,), dtype, init=hk.initializers.RandomNormal())
-  w, u, v = sn.spectral_norm_apply(w, u, v, 0.99, 10, update_params)
+  w, u, v = sn.spectral_norm_apply(w, u, v, 0.99, 5, update_params)
   if is_training == True:
     hk.set_state(f"u_{name_suffix}", u)
     hk.set_state(f"v_{name_suffix}", v)

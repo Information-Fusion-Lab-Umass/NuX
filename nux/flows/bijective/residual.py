@@ -440,11 +440,11 @@ class ResidualFlow(Layer):
     self.init_if_needed(z, rng)
 
     # State will be held constant during the fixed point iterations
-    (apply_fun,), params, state = make_functional_modules_with_fixed_state([self.auto_batched_res_block])
+    fun = partial(self.auto_batched_res_block, update_params=False)
+    (apply_fun,), params, state = make_functional_modules_with_fixed_state([fun])
 
     # Make sure we don't use a different random key at every step of the fixed point iterations.
     deterministic_apply_fun = lambda params, state, x: apply_fun(params, state, x, rng)
-    # deterministic_apply_fun = lambda x, params, state: apply_fun(x, params, state, rng)
 
     # Run the fixed point iterations to invert at z.  We can do reverse-mode through this!
     x = fixed_point(deterministic_apply_fun, params, state, z, rng)

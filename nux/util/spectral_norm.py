@@ -35,33 +35,6 @@ def spectral_norm_iter(W, uv):
 
   return (u, v)
 
-# @partial(jit, static_argnums=(3,))
-# def spectral_norm_apply(W: jnp.ndarray,
-#                         u: jnp.ndarray,
-#                         scale: float,
-#                         n_iters: int):
-#   """ Perform at most n_iters single spectral norm iterations """
-
-#   # v is set inside the loop, so just pass in a dummy value.
-#   v = jnp.zeros((W.shape[1],))
-
-#   # Perform the spectral norm iterations
-#   fp = jax.jit(util.fixed_point, static_argnums=(0,))
-#   (u, v) = fp(spectral_norm_iter, W, (u, v), n_iters)
-
-#   # Other implementations stop the gradient, but we can get the gradient
-#   # wrt W efficiently by backprop-ing through the fixed point iters.
-#   u = jax.lax.stop_gradient(u)
-#   v = jax.lax.stop_gradient(v)
-
-#   # Estimate the largest singular value of W
-#   sigma = jnp.einsum("i,ij,j", u, W, v)
-
-#   # Scale coefficient to account for the fact that sigma can be an under-estimate.
-#   factor = jnp.where(scale < sigma, scale/sigma, 1.0)
-
-#   return W*factor, u
-
 @partial(jit, static_argnums=(4, 5))
 def spectral_norm_apply(W: jnp.ndarray,
                         u: jnp.ndarray,
