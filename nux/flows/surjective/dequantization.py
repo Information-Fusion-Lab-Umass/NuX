@@ -5,7 +5,7 @@ from jax import random, vmap
 from functools import partial
 import haiku as hk
 from typing import Optional, Mapping, Callable
-from nux.flows.base import *
+from nux.internal.layer import Layer
 import nux.util as util
 import nux
 from haiku._src.typing import PRNGKey
@@ -17,6 +17,7 @@ class UniformDequantization(Layer):
 
   def __init__(self,
                scale: float,
+               n_samples: int=1,
                name: str="uniform_dequantization"
   ):
     """ Uniform dequantization.  See section 3.1 here https://arxiv.org/pdf/1511.01844.pdf
@@ -27,6 +28,7 @@ class UniformDequantization(Layer):
     """
     super().__init__(name=name)
     self.scale = scale
+    self.n_samples = n_samples
 
   def call(self,
            inputs: Mapping[str, jnp.ndarray],
@@ -38,10 +40,14 @@ class UniformDequantization(Layer):
     x = inputs["x"]
     x_shape = self.get_unbatched_shapes(sample)["x"]
 
+    outputs = {}
+
     if sample == False:
       if no_dequantization == False:
-        noise = random.uniform(rng, x.shape)
+        noise = random.uniform(rng, x.shape + (self.n_samples,))
+        noise = noise.mean(axis=-1) # Bates distribution
         z = (x + noise)/self.scale
+        outputs["dequantization_noise"] = noise
       else:
         z = x/self.scale
     else:
@@ -49,7 +55,10 @@ class UniformDequantization(Layer):
       # z = jnp.floor(x*self.scale)
 
     log_det = -jnp.log(self.scale)*util.list_prod(x_shape)*jnp.ones(self.batch_shape)
-    return {"x": z, "log_det": log_det}
+    outputs["x"] = z
+    outputs["log_det"] = log_det
+
+    return outputs
 
 ################################################################################################################
 

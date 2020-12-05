@@ -56,20 +56,32 @@ def train_loop(valgrad: Callable,
 ################################################################################################################
 
 class Trainer():
-  def __init__(self, loss_fun, params, optimizer=None, clip=5.0, lr=5e-4, warmup=2000, cosine_decay_steps=1e6):
+  def __init__(self,
+               loss_fun,
+               params,
+               optimizer=None,
+               clip=15.0,
+               lr=5e-4,
+               warmup=2000,
+               cosine_decay_steps=1e6):
     self.loss_fun = loss_fun
     self.valgrad = jax.value_and_grad(self.loss_fun, has_aux=True)
     self.valgrad = jit(self.valgrad)
 
     if optimizer is None:
-      warmup_schedule = partial(util.linear_warmup_lr_schedule, warmup=warmup, lr_decay=1.0, lr=-lr)
-      cosine_lr = optax.cosine_decay_schedule(init_value=1.0, decay_steps=cosine_decay_steps, alpha=0.0)
-      opt_init, opt_update = optax.chain(optax.scale_by_adam(b1=0.9, b2=0.999, eps=1e-8),
-                                         # optax.additive_weight_decay(0.0),
-                                         # optax.scale_by_trust_ratio(),
-                                         optax.scale_by_schedule(warmup_schedule),
-                                         optax.scale_by_schedule(cosine_lr),
-                                         optax.clip(clip))
+
+      chain = []
+      chain.append(util.scale_by_belief())
+      if warmup is not None:
+        warmup_schedule = partial(util.linear_warmup_lr_schedule, warmup=warmup, lr_decay=1.0, lr=-lr)
+        chain.append(optax.scale_by_schedule(warmup_schedule))
+      if cosine_decay_steps is not None:
+        cosine_lr = optax.cosine_decay_schedule(init_value=1.0, decay_steps=cosine_decay_steps, alpha=0.0)
+        chain.append(optax.scale_by_schedule(cosine_lr))
+      if clip is not None:
+        chain.append(optax.clip(clip))
+
+      opt_init, opt_update = optax.chain(*chain)
     else:
       opt_init, opt_update = optimizer
 
@@ -91,7 +103,6 @@ class Trainer():
     self.losses.append(train_loss)
     self.training_steps += 1
     return train_loss, outputs, params, state
-
 
     # Compute the gradients
     (loss, (outputs, state)), grad = self.valgrad(params, state, key, inputs, **kwargs)

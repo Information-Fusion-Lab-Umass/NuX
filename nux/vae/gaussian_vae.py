@@ -4,7 +4,7 @@ import jax.numpy as jnp
 from functools import partial
 import nux.util as util
 from typing import Optional, Mapping, Callable, Sequence
-from nux.flows.base import *
+from nux.internal.layer import Layer
 import haiku as hk
 from haiku._src.typing import PRNGKey
 from jax.scipy.special import gammaln, logsumexp
@@ -46,7 +46,7 @@ class ParametrizedGaussian(Layer):
     network = self.get_generator_network()
 
     network_in = inputs["x"]
-    network_out = self.auto_batch(network, expected_depth=1)(network_in)
+    network_out = self.auto_batch(network, expected_depth=1, in_axes=(0, None))(network_in, rng)
     mu, log_diag_cov = jnp.split(network_out, 2, axis=-1)
     log_diag_cov = 1.5*jnp.tanh(log_diag_cov)
 
@@ -79,7 +79,7 @@ class GaussianVAE(Layer):
     self.inference_network_kwargs = inference_network_kwargs
     super().__init__(name=name, **kwargs)
 
-  def get_generator_network(self, out_shape):
+  def get_generator(self, out_shape):
     out_shape = out_shape[:-1] + (2*out_shape[-1],)
 
     # The user can specify a custom network
@@ -88,7 +88,7 @@ class GaussianVAE(Layer):
 
     return util.get_default_network(out_shape, network_kwargs=self.generator_network_kwargs)
 
-  def get_inference_network(self, out_shape):
+  def get_inference(self, out_shape):
     out_shape = out_shape[:-1] + (2*out_shape[-1],)
 
     # The user can specify a custom network
@@ -107,17 +107,15 @@ class GaussianVAE(Layer):
   ) -> Mapping[str, jnp.ndarray]:
 
     if sample == False:
-      network = self.get_generator_network(self.unbatched_input_shapes["x"])
+      network = self.get_generator(self.unbatched_input_shapes["x"])
 
       network_in = inputs["x"]
-      network_out = self.auto_batch(network, expected_depth=1)(network_in)
+      network_out = self.auto_batch(network, expected_depth=1, in_axes=(0, None))(network_in, rng)
       mu, log_diag_cov = jnp.split(network_out, 2, axis=-1)
-      log_diag_cov = jnp.logaddexp(log_diag_cov, -10)
 
     else:
-      network = self.get_inference_network(self.unbatched_output_shapes["x"])
+      network = self.get_inference(self.unbatched_output_shapes["x"])
 
       network_in = inputs["x"]
-      network_out = self.auto_batch(network, expected_depth=1)(network_in)
+      network_out = self.auto_batch(network, expected_depth=1, in_axes=(0, None))(network_in, rng)
       mu, log_diag_cov = jnp.split(network_out, 2, axis=-1)
-      log_diag_cov = jnp.logaddexp(log_diag_cov, -10)

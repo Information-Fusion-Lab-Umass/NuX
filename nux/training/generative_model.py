@@ -26,7 +26,7 @@ class GenerativeModel():
                flow: Any,
                params: Params,
                state: State,
-               loss_fun: Callable=None,
+               loss_fun: Callable,
                test_aggregate_fun: Callable=None,
                **kwargs):
     self.flow   = flow
@@ -38,7 +38,7 @@ class GenerativeModel():
 
     if test_aggregate_fun is None:
       def test_aggregate_fun(inputs, outputs):
-        return jnp.mean(outputs["log_pz"] + outputs["log_det"])
+        return jnp.mean(outputs.get("log_pz", 0.0) + outputs["log_det"])
     self.tester = Tester(self.flow.apply, aggregate_fun=test_aggregate_fun)
 
   #############################################################################
@@ -124,7 +124,7 @@ class GenerativeModel():
               inputs: Mapping[str, jnp.ndarray],
               **kwargs
     ) -> Mapping[str, jnp.ndarray]:
-    outputs, _ = self.apply(self.params, self.state, key, inputs, sample=True, ignore_prior=True, **kwargs)
+    outputs, _ = self.apply(self.params, self.state, key, inputs, sample=True, reconstruction=True, **kwargs)
     return outputs
 
   #############################################################################
@@ -148,17 +148,3 @@ class GenerativeModel():
     self.trainer.training_steps = loaded_items["training_steps"]
 
   #############################################################################
-
-  def save_flow(self, path: str=None):
-    self.flow.save_params_and_state_to_file(path=path)
-
-  def load_flow(self, path: str=None):
-    self.flow.load_param_and_state_from_file(path=path)
-
-  #############################################################################
-
-  def save_training_state(self, path: str=None):
-    self.trainer.save_opt_state_to_file(path=path)
-
-  def load_training_state(self, path: str=None):
-    self.trainer.load_param_and_state_from_file(path=path)

@@ -5,7 +5,7 @@ from jax import random, vmap
 from functools import partial
 import haiku as hk
 from typing import Optional, Mapping, Callable, Sequence
-from nux.flows.base import *
+from nux.internal.layer import Layer
 import nux.util as util
 import nux.networks as net
 
@@ -89,7 +89,7 @@ class Coupling(CouplingBase):
         log_det = -log_s.sum()*jnp.ones(self.batch_shape)
       else:
         x_shape = x.shape[len(self.batch_shape):]
-        sum_axes = tuple(range(-1, -1 - len(x_shape), -1))
+        sum_axes = util.last_axes(x_shape)
         log_det = -log_s.sum(axis=sum_axes)
     else:
       log_det = jnp.zeros(self.batch_shape)

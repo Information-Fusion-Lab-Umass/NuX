@@ -5,7 +5,7 @@ from jax import random, vmap
 from functools import partial
 import haiku as hk
 from typing import Optional, Mapping
-from nux.flows.base import *
+from nux.internal.layer import Layer
 import nux.util as util
 
 __all__ = ["ActNorm"]

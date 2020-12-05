@@ -5,7 +5,7 @@ from jax import random, jit, vmap
 import haiku as hk
 from typing import Optional, Mapping, Type, Callable, Iterable, Any, Sequence, Union, Tuple
 import nux.util as util
-from nux.flows.base import *
+from nux.internal.layer import Layer
 import nux
 
 __all__ = ["sequential",
@@ -76,24 +76,27 @@ class factored(Layer):
   def __init__(self,
                *layers: Iterable[Callable],
                axis: Optional[int]=-1,
+               first_factor_ratio: int=2,
                name: str="sequential"
   ):
     """ Create a flow in parallel.  This is basically like using the chain
         rule and applying a flow to each part.
     Args:
-      layers: An iterable that contains flow layers
-      axis  : Which axis to factor on
-      name  : Optional name for this module.
+      layers            : An iterable that contains flow layers
+      axis              : Which axis to factor on
+      first_factor_ratio: How large the first component should be compared to the second
+      name              : Optional name for this module.
     """
     super().__init__(name=name)
-    self.layers = tuple(layers)
-    self.axis   = axis
+    self.layers             = tuple(layers)
+    self.axis               = axis
+    self.first_factor_ratio = first_factor_ratio
 
   def call(self,
            inputs: Mapping[str, jnp.ndarray],
            rng: jnp.ndarray=None,
            sample: Optional[bool]=False,
-           accumulate: Iterable[str]=["log_det", "flow_norm"],
+           accumulate: Iterable[str]=["log_det"],
            **kwargs
   ) -> Mapping[str, jnp.ndarray]:
 
@@ -111,7 +114,13 @@ class factored(Layer):
     # split_idx = jnp.array([i*split_size for i in range(1, n_layers)])
     # xs = jnp.split(inputs["x"], indices_or_sections=split_idx, axis=self.axis)
 
-    xs = jnp.split(inputs["x"], n_layers, self.axis)
+    if n_layers == 2:
+      split_idx = inputs["x"].shape[self.axis]//self.first_factor_ratio
+      xs = jnp.split(inputs["x"], indices_or_sections=(split_idx,), axis=self.axis)
+      # xs = jnp.split(inputs["x"], n_layers, self.axis)
+    else:
+      assert 0, "Not implemented"
+
     zs = []
 
     # Split the random key

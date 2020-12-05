@@ -4,13 +4,13 @@ import jax.numpy as jnp
 from functools import partial
 import nux.util as util
 from typing import Optional, Mapping, Callable, Sequence
-from nux.flows.base import *
+from nux.internal.layer import Layer
 import haiku as hk
 from haiku._src.typing import PRNGKey
 from jax.scipy.special import gammaln, logsumexp
 import nux
 import nux.networks as net
-import nux.weight_initializers as init
+import nux.util.weight_initializers as init
 import nux.vae as vae
 
 __all__ = ["RectangularMVP"]
@@ -134,12 +134,18 @@ class RectangularMVP(Layer):
 
     return gamma, mu, log_diag_cov
 
-  def likelihood_contribution(self, mu, gamma_perp, log_diag_cov):
+  def likelihood_contribution(self, mu, gamma_perp, log_diag_cov, sample, big_to_small):
     batched_logZ = self.auto_batch(logZ, in_axes=(0, None, 0))
-    if self.reverse_params:
-      likelihood_contribution = batched_logZ(mu - gamma_perp, self.B.T, log_diag_cov) + jnp.linalg.slogdet(self.BBT)[1]
+    if sample == True and big_to_small == False:
+      if self.reverse_params:
+        likelihood_contribution = -0.5*jnp.linalg.slogdet(self.BBT)[1]
+      else:
+        likelihood_contribution = 0.5*jnp.linalg.slogdet(self.ATA)[1]
     else:
-      likelihood_contribution = batched_logZ(mu - gamma_perp, self.A, log_diag_cov)
+      if self.reverse_params:
+        likelihood_contribution = batched_logZ(mu - gamma_perp, self.B.T, log_diag_cov) + jnp.linalg.slogdet(self.BBT)[1]
+      else:
+        likelihood_contribution = batched_logZ(mu - gamma_perp, self.A, log_diag_cov)
 
     return likelihood_contribution
 
@@ -171,15 +177,18 @@ class RectangularMVP(Layer):
         self.B = init.weight_with_weight_norm(x, self.small_dim, use_bias=False, force_in_dim=self.big_dim)
       else:
         self.B = hk.get_parameter("B", shape=(self.small_dim, self.big_dim), dtype=dtype, init=init_fun)
+      self.B = util.whiten(self.B)
     else:
       self.A = hk.get_parameter("A", shape=(self.big_dim, self.small_dim), dtype=dtype, init=init_fun)
+      self.A = util.whiten(self.A)
 
     # Compute the riemannian metric matrix for later use.
     if self.reverse_params:
       self.BBT     = self.B@self.B.T
       self.BBT_inv = jnp.linalg.inv(self.BBT)
     else:
-      self.ATA_inv = jnp.linalg.inv(self.A.T@self.A)
+      self.ATA     = self.A.T@self.A
+      self.ATA_inv = jnp.linalg.inv(self.ATA)
 
     #######################
 
@@ -214,7 +223,7 @@ class RectangularMVP(Layer):
 
       # Compute the log contribution
       # L <- logZ(mu - gamma_perp|self.A, Sigma)
-      likelihood_contribution = self.likelihood_contribution(mu, gamma_perp, log_diag_cov)
+      likelihood_contribution = self.likelihood_contribution(mu, gamma_perp, log_diag_cov, sample=sample, big_to_small=big_to_small)
 
       outputs = {"x": s, "log_det": likelihood_contribution}
 
@@ -240,7 +249,7 @@ class RectangularMVP(Layer):
 
       # Compute the log contribution
       # L <- logZ(mu - gamma_perp|self.A, Sigma)
-      likelihood_contribution = -self.likelihood_contribution(mu, gamma_perp, log_diag_cov)
+      likelihood_contribution = -self.likelihood_contribution(mu, gamma_perp, log_diag_cov, sample=sample, big_to_small=big_to_small)
 
       # Reshape to an image if needed
       if self.image_in:

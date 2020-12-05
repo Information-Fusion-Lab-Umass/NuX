@@ -5,10 +5,11 @@ from jax import random, vmap, jit
 from functools import partial
 import haiku as hk
 from typing import Optional, Mapping, Sequence
-from nux.flows.base import *
+from nux.internal.layer import Layer
 import nux.util as util
 from jax.scipy.special import logsumexp
-import nux.weight_initializers as init
+# import nux.weight_initializers
+import nux.util.weight_initializers as init
 import nux.networks as net
 
 __all__ = ["MAF"]

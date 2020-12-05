@@ -46,6 +46,7 @@ opt_state = opt_init(params)
 for i, key in enumerate(random.split(key, 100)):
   state, grads = grad_fun(params, state, key, train_inputs)
   updates, opt_state = opt_update(grads, opt_state, params)
+  params = optax.apply_updates(params, updates)
 
 # Pull samples from the model and plot
 shape_placeholder = {"x": jnp.zero_like(x_train)}

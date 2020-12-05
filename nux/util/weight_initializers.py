@@ -1,10 +1,10 @@
 import jax.numpy as jnp
-from jax import jit, random
+from jax import jit, random, vmap
 from functools import partial
 import jax
 import nux.util as util
 import haiku as hk
-import nux.spectral_norm as sn
+import nux.util.spectral_norm as sn
 from typing import Optional, Mapping, Callable, Sequence, Any
 
 ################################################################################################################
@@ -15,21 +15,54 @@ def weight_with_spectral_norm(x: jnp.ndarray,
                               w_init: Callable=None,
                               b_init: Callable=None,
                               is_training: bool=True,
+                              update_params: bool=True,
                               use_bias: bool=True):
   in_dim, dtype = x.shape[-1], x.dtype
 
-  w = hk.get_parameter(f"w_{name_suffix}", (out_dim, in_dim), dtype, init=w_init)
+  def w_init_whiten(shape, dtype):
+    w = w_init(shape, dtype)
+    return util.whiten(w)*0.9
+
+  w = hk.get_parameter(f"w_{name_suffix}", (out_dim, in_dim), dtype, init=w_init_whiten)
   if use_bias:
     b = hk.get_parameter(f"b_{name_suffix}", (out_dim,), dtype, init=b_init)
 
   u = hk.get_state(f"u_{name_suffix}", (out_dim,), dtype, init=hk.initializers.RandomNormal())
-  w, u = sn.spectral_norm_apply(w, u, 0.9, 1)
+  v = hk.get_state(f"v_{name_suffix}", (in_dim,), dtype, init=hk.initializers.RandomNormal())
+  w, u, v = sn.spectral_norm_apply(w, u, v, 0.99, 10, update_params)
   if is_training == True:
     hk.set_state(f"u_{name_suffix}", u)
+    hk.set_state(f"v_{name_suffix}", v)
 
   if use_bias:
     return w, b
   return w
+
+# def weight_with_spectral_norm(x: jnp.ndarray,
+#                               out_dim: int,
+#                               name_suffix: str="",
+#                               w_init: Callable=None,
+#                               b_init: Callable=None,
+#                               is_training: bool=True,
+#                               use_bias: bool=True):
+#   in_dim, dtype = x.shape[-1], x.dtype
+
+#   def w_init_whiten(shape, dtype):
+#     w = w_init(shape, dtype)
+#     return util.whiten(w)*0.9
+
+#   w = hk.get_parameter(f"w_{name_suffix}", (out_dim, in_dim), dtype, init=w_init_whiten)
+#   if use_bias:
+#     b = hk.get_parameter(f"b_{name_suffix}", (out_dim,), dtype, init=b_init)
+
+#   u = hk.get_state(f"u_{name_suffix}", (out_dim,), dtype, init=hk.initializers.RandomNormal())
+#   w, u = sn.spectral_norm_apply(w, u, 0.99, 10)
+#   if is_training == True:
+#     hk.set_state(f"u_{name_suffix}", u)
+
+#   if use_bias:
+#     return w, b
+#   return w
 
 def conv_weight_with_spectral_norm(x: jnp.ndarray,
                                    kernel_shape: Sequence[int],
@@ -43,7 +76,11 @@ def conv_weight_with_spectral_norm(x: jnp.ndarray,
   batch_size, H, W, C = x.shape
   w_shape = kernel_shape + (C, out_channel)
 
-  w = hk.get_parameter(f"w_{name_suffix}", w_shape, x.dtype, init=w_init)
+  def w_init_whiten(shape, dtype):
+    w = w_init(shape, dtype)
+    return w*0.7
+
+  w = hk.get_parameter(f"w_{name_suffix}", w_shape, x.dtype, init=w_init_whiten)
   if use_bias:
     b = hk.get_parameter(f"b_{name_suffix}", (out_channel,), init=b_init)
 

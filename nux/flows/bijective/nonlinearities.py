@@ -5,7 +5,7 @@ from jax import random, vmap
 from functools import partial
 import haiku as hk
 from typing import Optional, Mapping
-from nux.flows.base import *
+from nux.internal.layer import Layer
 import nux.util as util
 
 __all__ = ["LeakyReLU",
@@ -37,7 +37,7 @@ class LeakyReLUInv(Layer):
   ) -> Mapping[str, jnp.ndarray]:
     x = inputs["x"]
     x_shape = self.get_unbatched_shapes(sample)["x"]
-    sum_axes = tuple(range(-1, -1 - len(x_shape), -1))
+    sum_axes = util.last_axes(x_shape)
 
     if sample == True:
       z = jnp.where(x > 0, x, self.alpha*x)
@@ -72,7 +72,7 @@ class LeakyReLU(Layer):
   ) -> Mapping[str, jnp.ndarray]:
     x = inputs["x"]
     x_shape = self.get_unbatched_shapes(sample)["x"]
-    sum_axes = tuple(range(-1, -1 - len(x_shape), -1))
+    sum_axes = util.last_axes(x_shape)
 
     if sample == False:
       z = jnp.where(x > 0, x, self.alpha*x)
@@ -113,7 +113,7 @@ class SneakyReLU(Layer):
 
     outputs = {}
     x_shape = self.get_unbatched_shapes(sample)["x"]
-    sum_axes = tuple(range(-1, -1 - len(x_shape), -1))
+    sum_axes = util.last_axes(x_shape)
 
     if sample == False:
       x = inputs["x"]
@@ -159,7 +159,7 @@ class Sigmoid(Layer):
   ) -> Mapping[str, jnp.ndarray]:
     x = inputs["x"]
     x_shape = self.get_unbatched_shapes(sample)["x"]
-    sum_axes = tuple(range(-1, -1 - len(x_shape), -1))
+    sum_axes = util.last_axes(x_shape)
 
     if sample == False:
       z = jax.nn.sigmoid(x)
@@ -213,7 +213,7 @@ class Logit(Layer):
     x = inputs["x"]
     outputs = {}
     x_shape = self.get_unbatched_shapes(sample)["x"]
-    sum_axes = tuple(range(-1, -1 - len(x_shape), -1))
+    sum_axes = util.last_axes(x_shape)
 
     if sample == False:
       if self.has_scale == True:
@@ -265,7 +265,7 @@ class SoftplusInverse(Layer):
            **kwargs
   ) -> Mapping[str, jnp.ndarray]:
     x_shape = self.get_unbatched_shapes(sample)["x"]
-    sum_axes = tuple(range(-1, -1 - len(x_shape), -1))
+    sum_axes = util.last_axes(x_shape)
 
     if sample == False:
       x = inputs["x"]

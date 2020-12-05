@@ -5,7 +5,7 @@ from jax import random, vmap
 from functools import partial
 import haiku as hk
 from typing import Optional, Mapping, Callable, Sequence
-from nux.flows.base import *
+from nux.internal.layer import Layer
 import nux.util as util
 import nux.networks as net
 
@@ -19,7 +19,8 @@ class CouplingBase(Layer):
                split_kind: str="channel",
                use_condition: bool=False,
                network_kwargs: Optional[Mapping]=None,
-               name: str="coupling"
+               name: str="coupling",
+               **kwargs
   ):
     """ Coupling transformation.  Transform an input, x = [xa,xb] using
         za = f(xa; NN(xb)), zb = f(xb; theta), z = [za, ab]
@@ -34,7 +35,7 @@ class CouplingBase(Layer):
       network_kwargs: Dictionary with settings for the default network (see get_default_network in util.py)
       name          : Optional name for this module.
     """
-    super().__init__(name=name)
+    super().__init__(name=name, **kwargs)
     self.axis               = axis
     self.create_network     = create_network
     self.network_kwargs     = network_kwargs
@@ -78,6 +79,17 @@ class CouplingBase(Layer):
     split_index = x_shape[ax]//2
     xa, xb = jnp.split(x, indices_or_sections=jnp.array([split_index]), axis=self.axis)
 
+    # Ensure that condition is the same size as xb so that they can be concatenated
+    if self.use_condition and len(x_shape) == 3:
+      H, W = x.shape[-3:-1]
+      Hc, Wc = condition.shape[-3:-1]
+
+      if Hc > H and Wc > W:
+        condition = self.auto_batch(partial(hk.max_pool, strides=2, window_shape=2, padding="VALID"), expected_depth=1)(condition)
+        Hc, Wc = condition.shape[-3:-1]
+
+      assert Hc == H and Wc == W
+
     # Initialize the coupling layer to the identity
     out_shape = self.get_out_shape(xa)
     network = self.get_network(out_shape)
@@ -88,7 +100,7 @@ class CouplingBase(Layer):
 
       # za = f(xa; NN(xb))
       network_in = jnp.concatenate([xb, condition], axis=self.axis) if self.use_condition else xb
-      network_out = self.auto_batch(network, expected_depth=1)(network_in)
+      network_out = self.auto_batch(network, expected_depth=1, in_axes=(0, None))(network_in, rng)
       za, log_deta = self.transform(xa, params=network_out, sample=False)
     else:
       # xb = f^{-1}(zb; theta).  (x and z are swapped so that the code is a bit cleaner)
@@ -96,7 +108,7 @@ class CouplingBase(Layer):
 
       # xa = f^{-1}(za; NN(xb)).
       network_in = jnp.concatenate([zb, condition], axis=self.axis) if self.use_condition else zb
-      network_out = self.auto_batch(network, expected_depth=1)(network_in)
+      network_out = self.auto_batch(network, expected_depth=1, in_axes=(0, None))(network_in, rng)
       za, log_deta = self.transform(xa, params=network_out, sample=True)
 
     # Recombine

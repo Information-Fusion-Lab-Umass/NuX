@@ -5,7 +5,7 @@ from jax import random, vmap
 from functools import partial
 import haiku as hk
 from typing import Optional, Mapping, Tuple, Sequence, Union, Any, Callable
-from nux.flows.base import *
+from nux.internal.layer import Layer
 import nux.util as util
 
 __all__ = ["Bias",
@@ -100,18 +100,53 @@ class Scale(Layer):
 
     return outputs
 
+class ElementwiseScale(Layer):
+
+  def __init__(self,
+               scale: jnp.ndarray,
+               name: str="scale"
+  ):
+    """ Scale an input by a specified scalar
+    Args:
+      scale: Value to scale by
+      name : Optional name for this module.
+    """
+    super().__init__(name=name)
+    self.scale = scale
+
+  def call(self,
+           inputs: Mapping[str, jnp.ndarray],
+           rng: jnp.ndarray=None,
+           sample: Optional[bool]=False,
+           **kwargs
+  ) -> Mapping[str, jnp.ndarray]:
+    outputs = {}
+
+    assert self.scale.shape == self.unbatched_input_shapes["x"]
+
+    if sample == False:
+      outputs["x"] = inputs["x"]/self.scale
+    else:
+      outputs["x"] = inputs["x"]*self.scale
+
+    shape = self.get_unbatched_shapes(sample)["x"]
+    outputs["log_det"] = -jnp.log(self.scale).sum()
+
+    return outputs
+
 ################################################################################################################
 
 class AffineDense(Layer):
 
   def __init__(self,
-               name: str="affine_dense"
+               name: str="affine_dense",
+               **kwargs
   ):
     """ Apply a dense matrix multiplication.  Costs O(D^3).
     Args:
       name:  Optional name for this module.
     """
-    super().__init__(name=name)
+    super().__init__(name=name, **kwargs)
 
   def call(self,
            inputs: Mapping[str, jnp.ndarray],
@@ -138,6 +173,10 @@ class AffineDense(Layer):
     return outputs
 
 ################################################################################################################
+
+tri_solve = jax.scipy.linalg.solve_triangular
+L_solve = jax.jit(partial(tri_solve, lower=True, unit_diagonal=True))
+U_solve = jax.jit(partial(tri_solve, lower=False, unit_diagonal=True))
 
 class AffineLDU(Layer):
 
@@ -182,9 +221,9 @@ class AffineLDU(Layer):
 
       @self.auto_batch
       def invert(z):
-        x = util.L_solve(L, z - b)
+        x = L_solve(L, z - b)
         x = x*jnp.exp(-log_d)
-        return util.U_solve(U, x)
+        return U_solve(U, x)
 
       outputs["x"] = invert(z)
 

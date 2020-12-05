@@ -1,5 +1,5 @@
 import nux
-from nux.flows.base import *
+from nux.internal.layer import Layer
 from typing import Optional, Mapping, Callable, Sequence
 
 __all__ = ["FlowPP",

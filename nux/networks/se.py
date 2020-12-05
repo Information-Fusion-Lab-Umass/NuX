@@ -3,7 +3,6 @@ from jax import jit, random
 from functools import partial
 import jax
 import haiku as hk
-import nux.spectral_norm as sn
 from typing import Optional, Mapping, Callable, Sequence, Any
 
 __all__ = ["SqueezeExcitation"]

@@ -5,7 +5,7 @@ from jax import random, vmap, jit
 from functools import partial
 import haiku as hk
 from typing import Optional, Mapping, Callable, Sequence
-from nux.flows.base import *
+from nux.internal.layer import Layer
 import nux.util as util
 from nux.flows.bijective.coupling_base import CouplingBase
 import nux.networks as net

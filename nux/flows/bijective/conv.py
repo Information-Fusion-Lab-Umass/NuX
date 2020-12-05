@@ -5,7 +5,7 @@ from jax import random, vmap, jit
 from functools import partial
 import haiku as hk
 from typing import Optional, Mapping, Sequence
-from nux.flows.base import *
+from nux.internal.layer import Layer
 import nux.util as util
 
 __all__ = ["CircularConv"]
@@ -53,10 +53,11 @@ class CircularConv(Layer):
     # http://developer.download.nvidia.com/compute/cuda/2_2/sdk/website/projects/convolutionFFT2D/doc/convolutionFFT2D.pdf
     x_h, x_w, x_c = x.shape[-3:]
 
-    dtype = inputs["x"].dtype
-    init = hk.initializers.VarianceScaling(1.0, 'fan_avg', 'truncated_normal')
-    W = hk.get_parameter("W", shape=self.filter_shape + (x_c, x_c), dtype=dtype, init=init)
-    b = hk.get_parameter("b", shape=(x_c,), dtype=dtype, init=jnp.zeros)
+    def orthogonal_init(shape, dtype):
+      W = random.normal(rng, shape=shape, dtype=dtype)*0.1
+      return vmap(vmap(util.whiten))(W)
+    W = hk.get_parameter("W", shape=self.filter_shape + (x_c, x_c), dtype=x.dtype, init=orthogonal_init)
+    b = hk.get_parameter("b", shape=(x_c,), dtype=x.dtype, init=jnp.zeros)
     W_h, W_w, W_c_out, W_c_in = W.shape
 
     # See how much we need to roll the filter

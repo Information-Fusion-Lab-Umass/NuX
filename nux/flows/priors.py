@@ -5,7 +5,7 @@ from jax import random, vmap
 from functools import partial
 import haiku as hk
 from typing import Optional, Mapping
-from nux.flows.base import *
+from nux.internal.layer import Layer
 import nux.util as util
 # import numpyro; numpyro.set_platform("gpu") # Not compatible with new version of JAX!
 # import numpyro.distributions as dists
@@ -35,29 +35,29 @@ class UnitGaussianPrior(Layer):
            **kwargs
   ) -> Mapping[str, jnp.ndarray]:
     outputs = {}
-    # x_shape = self.get_unbatched_shapes(sample)["x"]
-    # sum_axes = tuple(-jnp.arange(1, 1 + len(x_shape)))
 
-    # normal = dists.Normal(0, t)
     @self.auto_batch
     def unit_gaussian(x):
       return -0.5*(1/(t**2)*jnp.sum(x.ravel()**2) + x.size*jnp.log(t**2*2*jnp.pi))
 
     if sample == False:
       x = inputs["x"]
-      # log_pz = normal.log_prob(x).sum(axis=sum_axes)
       log_pz = unit_gaussian(x)
       outputs = {"x": x, "log_pz": log_pz}
     else:
       z = inputs["x"]
-      if reconstruction:
-        outputs = {"x": z, "log_pz": jnp.zeros(self.batch_shape)}
-      else:
-        # x = normal.sample(rng, z.shape)
-        # log_pz = normal.log_prob(x).sum(axis=sum_axes)
-        x = random.normal(rng, z.shape)*t
-        log_pz = unit_gaussian(x)
-        outputs = {"x": x, "log_pz": log_pz}
+      # if reconstruction:
+      #   outputs = {"x": z, "log_pz": jnp.zeros(self.batch_shape)}
+      # else:
+      #   x = random.normal(rng, z.shape)*t
+      #   log_pz = unit_gaussian(x)
+      #   outputs = {"x": x, "log_pz": log_pz}
+      if reconstruction == False:
+        z = random.normal(rng, z.shape)*t
+
+      log_pz = unit_gaussian(z)
+
+      outputs = {"x": z, "log_pz": log_pz}
 
     return outputs
 

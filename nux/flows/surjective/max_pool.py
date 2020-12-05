@@ -4,7 +4,7 @@ import jax.numpy as jnp
 from functools import partial
 import nux.util as util
 from typing import Optional, Mapping, Callable, Sequence
-from nux.flows.base import *
+from nux.internal.layer import Layer
 import haiku as hk
 from haiku._src.typing import PRNGKey
 import nux

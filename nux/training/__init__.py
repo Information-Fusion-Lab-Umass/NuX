@@ -1,2 +1,2 @@
-from nux.training.unsupervised import *
+from nux.training.generative_model import *
 from nux.training.trainer import *
