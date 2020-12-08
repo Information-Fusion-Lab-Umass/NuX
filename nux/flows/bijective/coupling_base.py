@@ -8,10 +8,11 @@ from typing import Optional, Mapping, Callable, Sequence
 from nux.internal.layer import Layer
 import nux.util as util
 import nux.networks as net
+from abc import ABC, abstractmethod
 
 __all__ = ["CouplingBase"]
 
-class CouplingBase(Layer):
+class CouplingBase(Layer, ABC):
 
   def __init__(self,
                create_network: Optional[Callable]=None,
@@ -19,6 +20,7 @@ class CouplingBase(Layer):
                split_kind: str="channel",
                use_condition: bool=False,
                network_kwargs: Optional[Mapping]=None,
+               apply_to_both_halves: Optional[bool]=True,
                name: str="coupling",
                **kwargs
   ):
@@ -36,12 +38,12 @@ class CouplingBase(Layer):
       name          : Optional name for this module.
     """
     super().__init__(name=name, **kwargs)
-    self.axis               = axis
-    self.create_network     = create_network
-    self.network_kwargs     = network_kwargs
-    self.use_condition      = use_condition
-
-    self.split_kind         = split_kind
+    self.axis                 = axis
+    self.create_network       = create_network
+    self.network_kwargs       = network_kwargs
+    self.use_condition        = use_condition
+    self.apply_to_both_halves = apply_to_both_halves
+    self.split_kind           = split_kind
     assert split_kind in ["checkerboard", "channel"]
 
   def get_network(self, out_shape):
@@ -51,11 +53,13 @@ class CouplingBase(Layer):
 
     return util.get_default_network(out_shape, network_kwargs=self.network_kwargs)
 
+  @abstractmethod
   def get_out_shape(self, x):
-    assert 0
+    pass
 
+  @abstractmethod
   def transform(self, x, params=None):
-    assert 0
+    pass
 
   def call(self,
            inputs: Mapping[str, jnp.ndarray],
@@ -96,7 +100,10 @@ class CouplingBase(Layer):
 
     if sample == False:
       # zb = f(xb; theta)
-      zb, log_detb = self.transform(xb, sample=False)
+      if self.apply_to_both_halves:
+        zb, log_detb = self.transform(xb, sample=False)
+      else:
+        zb, log_detb = xb, 0.0
 
       # za = f(xa; NN(xb))
       network_in = jnp.concatenate([xb, condition], axis=self.axis) if self.use_condition else xb
@@ -104,7 +111,10 @@ class CouplingBase(Layer):
       za, log_deta = self.transform(xa, params=network_out, sample=False)
     else:
       # xb = f^{-1}(zb; theta).  (x and z are swapped so that the code is a bit cleaner)
-      zb, log_detb = self.transform(xb, sample=True)
+      if self.apply_to_both_halves:
+        zb, log_detb = self.transform(xb, sample=True)
+      else:
+        zb, log_detb = xb, 0.0
 
       # xa = f^{-1}(za; NN(xb)).
       network_in = jnp.concatenate([zb, condition], axis=self.axis) if self.use_condition else zb

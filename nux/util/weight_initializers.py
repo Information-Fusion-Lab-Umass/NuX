@@ -38,32 +38,6 @@ def weight_with_spectral_norm(x: jnp.ndarray,
     return w, b
   return w
 
-# def weight_with_spectral_norm(x: jnp.ndarray,
-#                               out_dim: int,
-#                               name_suffix: str="",
-#                               w_init: Callable=None,
-#                               b_init: Callable=None,
-#                               is_training: bool=True,
-#                               use_bias: bool=True):
-#   in_dim, dtype = x.shape[-1], x.dtype
-
-#   def w_init_whiten(shape, dtype):
-#     w = w_init(shape, dtype)
-#     return util.whiten(w)*0.9
-
-#   w = hk.get_parameter(f"w_{name_suffix}", (out_dim, in_dim), dtype, init=w_init_whiten)
-#   if use_bias:
-#     b = hk.get_parameter(f"b_{name_suffix}", (out_dim,), dtype, init=b_init)
-
-#   u = hk.get_state(f"u_{name_suffix}", (out_dim,), dtype, init=hk.initializers.RandomNormal())
-#   w, u = sn.spectral_norm_apply(w, u, 0.99, 10)
-#   if is_training == True:
-#     hk.set_state(f"u_{name_suffix}", u)
-
-#   if use_bias:
-#     return w, b
-#   return w
-
 def conv_weight_with_spectral_norm(x: jnp.ndarray,
                                    kernel_shape: Sequence[int],
                                    out_channel: int,

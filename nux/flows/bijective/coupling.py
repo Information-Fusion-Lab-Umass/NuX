@@ -51,6 +51,7 @@ class Coupling(CouplingBase):
 
   def transform(self, x, params=None, sample=False):
     # Remember that self.get_unbatched_shapes(sample)["x"] is NOT the shape of x here!
+    # The x we see here is only half of the actual x!
 
     # Get the parameters of the transformation
     scale_init = hk.initializers.RandomNormal(stddev=0.01)
@@ -68,7 +69,7 @@ class Coupling(CouplingBase):
       # Split the output and bound the scaling term
       if self.kind == "affine":
         t, log_s = jnp.split(params, 2, axis=self.axis)
-        log_s = jnp.tanh(log_s)
+        log_s = util.constrain_log_scale(log_s)
       else:
         t = params
 

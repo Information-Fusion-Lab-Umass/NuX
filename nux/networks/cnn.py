@@ -225,11 +225,11 @@ class RepeatedConv(hk.Module):
     for i, (rng, out_channel, kernel_shape) in enumerate(zip(rngs, self.channel_sizes, self.kernel_shapes)):
 
       if i == len(self.channel_sizes) - 1 and self.gate == True:
-        ab = Conv(2*out_channel, kernel_shape, **self.conv_kwargs)(x, is_training=is_training)
+        ab = Conv(2*out_channel, kernel_shape, name=f"conv_{i}", **self.conv_kwargs)(x, is_training=is_training)
         a, b = jnp.split(ab, 2, axis=-1)
         x = a*jax.nn.sigmoid(b)
       else:
-        x = Conv(out_channel, kernel_shape, **self.conv_kwargs)(x, is_training=is_training)
+        x = Conv(out_channel, kernel_shape, name=f"conv_{i}", **self.conv_kwargs)(x, is_training=is_training)
 
       if self.norm is not None:
         x = self.norm(f"norm_{i}")(x, is_training=is_training)

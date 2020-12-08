@@ -53,13 +53,3 @@ shape_placeholder = {"x": jnp.zero_like(x_train)}
 outputs, _ = flow.apply(params, state, shape_placeholder, sample=True)
 plt.scatter(*outputs["x"].T)
 ```
-Check out the tutorial or any of the examples to get a better idea of how to use NuX.
-
-
-## Installation
-For the moment, NuX only works with python 3.7.  The steps to install are:
-
-     pip install nux
-     pip install git+https://github.com/deepmind/dm-haiku
-
-If you want GPU support for JAX, follow the intructions here https://github.com/google/jax#installation

@@ -97,7 +97,7 @@ class Layer(hk.Module, ABC):
 
     return outputs
 
-  def auto_batch(self, fun, in_axes=None, expected_depth=None):
+  def auto_batch(self, fun, in_axes=None, out_axes=None, expected_depth=None):
 
     vmap_kwargs = {}
     if in_axes is not None:
@@ -145,7 +145,12 @@ class Layer(hk.Module, ABC):
 
       # Remove the dummy axes
       for _ in range(n_newaxis):
-        out = jax.tree_map(lambda x: x[0], out)
+        if out_axes is None:
+          out = jax.tree_map(lambda x: x[0], out)
+        else:
+          for i, ax in enumerate(out_axes):
+            if ax is not None:
+              out[i] = jax.tree_map(lambda x: x[0], out[i])
 
       return out
 

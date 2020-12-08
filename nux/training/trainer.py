@@ -63,7 +63,8 @@ class Trainer():
                clip=15.0,
                lr=5e-4,
                warmup=2000,
-               cosine_decay_steps=1e6):
+               cosine_decay_steps=1e6,
+               optimizer_name="adabelief"):
     self.loss_fun = loss_fun
     self.valgrad = jax.value_and_grad(self.loss_fun, has_aux=True)
     self.valgrad = jit(self.valgrad)
@@ -71,7 +72,12 @@ class Trainer():
     if optimizer is None:
 
       chain = []
-      chain.append(util.scale_by_belief())
+      if optimizer_name == "adabelief":
+        chain.append(util.scale_by_belief())
+      elif optimizer_name == "adam":
+        chain.append(optax.scale_by_adam())
+      else:
+        assert 0
       if warmup > 0:
         warmup_schedule = partial(util.linear_warmup_lr_schedule, warmup=warmup, lr_decay=1.0, lr=-lr)
         chain.append(optax.scale_by_schedule(warmup_schedule))
