@@ -91,8 +91,9 @@ class Coupling(CouplingBase):
       z = x*jnp.exp(log_s) + t if self.kind == "affine" else x + t
 
     # If we're doing mask coupling, need to correctly mask log_s before
-    # computing the log determinant
+    # computing the log determinant and also mask the output
     if mask is not None:
+      z *= mask
       log_s *= mask
 
     # Compute the log determinant

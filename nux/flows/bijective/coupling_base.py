@@ -47,8 +47,6 @@ class CouplingBase(Layer, ABC):
     self.apply_to_both_halves = apply_to_both_halves
     self.split_kind           = split_kind
     self.masked               = masked
-    if masked:
-      assert self.apply_to_both_halves == False, "Not supporting both halves if using masked"
     assert split_kind in ["checkerboard", "channel"]
 
   def get_network(self, out_shape):
@@ -132,8 +130,8 @@ class CouplingBase(Layer, ABC):
       za, log_deta = self.transform(xa, params=network_out, sample=True)
 
     # Recombine
-    log_det = log_deta + log_detb
     z = jnp.concatenate([za, zb], axis=self.axis)
+    log_det = log_deta + log_detb
 
     if self.split_kind == "checkerboard":
       z = util.half_unsqueeze(z)
@@ -168,6 +166,7 @@ class CouplingBase(Layer, ABC):
 
     x_shape = self.unbatched_input_shapes["x"]
     mask = hk.get_state("mask", shape=x_shape, dtype=bool, init=mask_init)
+    nmask = ~mask
 
     x = inputs["x"]
     if self.use_condition:
@@ -175,23 +174,39 @@ class CouplingBase(Layer, ABC):
       condition = inputs["condition"]
 
     # Mask the input
-    x_not_mask = x*(~mask)
+    x_mask = x*mask
+    x_nmask = x*nmask
 
     # Initialize the network
-    out_shape = self.get_out_shape(x)
+    out_shape = self.get_out_shape(x_mask)
     network = self.get_network(out_shape)
 
-    network_in = jnp.concatenate([x_not_mask, condition], axis=self.axis) if self.use_condition else x_not_mask
-    network_out = self.auto_batch(network, expected_depth=1, in_axes=(0, None))(network_in, rng)
-
     if sample == False:
-      z, log_det = self.transform(x, params=network_out, sample=False, mask=mask)
+      # zb = f(xb; theta)
+      if self.apply_to_both_halves:
+        z_nmask, log_det_b = self.transform(x_nmask, sample=False, mask=nmask)
+      else:
+        z_nmask, log_det_b = x_nmask, 0.0
+
+      # za = f(xa; NN(xb))
+      network_in = jnp.concatenate([x_nmask, condition], axis=self.axis) if self.use_condition else x_nmask
+      network_out = self.auto_batch(network, expected_depth=1, in_axes=(0, None))(network_in, rng)
+      z_mask, log_det_a = self.transform(x, params=network_out, sample=False, mask=mask)
     else:
-      z, log_det = self.transform(x, params=network_out, sample=True, mask=mask)
+      # xb = f^{-1}(zb; theta).  (x and z are swapped so that the code is a bit cleaner)
+      if self.apply_to_both_halves:
+        z_nmask, log_det_b = self.transform(x_nmask, sample=True, mask=nmask)
+      else:
+        z_nmask, log_det_b = x_nmask, 0.0
+
+      network_in = jnp.concatenate([z_nmask, condition], axis=self.axis) if self.use_condition else z_nmask
+      network_out = self.auto_batch(network, expected_depth=1, in_axes=(0, None))(network_in, rng)
+      x_in = z_nmask + x_mask
+      z_mask, log_det_a = self.transform(x_in, params=network_out, sample=True, mask=mask)
 
     # Apply the other half of the mask to the output
-    z_mask = z*mask
-    z = x_not_mask + z_mask
+    z = z_nmask + z_mask
+    log_det = log_det_a + log_det_b
 
     outputs = {"x": z, "log_det": log_det}
     return outputs

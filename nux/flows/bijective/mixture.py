@@ -292,8 +292,12 @@ class CouplingMixtureCDF(_MixtureCDFMixin, CouplingBase):
     else:
       z, ew_log_det = self.auto_batch(self.mixture_inverse, in_axes=in_axes, expected_depth=1)(x, *params)
 
+    # If we're doing mask coupling, need to correctly mask log_s before
+    # computing the log determinant and also mask the output
     if mask is not None:
+      z *= mask
       ew_log_det *= mask
+
     sum_axes = util.last_axes(x.shape[len(self.batch_shape):])
     log_det = ew_log_det.sum(sum_axes)
     return z, log_det

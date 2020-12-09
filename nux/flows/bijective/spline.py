@@ -196,9 +196,10 @@ class NeuralSpline(CouplingBase):
     z = z.reshape(x.shape)
     ew_log_det = ew_log_det.reshape(x.shape)
 
-    # If we're doing mask coupling, need to correctly mask ew_log_det before
-    # computing the log determinant
+    # If we're doing mask coupling, need to correctly mask log_s before
+    # computing the log determinant and also mask the output
     if mask is not None:
+      z *= mask
       ew_log_det *= mask
 
     sum_axes = util.last_axes(x.shape[len(self.batch_shape):])
