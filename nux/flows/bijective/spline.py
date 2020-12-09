@@ -125,9 +125,9 @@ def spline(theta: jnp.ndarray,
   derivs_for_logdet = jnp.where(mask, deriv, 1.0)
   outputs = jnp.where(mask, outputs, inputs)
 
-  log_det = jnp.log(jnp.abs(derivs_for_logdet)).sum(axis=-1)
+  elementwise_log_det = jnp.log(jnp.abs(derivs_for_logdet))
 
-  return outputs, log_det
+  return outputs, elementwise_log_det
 
 ################################################################################################################
 
@@ -137,8 +137,15 @@ class NeuralSpline(CouplingBase):
                K: int=4,
                bounds: Sequence[float]=((-4.0, 4.0), (-4.0, 4.0)),
                create_network: Optional[Callable]=None,
-               network_kwargs: Optional=None,
-               name: str="rq_spline"
+               kind: Optional[str]="affine",
+               axis: Optional[int]=-1,
+               split_kind: str="channel",
+               masked: bool=False,
+               use_condition: bool=False,
+               apply_to_both_halves: Optional[bool]=True,
+               network_kwargs: Optional[Mapping]=None,
+               name: str="rq_spline",
+               **kwargs
   ):
     """ Neural spline flow https://arxiv.org/pdf/1906.04032.pdf
         Might take a while to compile.
@@ -150,11 +157,17 @@ class NeuralSpline(CouplingBase):
       network_kwargs   : Dictionary with settings for the default network (see get_default_network in util.py)
       name             : Optional name for this module.
     """
-    super().__init__(name=name)
+    super().__init__(create_network=create_network,
+                     axis=-1,
+                     split_kind=split_kind,
+                     masked=masked,
+                     use_condition=use_condition,
+                     name=name,
+                     apply_to_both_halves=apply_to_both_halves,
+                     network_kwargs=network_kwargs,
+                     **kwargs)
     self.K              = K
     self.bounds         = bounds
-    self.create_network = create_network
-    self.network_kwargs = network_kwargs
 
     self.forward_spline = jit(partial(spline, K=K, sample=False, bounds=bounds))
     self.inverse_spline = jit(partial(spline, K=K, sample=True, bounds=bounds))
@@ -164,7 +177,7 @@ class NeuralSpline(CouplingBase):
     out_dim = x_shape[-1]*(3*self.K - 1)
     return x_shape[:-1] + (out_dim,)
 
-  def transform(self, x, params=None, sample=False):
+  def transform(self, x, params=None, sample=False, mask=None):
     x_flat = x.reshape(self.batch_shape + (-1,))
     param_dim = (3*self.K - 1)
     if params is None:
@@ -176,10 +189,19 @@ class NeuralSpline(CouplingBase):
       in_axes = (0, 0)
 
     if sample == False:
-      z, log_det = self.auto_batch(self.forward_spline, in_axes=in_axes)(theta, x_flat)
+      z, ew_log_det = self.auto_batch(self.forward_spline, in_axes=in_axes)(theta, x_flat)
     else:
-      z, log_det = self.auto_batch(self.inverse_spline, in_axes=in_axes)(theta, x_flat)
+      z, ew_log_det = self.auto_batch(self.inverse_spline, in_axes=in_axes)(theta, x_flat)
 
     z = z.reshape(x.shape)
+    ew_log_det = ew_log_det.reshape(x.shape)
+
+    # If we're doing mask coupling, need to correctly mask ew_log_det before
+    # computing the log determinant
+    if mask is not None:
+      ew_log_det *= mask
+
+    sum_axes = util.last_axes(x.shape[len(self.batch_shape):])
+    log_det = ew_log_det.sum(axis=sum_axes)
 
     return z, log_det

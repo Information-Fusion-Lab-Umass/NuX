@@ -16,7 +16,8 @@ def weight_with_spectral_norm(x: jnp.ndarray,
                               b_init: Callable=None,
                               is_training: bool=True,
                               update_params: bool=True,
-                              use_bias: bool=True):
+                              use_bias: bool=True,
+                              **kwargs):
   in_dim, dtype = x.shape[-1], x.dtype
 
   def w_init_whiten(shape, dtype):
@@ -79,7 +80,8 @@ def weight_with_weight_norm(x: jnp.ndarray,
                             b_init: Callable=None,
                             is_training: bool=True,
                             use_bias: bool=True,
-                            force_in_dim: Optional=None):
+                            force_in_dim: Optional=None,
+                            **kwargs):
   in_dim, dtype = x.shape[-1], x.dtype
   if force_in_dim:
     in_dim = force_in_dim

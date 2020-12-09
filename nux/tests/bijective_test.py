@@ -13,16 +13,19 @@ def reconstruction_test(create_fun, inputs, rng, batch_axes):
   # Initialize the flow
   params, state = flow.init(rng, inputs, batch_axes=batch_axes)
 
-  # Make sure that reconstructions are correct
+  # If theres spectral norm, make sure that the max singular values
+  # of the weights are set
   fast_apply = jax.jit(flow.apply)
-  for i in range(10):
+  for i in range(1000):
     outputs, state = fast_apply(params, state, rng, inputs)
 
   inputs_for_reconstr = inputs.copy()
   inputs_for_reconstr.update(outputs) # We might have condition variables in inputs!
-  reconstr, _ = flow.apply(params, state, rng, inputs_for_reconstr, sample=True, is_training=False)
-  assert jnp.allclose(inputs["x"], reconstr["x"], atol=1e-4)
-  print("Passed reconstruction tests")
+  reconstr, _ = flow.apply(params, state, rng, inputs_for_reconstr, sample=True, reconstruction=True, is_training=False)
+  if jnp.allclose(inputs["x"], reconstr["x"]) == False:
+    print("Failed reconstruction test!", inputs["x"] - reconstr["x"])
+  else:
+    print("Passed reconstruction tests")
 
 def log_det_test(create_fun, inputs, rng):
   flow = nux.transform_flow(create_fun)
@@ -45,6 +48,7 @@ def log_det_test(create_fun, inputs, rng):
     return jnp.linalg.slogdet(jac)[1]
 
   actual_log_det = single_elt_logdet(inputs["x"])
+  assert jnp.isnan(actual_log_det) == False
   if jnp.allclose(actual_log_det, outputs["log_det"], atol=1e-04) == False:
     print(f"actual_log_det: {actual_log_det:.3f}, outputs['log_det']: {outputs['log_det']:.3f}")
     assert 0

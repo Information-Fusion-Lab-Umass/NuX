@@ -19,9 +19,12 @@ class Coupling(CouplingBase):
                kind: Optional[str]="affine",
                axis: Optional[int]=-1,
                split_kind: str="channel",
+               masked: bool=False,
                use_condition: bool=False,
+               apply_to_both_halves: Optional[bool]=True,
                network_kwargs: Optional[Mapping]=None,
-               name: str="coupling"
+               name: str="coupling",
+               **kwargs
   ):
     """ Affine/additive coupling.  Transform an input, x = [xa,xb] using
         za = (xa - t(xb))/s(xb), zb = (xb - t)/s, z = [za, ab]
@@ -39,9 +42,12 @@ class Coupling(CouplingBase):
     super().__init__(create_network=create_network,
                      axis=axis,
                      split_kind=split_kind,
+                     masked=masked,
                      use_condition=use_condition,
                      name=name,
-                     network_kwargs=network_kwargs)
+                     apply_to_both_halves=apply_to_both_halves,
+                     network_kwargs=network_kwargs,
+                     **kwargs)
     self.kind = kind
 
   def get_out_shape(self, x):
@@ -49,7 +55,7 @@ class Coupling(CouplingBase):
     out_dim = x_shape[-1] if self.kind == "additive" else 2*x_shape[-1]
     return x_shape[:-1] + (out_dim,)
 
-  def transform(self, x, params=None, sample=False):
+  def transform(self, x, params=None, sample=False, mask=None):
     # Remember that self.get_unbatched_shapes(sample)["x"] is NOT the shape of x here!
     # The x we see here is only half of the actual x!
 
@@ -84,14 +90,15 @@ class Coupling(CouplingBase):
     else:
       z = x*jnp.exp(log_s) + t if self.kind == "affine" else x + t
 
+    # If we're doing mask coupling, need to correctly mask log_s before
+    # computing the log determinant
+    if mask is not None:
+      log_s *= mask
+
     # Compute the log determinant
     if self.kind == "affine":
-      if params is None:
-        log_det = -log_s.sum()*jnp.ones(self.batch_shape)
-      else:
-        x_shape = x.shape[len(self.batch_shape):]
-        sum_axes = util.last_axes(x_shape)
-        log_det = -log_s.sum(axis=sum_axes)
+      sum_axes = util.last_axes(x.shape[len(self.batch_shape):])
+      log_det = -log_s.sum(axis=sum_axes)
     else:
       log_det = jnp.zeros(self.batch_shape)
 

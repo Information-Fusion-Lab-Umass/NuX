@@ -65,3 +65,18 @@ def upsample(x):
   x = jnp.repeat(x, 2, axis=0)
   x = jnp.repeat(x, 2, axis=1)
   return x
+
+def half_squeeze(x):
+  H, W, C = x.shape
+  x = x.reshape((H, W//2, 2, C))
+  x = x.transpose((0, 1, 3, 2))
+  return x.reshape((H, W//2, 2*C))
+
+def half_unsqueeze(x):
+  H, W_half, C_two = x.shape
+  W = W_half*2
+  C = C_two//2
+  x = x.reshape((H, W_half, C, 2))
+  x = x.transpose((0, 1, 3, 2))
+  x = x.reshape((H, W, C))
+  return x

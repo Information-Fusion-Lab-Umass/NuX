@@ -11,6 +11,7 @@ from jax.scipy.special import logsumexp
 import nux.networks as net
 from nux.util import logistic_cdf_mixture_logit
 import nux
+from nux.flows.bijective.coupling_base import CouplingBase
 from abc import ABC, abstractmethod
 
 __all__ = ["LogitsticMixtureLogit",
@@ -115,10 +116,6 @@ class _MixtureCDFMixin(ABC):
       log_s_shift = -jnp.maximum(-1.0, -log_s_shift)
       log_s_shift = jnp.maximum(-1.0, log_s_shift)
       log_s = log_s*log_s_scale + log_s_shift
-      # print("jnp.abs(log_s_scale).max()", jnp.abs(log_s_scale).max())
-      # print("jnp.abs(log_s_shift).max()", jnp.abs(log_s_shift).max())
-      # print("log_s_shift.max()", log_s_shift.max())
-      # print("jnp.abs(log_s).max()", jnp.abs(log_s).max())
 
       # Initialize t to subtract off the mean
       def t_shift_init(shape, dtype):
@@ -135,39 +132,28 @@ class _MixtureCDFMixin(ABC):
       t_scale = hk.get_parameter(f"{name_prefix}t_scale", shape=t_shape, dtype=x.dtype, init=jnp.zeros)
       t = t*t_scale + t_shift
 
-      # print("jnp.abs(t_scale).max()", jnp.abs(t_scale).max())
-      # print("jnp.abs(t_shift).max()", jnp.abs(t_shift).max())
-      # print("jnp.abs(t).max()", jnp.abs(t).max())
-
-      # print()
-      # print()
-
       return weight_logits, means, log_scales, log_s, t
 
     return weight_logits, means, log_scales
 
   def mixture_forward(self, x, weight_logits, means, log_scales, log_s=None, t=None):
     # Assume that this function is auto-batched
-    z, log_det = self.f_and_log_det(weight_logits, means, log_scales, x)
+    z, ew_log_det = self.f_and_elementwise_log_det(weight_logits, means, log_scales, x)
 
     if self.with_affine_coupling:
       z = (z - t)*jnp.exp(-log_s)
-      sum_axes = util.last_axes(self.unbatched_input_shapes["x"])
-      log_det += -log_s.sum(axis=sum_axes)
+      ew_log_det += -log_s
 
-      # import pdb; pdb.set_trace()
-
-    return z, log_det
+    return z, ew_log_det
 
   def mixture_inverse(self, z, weight_logits, means, log_scales, log_s=None, t=None):
     # Assume that this function is auto-batched
     if self.with_affine_coupling:
       x = z*jnp.exp(log_s) + t
-      sum_axes = util.last_axes(self.unbatched_input_shapes["x"])
-      log_det = -log_s.sum(axis=sum_axes)
+      ew_log_det = -log_s
     else:
       x = z
-      log_det = 0.0
+      ew_log_det = 0.0
 
     # If we're outside of this range, then there's a bigger problem in the rest of the network.
     lower = jnp.zeros_like(x) - 1000
@@ -175,20 +161,20 @@ class _MixtureCDFMixin(ABC):
 
     filled_f = partial(self.f, weight_logits, means, log_scales)
     x = bisection(filled_f, lower, upper, x)
-    log_det += self.log_det(weight_logits, means, log_scales, x)
+    ew_log_det += self.elementwise_log_det(weight_logits, means, log_scales, x)
 
-    return x, log_det
+    return x, ew_log_det
 
   @abstractmethod
   def f(self, weight_logits, means, log_scales, x):
     pass
 
   @abstractmethod
-  def log_det(self, weight_logits, means, log_scales, x):
+  def elementwise_log_det(self, weight_logits, means, log_scales, x):
     pass
 
-  def f_and_log_det(self, weight_logits, means, log_scales, x):
-    return self.f(weight_logits, means, log_scales, x), self.log_det(weight_logits, means, log_scales, x)
+  def f_and_elementwise_log_det(self, weight_logits, means, log_scales, x):
+    return self.f(weight_logits, means, log_scales, x), self.elementwise_log_det(weight_logits, means, log_scales, x)
 
 ################################################################################################################
 
@@ -220,17 +206,17 @@ class MixtureCDF(_MixtureCDFMixin, Layer):
 
     # Run the transform
     if sample == False:
-      z, log_det = self.auto_batch(self.mixture_forward, in_axes=in_axes, expected_depth=1)(x, *params)
+      z, ew_log_det = self.auto_batch(self.mixture_forward, in_axes=in_axes, expected_depth=1)(x, *params)
     else:
-      z, log_det = self.auto_batch(self.mixture_inverse, in_axes=in_axes, expected_depth=1)(x, *params)
+      z, ew_log_det = self.auto_batch(self.mixture_inverse, in_axes=in_axes, expected_depth=1)(x, *params)
 
+    sum_axes = util.last_axes(self.unbatched_input_shapes["x"])
+    log_det = ew_log_det.sum(sum_axes)
     outputs = {"x": z, "log_det": log_det}
 
     return outputs
 
 ################################################################################################################
-
-from nux.flows.bijective.coupling_base import CouplingBase
 
 class CouplingMixtureCDF(_MixtureCDFMixin, CouplingBase):
 
@@ -241,6 +227,8 @@ class CouplingMixtureCDF(_MixtureCDFMixin, CouplingBase):
                network_kwargs: Optional=None,
                use_condition: bool=False,
                split_kind="channel",
+               masked: bool=False,
+               apply_to_both_halves: Optional[bool]=True,
                name: str="coupling_mixture_cdf",
                **kwargs
   ):
@@ -259,6 +247,8 @@ class CouplingMixtureCDF(_MixtureCDFMixin, CouplingBase):
                      axis=-1,
                      split_kind=split_kind,
                      use_condition=use_condition,
+                     apply_to_both_halves=apply_to_both_halves,
+                     masked=masked,
                      name=name,
                      network_kwargs=network_kwargs,
                      **kwargs)
@@ -268,7 +258,7 @@ class CouplingMixtureCDF(_MixtureCDFMixin, CouplingBase):
     out_dim = x_shape[-1]*(3*self.n_components + self.extra)
     return x_shape[:-1] + (out_dim,)
 
-  def transform(self, x, params=None, sample=False):
+  def transform(self, x, params=None, sample=False, mask=None):
     conditioned_params = params is not None
     if params is None:
       x_shape = x.shape[len(self.batch_shape):]
@@ -298,10 +288,14 @@ class CouplingMixtureCDF(_MixtureCDFMixin, CouplingBase):
 
     # Run the transform
     if sample == False:
-      z, log_det = self.auto_batch(self.mixture_forward, in_axes=in_axes, expected_depth=1)(x, *params)
+      z, ew_log_det = self.auto_batch(self.mixture_forward, in_axes=in_axes, expected_depth=1)(x, *params)
     else:
-      z, log_det = self.auto_batch(self.mixture_inverse, in_axes=in_axes, expected_depth=1)(x, *params)
+      z, ew_log_det = self.auto_batch(self.mixture_inverse, in_axes=in_axes, expected_depth=1)(x, *params)
 
+    if mask is not None:
+      ew_log_det *= mask
+    sum_axes = util.last_axes(x.shape[len(self.batch_shape):])
+    log_det = ew_log_det.sum(sum_axes)
     return z, log_det
 
 ################################################################################################################
@@ -332,10 +326,10 @@ class _LogitsticMixtureLogitMixin():
 
     return jax.jit(logistic_cdf_mixture_logit)(weight_logits, means, log_scales, x)
 
-  def log_det(self, weight_logits, means, log_scales, x):
-    return self.f_and_log_det(weight_logits, means, log_scales, x)[1]
+  def elementwise_log_det(self, weight_logits, means, log_scales, x):
+    return self.f_and_elementwise_log_det(weight_logits, means, log_scales, x)[1]
 
-  def f_and_log_det(self, weight_logits, means, log_scales, x):
+  def f_and_elementwise_log_det(self, weight_logits, means, log_scales, x):
     if self.restrict_scales:
       log_scales = jnp.maximum(-7.0, log_scales)
 
@@ -343,9 +337,8 @@ class _LogitsticMixtureLogitMixin():
     tangents = jax.tree_map(jnp.zeros_like, primals[:-1]) + (jnp.ones_like(x),)
     z, dzdx = jax.jit(jax.jvp, static_argnums=(0,))(logistic_cdf_mixture_logit, primals, tangents)
 
-    sum_axes = util.last_axes(self.unbatched_input_shapes["x"])
-    log_det = jnp.log(dzdx).sum(axis=sum_axes)
-    return z, log_det
+    ew_log_det = jnp.log(dzdx)
+    return z, ew_log_det
 
 ################################################################################################################
 
