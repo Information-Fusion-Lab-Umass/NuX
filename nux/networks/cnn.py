@@ -90,7 +90,7 @@ class Conv(hk.Module):
     self.padding      = padding
     self.stride       = stride
 
-    if zero_init:
+    if True or zero_init:
       self.w_init = hk.initializers.RandomNormal(stddev=0.01)
     else:
       self.w_init = hk.initializers.VarianceScaling(1.0, "fan_avg", "truncated_normal") if w_init is None else w_init
@@ -255,6 +255,7 @@ class BottleneckConv(RepeatedConv):
                nonlinearity: str="relu",
                dropout_rate: Optional[float]=None,
                gate: bool=True,
+               use_bias: bool=False,
                name=None):
 
     channel_sizes = [hidden_channel, hidden_channel, out_channel]
@@ -265,7 +266,7 @@ class BottleneckConv(RepeatedConv):
                      parameter_norm=parameter_norm,
                      normalization=normalization,
                      nonlinearity=nonlinearity,
-                     use_bias=False,
+                     use_bias=use_bias,
                      dropout_rate=dropout_rate,
                      gate=gate,
                      name=name)
@@ -280,6 +281,7 @@ class ReverseBottleneckConv(RepeatedConv):
                nonlinearity: str="relu",
                dropout_rate: Optional[float]=None,
                gate: bool=True,
+               use_bias: bool=False,
                name=None):
 
     channel_sizes = [hidden_channel, hidden_channel, out_channel]
@@ -290,7 +292,7 @@ class ReverseBottleneckConv(RepeatedConv):
                      parameter_norm=parameter_norm,
                      normalization=normalization,
                      nonlinearity=nonlinearity,
-                     use_bias=False,
+                     use_bias=use_bias,
                      dropout_rate=dropout_rate,
                      gate=gate,
                      name=name)

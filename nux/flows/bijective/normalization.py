@@ -15,13 +15,19 @@ __all__ = ["ActNorm"]
 class ActNorm(Layer):
 
   def __init__(self,
+               axis=-1,
                name: str="act_norm"
   ):
     """ Act norm.  Used in GLOW https://arxiv.org/pdf/1807.03039.pdf
     Args:
-      name : Optional name for this module.
+      axis: Axes to normalize over.  -1 will normalize over the channel dim like in GLOW,
+            (-1, -2, -3) will normalize over every dimension like in Flow++
+      name: Optional name for this module.
     """
     super().__init__(name=name)
+    self.axes = (axis,) if isinstance(axis, int) else axis
+    for ax in self.axes:
+      assert ax < 0, "For convenience, pass in negative indexed axes"
 
   def call(self,
            inputs: Mapping[str, jnp.ndarray],
@@ -32,25 +38,31 @@ class ActNorm(Layer):
     outputs = {}
     x = inputs["x"]
     x_shape = self.get_unbatched_shapes(sample)["x"]
-    dtype = x.dtype
 
-    def b_init(*args, **kwargs):
-      axes = tuple(jnp.arange(len(x.shape) - 1))
-      return jnp.mean(x, axis=axes)
+    def b_init(shape, dtype):
+      keep_axes = [ax%len(x.shape) for ax in self.axes]
+      reduce_axes = tuple([ax for ax in range(len(x.shape)) if ax not in keep_axes])
+      if len(reduce_axes) == 1:
+        reduce_axes = reduce_axes[0]
+      return jnp.mean(x, axis=reduce_axes)
 
-    def log_s_init(*args, **kwargs):
-      axes = tuple(jnp.arange(len(x.shape) - 1))
-      return jnp.log(jnp.std(x, axis=axes) + 1e-5)
+    def log_s_init(shape, dtype):
+      keep_axes = [ax%len(x.shape) for ax in self.axes]
+      reduce_axes = tuple([ax for ax in range(len(x.shape)) if ax not in keep_axes])
+      if len(reduce_axes) == 1:
+        reduce_axes = reduce_axes[0]
+      return jnp.log(jnp.std(x, axis=reduce_axes) + 1e-5)
 
-    b     = hk.get_parameter("b", shape=(x_shape[-1],), dtype=dtype, init=b_init)
-    log_s = hk.get_parameter("log_s", shape=(x_shape[-1],), dtype=dtype, init=log_s_init)
+    param_shape = tuple([x_shape[ax] for ax in self.axes])
+    b     = hk.get_parameter("b", shape=param_shape, dtype=x.dtype, init=b_init)
+    log_s = hk.get_parameter("log_s", shape=param_shape, dtype=x.dtype, init=log_s_init)
 
     if sample == False:
       outputs["x"] = (x - b)*jnp.exp(-log_s)
     else:
       outputs["x"] = jnp.exp(log_s)*x + b
 
-    log_det = -log_s.sum()*util.list_prod(x_shape[:-1])
-    outputs["log_det"] = log_det*jnp.ones(self.batch_shape)
+    log_det = -log_s*jnp.ones(x_shape)
+    outputs["log_det"] = log_det.sum()
 
     return outputs

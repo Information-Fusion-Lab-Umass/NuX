@@ -79,7 +79,7 @@ class Scale(Layer):
       name : Optional name for this module.
     """
     super().__init__(name=name)
-    self.scale = scale
+    self.scale = scale*1.0
 
   def call(self,
            inputs: Mapping[str, jnp.ndarray],

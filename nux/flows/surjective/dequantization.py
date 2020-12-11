@@ -16,7 +16,6 @@ __all__ = ["UniformDequantization",
 class UniformDequantization(Layer):
 
   def __init__(self,
-               scale: float,
                n_samples: int=1,
                name: str="uniform_dequantization"
   ):
@@ -27,7 +26,6 @@ class UniformDequantization(Layer):
       name : Optional name for this module.
     """
     super().__init__(name=name)
-    self.scale = scale
     self.n_samples = n_samples
 
   def call(self,
@@ -46,15 +44,15 @@ class UniformDequantization(Layer):
       if no_dequantization == False:
         noise = random.uniform(rng, x.shape + (self.n_samples,))
         noise = noise.mean(axis=-1) # Bates distribution
-        z = (x + noise)/self.scale
+        z = x + noise
         outputs["dequantization_noise"] = noise
       else:
-        z = x/self.scale
+        z = x
     else:
-      z = x*self.scale
-      # z = jnp.floor(x*self.scale)
+      z = x
+      # z = jnp.floor(x)
 
-    log_det = -jnp.log(self.scale)*util.list_prod(x_shape)*jnp.ones(self.batch_shape)
+    log_det = -jnp.zeros(self.batch_shape)
     outputs["x"] = z
     outputs["log_det"] = log_det
 
@@ -64,7 +62,6 @@ class UniformDequantization(Layer):
 
 class VariationalDequantization(Layer):
   def __init__(self,
-               scale: float,
                flow: Optional[Callable]=None,
                network_kwargs: Optional=None,
                name: str="variational_dequantization"
@@ -78,7 +75,6 @@ class VariationalDequantization(Layer):
       name          : Optional name for this module.
     """
     super().__init__(name=name)
-    self.scale          = scale
     self.flow           = flow
     self.network_kwargs = network_kwargs
 
@@ -103,7 +99,7 @@ class VariationalDequantization(Layer):
     x = inputs["x"]
     x_shape = self.get_unbatched_shapes(sample)["x"]
 
-    log_det = -jnp.log(self.scale)*util.list_prod(x_shape)*jnp.ones(self.batch_shape)
+    log_det = -jnp.zeros(self.batch_shape)
     flow = self.flow if self.flow is not None else self.default_flow()
 
     if sample == False:
@@ -111,12 +107,12 @@ class VariationalDequantization(Layer):
       outputs = flow(flow_inputs, rng, sample=True)
 
       noise = outputs["x"]
-      z = (x + noise)/self.scale
+      z = x + noise
 
       log_qugx = outputs["log_det"] + outputs["log_pz"]
       log_det -= log_qugx
     else:
-      z_continuous = x*self.scale
+      z_continuous = x
       z = jnp.floor(z_continuous).astype(jnp.int32)
       noise = z_continuous - z
       flow_inputs = {"x": noise, "condition": x}

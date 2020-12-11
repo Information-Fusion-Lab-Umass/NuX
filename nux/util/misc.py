@@ -63,24 +63,3 @@ def constrain_log_scale(log_x):
   return jnp.logaddexp(jax.nn.log_sigmoid(log_x), -7)
 
 ################################################################################################################
-
-# def cheat_shift_scale_init(x, param, name, shape, dtype):
-
-#   def shift_init(shape, dtype):
-#     if x.ndim == len(shape):
-#       return jnp.zeros(shape, dtype)
-
-#     axes = tuple(jnp.arange(len(x.shape) - len(shape)))
-#     return jnp.mean(x, axis=axes)
-
-#   def log_scale_init(shape, dtype):
-#     if x.ndim == len(shape):
-#       return jnp.zeros(shape, dtype)
-
-#     axes = tuple(jnp.arange(len(x.shape) - len(shape)))
-#     return jnp.log(jnp.std(z, axis=axes) + 1e-5)
-
-#   shift = hk.get_parameter(f"{name}_shift", shape=shape, dtype=dtype, shift_init)
-#   scale = hk.get_parameter(f"{name}_scale", shape=shape, dtype=dtype, log_scale_init)
-
-#   return scale*param + shift

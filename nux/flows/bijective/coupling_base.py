@@ -94,7 +94,7 @@ class CouplingBase(Layer, ABC):
     if self.split_kind == "checkerboard":
       if unbatched_dim == 1:
         assert 0, "Only supporting masked checkerboard coupling for 1d inputs"
-      x = util.half_squeeze(x)
+      x = self.auto_batch(util.half_squeeze)(x)
 
     # Figure out the output shape
     x_shape = x.shape[-unbatched_dim:]
@@ -134,7 +134,7 @@ class CouplingBase(Layer, ABC):
     log_det = log_deta + log_detb
 
     if self.split_kind == "checkerboard":
-      z = util.half_unsqueeze(z)
+      z = self.auto_batch(util.half_unsqueeze)(z)
 
     outputs = {"x": z, "log_det": log_det}
     return outputs

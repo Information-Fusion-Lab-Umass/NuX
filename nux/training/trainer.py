@@ -21,13 +21,13 @@ def scan_body(valgrad: Callable,
   i, key, inputs = inputs
 
   # Take a gradient step
-  (train_loss, (outputs, state)), grad = valgrad(params, state, key, inputs)
+  (train_loss, (extra_out, state)), grad = valgrad(params, state, key, inputs)
 
   # Update the parameters and optimizer state
   updates, opt_state = opt_update(grad, opt_state, params)
   params = jit(optax.apply_updates)(params, updates)
 
-  return (params, state, opt_state), (train_loss, outputs)
+  return (params, state, opt_state), (train_loss, extra_out)
 
 @partial(jit, static_argnums=(0, 1))
 def train_loop(valgrad: Callable,

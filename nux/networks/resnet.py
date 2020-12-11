@@ -23,6 +23,7 @@ class ResNet(hk.Module):
                zero_init: bool=False,
                dropout_rate: Optional[float]=0.2,
                gate: bool=True,
+               use_bias: bool=True,
                name=None):
     super().__init__(name=name)
 
@@ -31,12 +32,14 @@ class ResNet(hk.Module):
                                   normalization=None,
                                   nonlinearity=nonlinearity,
                                   dropout_rate=dropout_rate,
-                                  gate=gate)
+                                  gate=gate,
+                                  use_bias=use_bias)
 
     self.n_blocks       = n_blocks
     self.out_channel    = out_channel
     self.squeeze_excite = squeeze_excite
     self.zero_init      = zero_init
+    self.use_bias       = use_bias
 
     if block_type == "bottleneck":
       self.conv_block = BottleneckConv
@@ -91,7 +94,7 @@ class ResNet(hk.Module):
                 stride=(1, 1),
                 padding="SAME",
                 parameter_norm=self.conv_block_kwargs["parameter_norm"],
-                use_bias=False,
+                use_bias=True,
                 zero_init=self.zero_init)
     x = conv(x, is_training=is_training)
 

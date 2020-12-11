@@ -173,12 +173,20 @@ class multi_scale(Layer):
            sample: Optional[bool]=False,
            **kwargs
   ) -> Mapping[str, jnp.ndarray]:
+    x = inputs["x"]
 
-    flow = sequential(nux.Squeeze(),
-                      factored(nux.Identity(), self.flow),
-                      nux.UnSqueeze())
+    # Split the input vector on the channel dimension
+    xa, xb = jnp.split(x, indices_or_sections=jnp.array([x.shape[-1]//2]), axis=-1)
 
-    return flow(inputs, rng, sample=sample, **kwargs)
+    # Run a flow on only one half
+    factored_inputs = inputs.copy()
+    factored_inputs["x"] = xb
+    outputs = self.flow(factored_inputs, rng, sample=sample, **kwargs)
+
+    z = jnp.concatenate([xa, outputs["x"]], axis=-1)
+
+    outputs["x"] = z
+    return outputs
 
 ################################################################################################################
 
