@@ -68,6 +68,9 @@ def scale_by_belief(b1: float=0.9,
 
 ################################################################################################################
 
+def linear_lr(i, lr=1e-4):
+  return lr
+
 def linear_warmup_lr_schedule(i, warmup=1000, lr_decay=1.0, lr=1e-4):
   return jnp.where(i < warmup,
                    lr*i/warmup,

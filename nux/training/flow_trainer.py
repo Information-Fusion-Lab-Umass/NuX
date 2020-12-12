@@ -4,8 +4,6 @@ import jax
 from jax import random, jit, vmap
 from nux.internal.layer import Flow
 import nux.util as util
-from nux.training.trainer import Trainer
-from nux.training.tester import Tester
 from typing import Optional, Mapping, Callable, Sequence, Tuple, Any
 from haiku._src.typing import Params, State, PRNGKey
 import optax
@@ -69,9 +67,12 @@ class MaximumLikelihoodTrainer():
     else:
       assert 0
 
+    # Make sure to use the negative learning rate so that we minimize
     if warmup and warmup > 0:
       warmup_schedule = partial(util.linear_warmup_lr_schedule, warmup=warmup, lr_decay=1.0, lr=-lr)
       chain.append(optax.scale_by_schedule(warmup_schedule))
+    else:
+      chain.append(optax.scale_by_schedule(partial(util.linear_lr, lr=-lr)))
 
     if cosine_decay_steps and cosine_decay_steps > 0:
       cosine_lr = optax.cosine_decay_schedule(init_value=1.0, decay_steps=cosine_decay_steps, alpha=0.0)
@@ -86,7 +87,7 @@ class MaximumLikelihoodTrainer():
 
   def nll(self, params, state, key, inputs, **kwargs):
     outputs, updated_state = self.flow._apply_fun(params, state, key, inputs, **kwargs)
-    log_px = outputs["log_pz"] + outputs["log_det"]
+    log_px = outputs.get("log_pz", 0.0) + outputs.get("log_det", 0.0)
     return -log_px.mean(), updated_state
 
   #############################################################################
@@ -131,7 +132,7 @@ class MaximumLikelihoodTrainer():
     train_losses = []
     for i, key in enumerate(keys):
       _inputs = jax.tree_map(lambda x: x[i], inputs)
-      carry, train_loss = self.scan_grad_step(carry, (key, inputs), **kwargs)
+      carry, train_loss = self.scan_grad_step(carry, (key, _inputs), **kwargs)
       train_losses.append(train_loss)
       self.flow.params, self.flow.state, self.opt_state = carry
 

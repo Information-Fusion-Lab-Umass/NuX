@@ -7,6 +7,7 @@ import haiku as hk
 from typing import Optional, Mapping, Tuple, Sequence, Union, Any, Callable
 from nux.internal.layer import Layer
 import nux.util as util
+import nux.util.weight_initializers as init
 
 __all__ = ["Bias",
            "Identity",
@@ -139,6 +140,7 @@ class ElementwiseScale(Layer):
 class AffineDense(Layer):
 
   def __init__(self,
+               weight_norm: bool=True,
                name: str="affine_dense",
                **kwargs
   ):
@@ -147,6 +149,7 @@ class AffineDense(Layer):
       name:  Optional name for this module.
     """
     super().__init__(name=name, **kwargs)
+    self.weight_norm = weight_norm
 
   def call(self,
            inputs: Mapping[str, jnp.ndarray],
@@ -158,9 +161,18 @@ class AffineDense(Layer):
     outputs = {}
 
     x_dim, dtype = x.shape[-1], inputs["x"].dtype
-    W_init = hk.initializers.TruncatedNormal(1/jnp.sqrt(x_dim))
-    W = hk.get_parameter("W", shape=(x_dim, x_dim), dtype=dtype, init=W_init)
-    b = hk.get_parameter("b", shape=(x_dim,), dtype=dtype, init=jnp.zeros)
+
+    if self.weight_norm:
+      W, b = init.weight_with_weight_norm(x,
+                                          out_dim=x_dim,
+                                          w_init=hk.initializers.RandomNormal(0.1),
+                                          b_init=jnp.zeros,
+                                          is_trainig=kwargs.get("is_trainig", False),
+                                          use_bias=True)
+    else:
+      W_init = hk.initializers.TruncatedNormal(1/jnp.sqrt(x_dim))
+      W = hk.get_parameter("W", shape=(x_dim, x_dim), dtype=dtype, init=W_init)
+      b = hk.get_parameter("b", shape=(x_dim,), dtype=dtype, init=jnp.zeros)
 
     if sample == False:
       outputs["x"] = jnp.dot(x, W.T) + b
@@ -197,7 +209,7 @@ class AffineLDU(Layer):
   ) -> Mapping[str, jnp.ndarray]:
     outputs = {}
 
-    init = hk.initializers.VarianceScaling(1.0, 'fan_avg', 'truncated_normal')
+    init = hk.initializers.RandomNormal(0.1)
 
     dim, dtype = inputs["x"].shape[-1], inputs["x"].dtype
     L     = hk.get_parameter("L", shape=(dim, dim), dtype=dtype, init=init)

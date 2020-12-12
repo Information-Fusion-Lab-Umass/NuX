@@ -12,7 +12,6 @@ import nux.networks as net
 
 __all__ = ["NeuralSpline"]
 
-@partial(jit, static_argnums=(1,))
 def get_knot_params(theta: jnp.ndarray,
                     K: int,
                     min_width: Optional[float]=1e-3,
@@ -148,7 +147,6 @@ class NeuralSpline(CouplingBase):
                **kwargs
   ):
     """ Neural spline flow https://arxiv.org/pdf/1906.04032.pdf
-        Might take a while to compile.
     Args:
       K                : Number of bins to use
       bounds           : The interval to apply the spline to
@@ -169,8 +167,8 @@ class NeuralSpline(CouplingBase):
     self.K              = K
     self.bounds         = bounds
 
-    self.forward_spline = jit(partial(spline, K=K, sample=False, bounds=bounds))
-    self.inverse_spline = jit(partial(spline, K=K, sample=True, bounds=bounds))
+    self.forward_spline = partial(spline, K=K, sample=False, bounds=bounds)
+    self.inverse_spline = partial(spline, K=K, sample=True, bounds=bounds)
 
   def get_out_shape(self, x):
     x_shape = x.shape[len(self.batch_shape):]

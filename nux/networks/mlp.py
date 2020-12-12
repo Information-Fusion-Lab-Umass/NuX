@@ -4,7 +4,6 @@ from functools import partial
 import jax
 import haiku as hk
 from typing import Optional, Mapping, Callable, Sequence, Any
-# import nux.weight_initializers
 import nux.util.weight_initializers as init
 
 __all__ = ["MLP"]
