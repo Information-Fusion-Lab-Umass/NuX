@@ -1,2 +1,1 @@
-from nux.training.generative_model import *
-from nux.training.trainer import *
+from nux.training.flow_trainer import *

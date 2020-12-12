@@ -13,9 +13,7 @@ It is easy to build, train and evaluate normalizing flows with NuX
 ```python
 import nux
 import jax
-import optax
 import jax.numpy as jnp
-import matplotlib.pyplot as plt
 key = jax.random.PRNGKey(0)
 
 # Build a dummy dataset
@@ -27,29 +25,25 @@ def create_flow():
   return nux.sequential(nux.Coupling(), nux.AffineLDU(), nux.UnitGaussianPrior())
 
 # Perform data-dependent initialization
-flow = nux.transform_flow(create_flow)
-params, state = flow.init(key, train_inputs, batch_axes=(0,))
+flow = nux.Flow(create_flow, key, train_inputs, batch_axes=(0,))
 
-# Create our loss function
-def negative_log_likelihood(params, state, key, inputs):
-  outputs, updated_state = flow.apply(params, state, key, inputs)
-  log_px = outputs["log_pz"] + outputs["log_det"]
-  return -log_px.mean(), updated_state
+# Run the flow on inputs
+outputs = flow.apply(key, test_inputs)
+finv_x, log_px = outputs["x"], outputs["log_px"]
 
-# Generate the gradient function
-grad_fun = jax.grad(negative_log_likelihood, has_aux=True)
+# Generate reconstructions
+outputs = flow.reconstruct(key, {"x": finv_x})
+reconstr = outputs["x"]
 
-# Train the flow using Optax
-opt_init, opt_update = optax.adam(lr=1e-3)
-opt_state = opt_init(params)
+# Sample from the flow
+outputs = flow.sample(key, n_samples=8)
+fz, log_pfz = outputs["x"], outputs["log_px"]
 
-for i, key in enumerate(random.split(key, 100)):
-  state, grads = grad_fun(params, state, key, train_inputs)
-  updates, opt_state = opt_update(grads, opt_state, params)
-  params = optax.apply_updates(params, updates)
+# Construct a maximum likelihood trainer for the flow
+trainer = nux.MaximumLikelihoodTrainer(flow)
 
-# Pull samples from the model and plot
-shape_placeholder = {"x": jnp.zero_like(x_train)}
-outputs, _ = flow.apply(params, state, shape_placeholder, sample=True)
-plt.scatter(*outputs["x"].T)
+# Train the flow
+keys = jax.random.split(key, 10)
+for key in keys:
+  trainer.grad_step(key, train_inputs)
 ```

@@ -46,12 +46,7 @@ class UnitGaussianPrior(Layer):
       outputs = {"x": x, "log_pz": log_pz}
     else:
       z = inputs["x"]
-      # if reconstruction:
-      #   outputs = {"x": z, "log_pz": jnp.zeros(self.batch_shape)}
-      # else:
-      #   x = random.normal(rng, z.shape)*t
-      #   log_pz = unit_gaussian(x)
-      #   outputs = {"x": x, "log_pz": log_pz}
+
       if reconstruction == False:
         z = random.normal(rng, z.shape)*t
 

@@ -4,6 +4,7 @@ import jax
 from jax import random, jit, vmap
 import haiku as hk
 from abc import ABC, abstractmethod
+import warnings
 from typing import Optional, Mapping, Type, Callable, Iterable, Any, Sequence, Union, Tuple, MutableMapping, NamedTuple, Set, TypeVar
 import nux.util as util
 from nux.internal.base import get_constant, new_custom_context
@@ -17,7 +18,9 @@ from haiku._src.transform import TransformedWithState, \
                                  APPLY_RNG_STATE_ERROR, \
                                  APPLY_RNG_ERROR
 
-__all__ = ["Layer", "transform_flow"]
+__all__ = ["Layer",
+           "transform_flow",
+           "Flow"]
 
 ################################################################################################################
 
@@ -234,6 +237,7 @@ def transform_flow(create_fun) -> TransformedWithState:
   def init_fn(rng: Optional[Union[PRNGKey]],
               inputs: Mapping[str, jnp.ndarray],
               batch_axes=(),
+              return_initial_output=False,
               **kwargs
   ) -> Tuple[Params, State]:
     """ Initializes your function collecting parameters and state. """
@@ -255,6 +259,10 @@ def transform_flow(create_fun) -> TransformedWithState:
 
     nonlocal constants
     params, state, constants = ctx.collect_params(), ctx.collect_initial_state(), ctx.collect_constants()
+
+    if return_initial_output:
+      return params, state, outputs
+
     return params, state
 
   def apply_fn(params: Optional[Params],
@@ -275,3 +283,136 @@ def transform_flow(create_fun) -> TransformedWithState:
     return out, ctx.collect_state()
 
   return TransformedWithState(init_fn, apply_fn)
+
+################################################################################################################
+
+class Flow():
+  """ Convenience class to wrap a Layer class
+
+      Args:
+          flow     - A Flow object.
+          clip     - How much to clip gradients.  This is crucial for stable training!
+          warmup   - How much to warm up the learning rate.
+          lr_decay - Learning rate decay.
+          lr       - Max learning rate.
+  """
+  def __init__(self,
+               create_fun: Callable,
+               key: PRNGKey,
+               inputs: Mapping[str,jnp.ndarray],
+               batch_axes: Sequence[int],
+               **kwargs):
+
+    self._flow = transform_flow(create_fun)
+    self.params, self.state, outputs = self._flow.init(key,
+                                                       inputs,
+                                                       batch_axes=batch_axes,
+                                                       return_initial_output=True)
+    self.data_shape   = inputs["x"].shape[len(batch_axes):]
+    self.latent_shape = outputs["x"].shape[len(batch_axes):]
+
+  def to_bits_per_dim(self, log_likelihood):
+    return log_likelihood/util.list_prod(self.data_shape)/jnp.log(2)
+
+  def get_batch_shape(self, inputs):
+    return inputs["x"].shape[-len(self.data_shape):]
+
+  #############################################################################
+
+  def process_outputs(self, outputs):
+    # Only set log_px if outputs has both a prior and log_det term
+    if "log_pz" not in outputs:
+      warnings.warn("Flow does not have a prior")
+    if "log_det" not in outputs:
+      warnings.warn("Flow does not have a transformation")
+
+    outputs["log_px"] = outputs.get("log_pz", 0.0) + outputs.get("log_det", 0.0)
+    return outputs
+
+  #############################################################################
+
+  @property
+  def _apply_fun(self):
+    return self._flow.apply
+
+  def apply(self,
+            key: PRNGKey,
+            inputs: Mapping[str, jnp.ndarray],
+            **kwargs
+  ) -> Mapping[str, jnp.ndarray]:
+    outputs, self.state = self._flow.apply(self.params, self.state, key, inputs, **kwargs)
+    return self.process_outputs(outputs)
+
+  def stateful_apply(self,
+                     key: PRNGKey,
+                     inputs: Mapping[str, jnp.ndarray],
+                     state: State,
+                     **kwargs
+  ) -> Mapping[str, jnp.ndarray]:
+    outputs, state = self._flow.apply(self.params, state, key, inputs, **kwargs)
+    return self.process_outputs(outputs), state
+
+  #############################################################################
+
+  def scan_apply(self,
+                 key: PRNGKey,
+                 inputs: Mapping[str, jnp.ndarray],
+                 **kwargs
+  ) -> Mapping[str, jnp.ndarray]:
+    """ Applies a lax.scan loop to the first batch axis
+    """
+    if len(inputs["x"].shape) == len(self.data_shape):
+      assert 0, "Expect a batched or doubly-batched input"
+
+    def scan_body(carry, scan_inputs):
+      key, _inputs = scan_inputs
+      state = carry
+      outputs, state = self.stateful_apply(key, _inputs, state, **kwargs)
+      return state, outputs
+
+    # Get the inputs for the scan loop
+    n_iters = inputs["x"].shape[0]
+    keys = random.split(key, n_iters)
+    scan_inputs = (keys, inputs)
+    self.state, outputs = jax.lax.scan(scan_body, self.state, scan_inputs)
+    return self.process_outputs(outputs)
+
+  #############################################################################
+
+  def sample(self,
+             key: PRNGKey,
+             n_samples: int,
+             n_batches: Optional[int]=None,
+             **kwargs
+  ) -> Mapping[str, jnp.ndarray]:
+    if n_batches is None:
+      dummy_z = jnp.zeros((n_samples,) + self.latent_shape)
+      outputs = self.apply(key, {"x": dummy_z}, sample=True, **kwargs)
+    else:
+      dummy_z = jnp.zeros((n_batches, n_samples) + self.latent_shape)
+      outputs = self.scan_apply(key, {"x": dummy_z}, sample=True, **kwargs)
+    return self.process_outputs(outputs)
+
+  def reconstruct(self,
+                  key: PRNGKey,
+                  inputs: Mapping[str, jnp.ndarray],
+                  scan_loop: bool=False,
+                  **kwargs
+  ) -> Mapping[str, jnp.ndarray]:
+    if scan_loop == False:
+      outputs = self.apply(key, inputs, sample=True, reconstruction=True, **kwargs)
+    else:
+      outputs = self.scan_apply(key, inputs, sample=True, reconstruction=True, **kwargs)
+    return self.process_outputs(outputs)
+
+  #############################################################################
+
+  def save(self, path: str=None):
+    save_items = {"params": self.params,
+                  "state": self.state}
+    util.save_pytree(save_items, path, overwrite=True)
+
+  def load(self, path: str=None):
+    loaded_items = util.load_pytree(path)
+    self.params = loaded_items["params"]
+    self.state = loaded_items["state"]
