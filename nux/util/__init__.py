@@ -1,3 +1,4 @@
+from nux.util.fixed_point import *
 from nux.util.weight_initializers import *
 from nux.util.spectral_norm import *
 from nux.util.householder import *
@@ -9,5 +10,4 @@ from nux.util.default_networks import *
 from nux.util.optimizer import *
 from nux.util.misc import *
 from nux.util.logistic_cdf_mixture import *
-from nux.util.fixed_point import *
 from nux.util.mmd import *

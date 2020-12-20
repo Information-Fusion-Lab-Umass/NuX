@@ -12,6 +12,7 @@ import nux.util.weight_initializers as init
 __all__ = ["Bias",
            "Identity",
            "Scale",
+           "ElementwiseScale",
            "AffineDense",
            "AffineLDU",
            "AffineSVD",
@@ -140,7 +141,9 @@ class ElementwiseScale(Layer):
 class AffineDense(Layer):
 
   def __init__(self,
-               weight_norm: bool=True,
+               weight_norm: bool=False,
+               spectral_norm: bool=False,
+               max_singular_value: float=1.0,
                name: str="affine_dense",
                **kwargs
   ):
@@ -149,7 +152,10 @@ class AffineDense(Layer):
       name:  Optional name for this module.
     """
     super().__init__(name=name, **kwargs)
+    assert (weight_norm and spectral_norm) == False
+    self.spectral_norm = spectral_norm
     self.weight_norm = weight_norm
+    self.max_singular_value = max_singular_value
 
   def call(self,
            inputs: Mapping[str, jnp.ndarray],
@@ -167,8 +173,17 @@ class AffineDense(Layer):
                                           out_dim=x_dim,
                                           w_init=hk.initializers.RandomNormal(0.1),
                                           b_init=jnp.zeros,
-                                          is_trainig=kwargs.get("is_trainig", False),
+                                          is_training=kwargs.get("is_training", True),
                                           use_bias=True)
+    elif self.spectral_norm:
+      W, b = init.weight_with_spectral_norm(x,
+                                            out_dim=x_dim,
+                                            w_init=hk.initializers.RandomNormal(0.1),
+                                            b_init=jnp.zeros,
+                                            is_training=kwargs.get("is_training", True),
+                                            update_params=kwargs.get("is_training", True),
+                                            max_singular_value=self.max_singular_value,
+                                            use_bias=True)
     else:
       W_init = hk.initializers.TruncatedNormal(1/jnp.sqrt(x_dim))
       W = hk.get_parameter("W", shape=(x_dim, x_dim), dtype=dtype, init=W_init)

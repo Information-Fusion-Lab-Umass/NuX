@@ -14,7 +14,8 @@ def build_architecture(architecture: Sequence[Callable],
                        actnorm: bool=False,
                        actnorm_axes: Sequence[int]=-1,
                        glow: bool=True,
-                       one_dim: bool=False):
+                       one_dim: bool=False,
+                       factor: Optional[Callable]=nux.multi_scale):
   n_squeeze = 0
 
   layers = []
@@ -23,7 +24,15 @@ def build_architecture(architecture: Sequence[Callable],
     # We don't want to put anything in front of the squeeze
     if layer == "sq":
       layers.append(nux.Squeeze())
+      if glow and one_dim == False:
+        layers.append(nux.OneByOneConv())
       n_squeeze += 1
+      continue
+
+    # We don't want to put anything in front of the unsqueeze
+    if layer == "unsq":
+      layers.append(nux.UnSqueeze())
+      n_squeeze -= 1
       continue
 
     # Should we do a multiscale factorization?
@@ -35,7 +44,7 @@ def build_architecture(architecture: Sequence[Callable],
                                       actnorm_axes=actnorm_axes,
                                       glow=glow,
                                       one_dim=one_dim)
-      layers.append(nux.multi_scale(inner_flow))
+      layers.append(factor(inner_flow))
       break
 
     # Actnorm.  Not needed if we're using 1x1 conv because the 1x1

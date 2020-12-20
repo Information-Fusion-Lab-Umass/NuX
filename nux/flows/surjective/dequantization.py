@@ -99,7 +99,7 @@ class VariationalDequantization(Layer):
     x = inputs["x"]
     x_shape = self.get_unbatched_shapes(sample)["x"]
 
-    log_det = -jnp.zeros(self.batch_shape)
+    log_det = jnp.zeros(self.batch_shape)
     flow = self.flow if self.flow is not None else self.default_flow()
 
     if sample == False:

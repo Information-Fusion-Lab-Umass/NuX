@@ -45,7 +45,8 @@ class RectangularMVP(Layer):
                create_network: Optional[Callable]=None,
                reverse_params: bool=True,
                network_kwargs: Optional=None,
-               weight_norm: bool=True,
+               weight_norm: bool=False,
+               spectral_norm: bool=False,
                name: str="rectangular_mvp",
                **kwargs):
     if generative_only == False:
@@ -56,6 +57,7 @@ class RectangularMVP(Layer):
     self.generative_only = generative_only
     self.reverse_params  = reverse_params
     self.weight_norm     = weight_norm
+    self.spectral_norm   = spectral_norm
     self.create_network  = create_network
     self.network_kwargs  = network_kwargs
     super().__init__(name=name, **kwargs)
@@ -125,6 +127,7 @@ class RectangularMVP(Layer):
     network_in = t_proj.reshape(self.batch_shape + self.input_shape) if self.image_in else s
     outputs = self.p_gamma_given_s({"x": network_in}, rng=rng, no_noise=no_noise)
     gamma, mu, log_diag_cov = outputs["x"], outputs["mu"], outputs["log_diag_cov"]
+    log_diag_cov = jnp.tanh(log_diag_cov)
 
     # If we're going from image -> vector, we need to flatten the image
     if self.image_in:
@@ -154,7 +157,8 @@ class RectangularMVP(Layer):
            rng: PRNGKey,
            sample: Optional[bool]=False,
            no_noise: Optional[bool]=False,
-           **kwargs) -> Mapping[str, jnp.ndarray]:
+           **kwargs
+  ) -> Mapping[str, jnp.ndarray]:
 
     # p(gamma|s) = N(gamma|mu(s), Sigma(s))
     if self.image_in:
@@ -173,14 +177,33 @@ class RectangularMVP(Layer):
     dtype = inputs["x"].dtype
     if self.reverse_params:
       x = inputs["x"].reshape(self.batch_shape + (-1,))
-      if self.weight_norm and self.kind == "tall":
-        self.B = init.weight_with_weight_norm(x, self.small_dim, use_bias=False, force_in_dim=self.big_dim)
+
+      if self.spectral_norm:
+        self.B = init.weight_with_spectral_norm(x,
+                                                self.small_dim,
+                                                use_bias=False,
+                                                w_init=init_fun,
+                                                force_in_dim=self.big_dim,
+                                                is_training=kwargs.get("is_training", True),
+                                                update_params=kwargs.get("is_training", True))
       else:
-        self.B = hk.get_parameter("B", shape=(self.small_dim, self.big_dim), dtype=dtype, init=init_fun)
-      self.B = util.whiten(self.B)
+        if self.weight_norm and self.kind == "tall":
+          self.B = init.weight_with_weight_norm(x, self.small_dim, use_bias=False, force_in_dim=self.big_dim)
+        else:
+          self.B = hk.get_parameter("B", shape=(self.small_dim, self.big_dim), dtype=dtype, init=init_fun)
+        self.B = util.whiten(self.B)
     else:
-      self.A = hk.get_parameter("A", shape=(self.big_dim, self.small_dim), dtype=dtype, init=init_fun)
-      self.A = util.whiten(self.A)
+      if self.spectral_norm:
+        self.A = init.weight_with_spectral_norm(x,
+                                                self.big_dim,
+                                                use_bias=False,
+                                                w_init=init_fun,
+                                                force_in_dim=self.small_dim,
+                                                is_training=kwargs.get("is_training", True),
+                                                update_params=kwargs.get("is_training", True))
+      else:
+        self.A = hk.get_parameter("A", shape=(self.big_dim, self.small_dim), dtype=dtype, init=init_fun)
+        self.A = util.whiten(self.A)
 
     # Compute the riemannian metric matrix for later use.
     if self.reverse_params:

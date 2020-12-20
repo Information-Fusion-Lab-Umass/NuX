@@ -78,10 +78,16 @@ class Layer(hk.Module, ABC):
       self.unbatched_output_shapes = get_tree_shapes("unbatched_output_shapes", inputs, batch_axes=batch_axes)
 
     # For convenience, also get the batch axes
-    if sample == False:
-      self.batch_shape = inputs["x"].shape[:-len(self.unbatched_input_shapes["x"])]
-    else:
-      self.batch_shape = inputs["x"].shape[:-len(self.unbatched_output_shapes["x"])]
+    try:
+      if sample == False:
+        self.batch_shape = inputs["x"].shape[:-len(self.unbatched_input_shapes["x"])]
+      else:
+        self.batch_shape = inputs["x"].shape[:-len(self.unbatched_output_shapes["x"])]
+    except:
+      if sample == False:
+        self.batch_shape = jax.tree_leaves(inputs["x"])[0].shape[:-len(self.unbatched_input_shapes["x"][0])]
+      else:
+        self.batch_shape = jax.tree_leaves(inputs["x"])[0].shape[:-len(self.unbatched_output_shapes["x"][0])]
 
     # Run the actual function
     if self.invertible_ad == False:
@@ -124,9 +130,6 @@ class Layer(hk.Module, ABC):
       n_vmaps = batch_depth - expected_depth
 
     def vmapped_fun(*args, **kwargs):
-      nonlocal self, batch_depth, expected_depth
-      in_shapes = jax.tree_map(lambda x: x.shape, args)
-
       # Add in dummy axes to the args
       args = list(args)
       for _ in range(n_newaxis):
@@ -310,6 +313,7 @@ class Flow():
                                                        return_initial_output=True)
     self.data_shape   = inputs["x"].shape[len(batch_axes):]
     self.latent_shape = outputs["x"].shape[len(batch_axes):]
+    self.scan_apply_loop = jit(partial(jax.lax.scan, self.scan_body))
 
   def to_bits_per_dim(self, log_likelihood):
     return log_likelihood/util.list_prod(self.data_shape)/jnp.log(2)
@@ -354,6 +358,12 @@ class Flow():
 
   #############################################################################
 
+  def scan_body(self, carry, scan_inputs):
+    key, _inputs = scan_inputs
+    state = carry
+    outputs, state = self.stateful_apply(key, _inputs, state, **kwargs)
+    return state, outputs
+
   def scan_apply(self,
                  key: PRNGKey,
                  inputs: Mapping[str, jnp.ndarray],
@@ -364,17 +374,18 @@ class Flow():
     if len(inputs["x"].shape) == len(self.data_shape):
       assert 0, "Expect a batched or doubly-batched input"
 
-    def scan_body(carry, scan_inputs):
-      key, _inputs = scan_inputs
-      state = carry
-      outputs, state = self.stateful_apply(key, _inputs, state, **kwargs)
-      return state, outputs
+    # def scan_body(carry, scan_inputs):
+    #   key, _inputs = scan_inputs
+    #   state = carry
+    #   outputs, state = self.stateful_apply(key, _inputs, state, **kwargs)
+    #   return state, outputs
 
     # Get the inputs for the scan loop
     n_iters = inputs["x"].shape[0]
     keys = random.split(key, n_iters)
     scan_inputs = (keys, inputs)
-    self.state, outputs = jax.lax.scan(scan_body, self.state, scan_inputs)
+    self.state, outputs = self.scan_apply_loop(self.state, scan_inputs)
+    # self.state, outputs = jax.lax.scan(scan_body, self.state, scan_inputs)
     return self.process_outputs(outputs)
 
   #############################################################################

@@ -68,6 +68,55 @@ def scale_by_belief(b1: float=0.9,
 
 ################################################################################################################
 
+class AddNoiseState(OptState):
+  """State for adding gradient noise. Contains a count for annealing."""
+  count: jnp.ndarray
+  rng_key: jnp.ndarray
+
+def add_noise(eta: float, gamma: float, seed: int) -> GradientTransformation:
+  """Add gradient noise.  This is implemented pretty poorly in Optax.  Don't want to split
+  the key a bunch of times every gradient step
+  References:
+    [Neelakantan et al, 2014](https://arxiv.org/abs/1511.06807)
+  Args:
+    eta: base variance of the gaussian noise added to the gradient.
+    gamma: decay exponent for annealing of the variance.
+    seed: seed for random number generation.
+  Returns:
+    An (init_fn, update_fn) tuple.
+  """
+
+  def init_fn(_):
+    return AddNoiseState(
+        count=jnp.zeros([], jnp.int32), rng_key=jax.random.PRNGKey(seed))
+
+  def update_fn(updates, state, params=None):  # pylint: disable=missing-docstring
+    del params
+    # num_vars = len(jax.tree_leaves(updates))
+    # treedef = jax.tree_structure(updates)
+    count_inc = _safe_int32_increment(state.count)
+    var = eta / count_inc**gamma
+    # all_keys = jax.random.split(state.rng_key, num=num_vars + 1)
+
+    flat_updates, unflatten_updates = jax.flatten_util.ravel_pytree(updates)
+    noise = random.normal(state.rng_key, flat_updates.shape)
+    updates = unflatten_updates(flat_updates + var*noise)
+
+    _, key = random.split(state.rng_key, 2)
+    return updates, AddNoiseState(count=count_inc, rng_key=key)
+
+    # noise = jax.tree_multimap(
+    #     lambda g, k: jax.random.normal(k, shape=g.shape, dtype=g.dtype),
+    #     updates, jax.tree_unflatten(treedef, all_keys[1:]))
+    # updates = jax.tree_multimap(
+    #     lambda g, n: g + variance.astype(g.dtype) * n,
+    #     updates, noise)
+    # return updates, AddNoiseState(count=count_inc, rng_key=all_keys[0])
+
+  return GradientTransformation(init_fn, update_fn)
+
+################################################################################################################
+
 def linear_lr(i, lr=1e-4):
   return lr
 

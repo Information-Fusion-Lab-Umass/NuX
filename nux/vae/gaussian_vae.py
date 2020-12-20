@@ -48,7 +48,6 @@ class ParametrizedGaussian(Layer):
     network_in = inputs["x"]
     network_out = self.auto_batch(network, expected_depth=1, in_axes=(0, None))(network_in, rng)
     mu, log_diag_cov = jnp.split(network_out, 2, axis=-1)
-    log_diag_cov = 1.5*jnp.tanh(log_diag_cov)
 
     x = mu
     if no_noise == False:

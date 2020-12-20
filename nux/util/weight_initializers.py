@@ -17,12 +17,17 @@ def weight_with_spectral_norm(x: jnp.ndarray,
                               is_training: bool=True,
                               update_params: bool=True,
                               use_bias: bool=True,
+                              force_in_dim: Optional=None,
+                              max_singular_value: float=0.99,
+                              max_power_iters: int=5,
                               **kwargs):
   in_dim, dtype = x.shape[-1], x.dtype
+  if force_in_dim:
+    in_dim = force_in_dim
 
   def w_init_whiten(shape, dtype):
     w = w_init(shape, dtype)
-    return util.whiten(w)*0.9
+    return util.whiten(w)*max_singular_value
 
   w = hk.get_parameter(f"w_{name_suffix}", (out_dim, in_dim), dtype, init=w_init_whiten)
   if use_bias:
@@ -30,7 +35,7 @@ def weight_with_spectral_norm(x: jnp.ndarray,
 
   u = hk.get_state(f"u_{name_suffix}", (out_dim,), dtype, init=hk.initializers.RandomNormal())
   v = hk.get_state(f"v_{name_suffix}", (in_dim,), dtype, init=hk.initializers.RandomNormal())
-  w, u, v = sn.spectral_norm_apply(w, u, v, 0.99, 5, update_params)
+  w, u, v = sn.spectral_norm_apply(w, u, v, max_singular_value, max_power_iters, update_params)
   if is_training == True:
     hk.set_state(f"u_{name_suffix}", u)
     hk.set_state(f"v_{name_suffix}", v)
@@ -47,6 +52,9 @@ def conv_weight_with_spectral_norm(x: jnp.ndarray,
                                    b_init: Callable=None,
                                    use_bias: bool=True,
                                    is_training: bool=True,
+                                   update_params: bool=True,
+                                   max_singular_value: float=0.99,
+                                   max_power_iters: int=5,
                                    **conv_kwargs):
   batch_size, H, W, C = x.shape
   w_shape = kernel_shape + (C, out_channel)
@@ -60,9 +68,18 @@ def conv_weight_with_spectral_norm(x: jnp.ndarray,
     b = hk.get_parameter(f"b_{name_suffix}", (out_channel,), init=b_init)
 
   u = hk.get_state(f"u_{name_suffix}", kernel_shape + (out_channel,), init=hk.initializers.RandomNormal())
-  w, u = sn.spectral_norm_conv_apply(w, u, conv_kwargs["stride"], conv_kwargs["padding"], 0.9, 1)
+  v = hk.get_state(f"v_{name_suffix}", kernel_shape + (C,), init=hk.initializers.RandomNormal())
+  w, u, v = sn.spectral_norm_conv_apply(w,
+                                        u,
+                                        v,
+                                        conv_kwargs["stride"],
+                                        conv_kwargs["padding"],
+                                        max_singular_value,
+                                        max_power_iters,
+                                        update_params)
   if is_training == True:
     hk.set_state(f"u_{name_suffix}", u)
+    hk.set_state(f"v_{name_suffix}", v)
 
   if use_bias:
     b = hk.get_parameter(f"b_{name_suffix}", (out_channel,), x.dtype, init=b_init)

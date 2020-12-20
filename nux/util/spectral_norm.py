@@ -14,10 +14,10 @@ __all__ = ["spectral_norm_apply",
 
 def check_spectral_norm(pytree):
   """ Check the spectral norm of the leaves of pytree """
-  def spectral_norm_apply(val):
+  def get_sn(val):
     return jnp.linalg.norm(val, ord=2) if val.ndim == 2 else 0
 
-  return jax.tree_util.tree_map(spectral_norm_apply, pytree)
+  return jax.tree_util.tree_map(get_sn, pytree)
 
 ################################################################################################################
 
@@ -47,11 +47,17 @@ def spectral_norm_apply(W: jnp.ndarray,
   if update_params:
 
     # Perform the spectral norm iterations
-    fp = jax.jit(util.fixed_point, static_argnums=(0,))
-    (u, v) = fp(spectral_norm_iter, W, (u, v), n_iters)
+    # For some reason using a for loop is way faster and uses way less memory
+    # than using the lax loops in fixed_point.py
+    for i in range(n_iters):
+      uv = spectral_norm_iter(W, (u, v))
+      u, v = uv
 
-    # Other implementations stop the gradient, but we can get the gradient
-    # wrt W efficiently by backprop-ing through the fixed point iters.
+      # Relaxation method
+      # https://hal-cea.archives-ouvertes.fr/cea-01403292/file/residual-method.pdf Eq.(8)
+      u = 0.5*uv[0] + 0.5*u
+      v = 0.5*uv[1] + 0.5*v
+
     u = jax.lax.stop_gradient(u)
     v = jax.lax.stop_gradient(v)
 
@@ -78,24 +84,28 @@ def spectral_norm_conv_iter(W, uv, stride, padding):
 
   return (u, v)
 
-@partial(jit, static_argnums=(2, 3, 5))
+# @partial(jit, static_argnums=(3, 4, 6, 7))
 def spectral_norm_conv_apply(W: jnp.ndarray,
                              u: jnp.ndarray,
+                             v: jnp.ndarray,
                              stride: Sequence[int],
                              padding: Union[str, Sequence[Tuple[int, int]]],
                              scale: float,
-                             n_iters: int):
+                             n_iters: int,
+                             update_params: bool):
   """ Perform n_iters single spectral norm iterations """
   height, width, C_in, C_out = W.shape
-  assert u.shape == (height, width, C_out)
 
-  # v is set inside the loop, so just pass in a dummy value.
-  v = jnp.zeros((height, width, C_in))
+  if update_params:
+    # Perform the spectral norm iterations
+    body = partial(spectral_norm_conv_iter, stride=stride, padding=padding)
+    fp = jax.jit(util.fixed_point, static_argnums=(0,))
+    (u, v) = fp(body, W, (u, v), n_iters)
 
-  # Perform the spectral norm iterations
-  body = partial(spectral_norm_conv_iter, stride=stride, padding=padding)
-  fp = jax.jit(util.fixed_point, static_argnums=(0,))
-  (u, v) = fp(body, W, (u, v), n_iters)
+    # Other implementations stop the gradient, but we can get the gradient
+    # wrt W efficiently by backprop-ing through the fixed point iters.
+    u = jax.lax.stop_gradient(u)
+    v = jax.lax.stop_gradient(v)
 
   # Estimate the largest singular value of W
   Wv = jax.lax.conv_general_dilated(v[None], W, window_strides=stride, padding=padding, dimension_numbers=("NHWC", "HWIO", "NHWC"))[0]
@@ -104,4 +114,4 @@ def spectral_norm_conv_apply(W: jnp.ndarray,
   # Scale coefficient to account for the fact that sigma can be an under-estimate.
   factor = jnp.where(scale < sigma, scale/sigma, 1.0)
 
-  return W*factor, u
+  return W*factor, u, v

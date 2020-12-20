@@ -90,14 +90,14 @@ class _MixtureCDFMixin(ABC):
     """ We want to initialize this to be close to the identity funtion
         but also want the means to be spread out initially
     """
-    # wl_scale = hk.get_parameter("weight_logits_scale", shape=(), dtype=x.dtype, init=jnp.zeros)
-    # ls_scale = hk.get_parameter("log_scales_scale", shape=(), dtype=x.dtype, init=jnp.zeros)
+    wl_scale = hk.get_parameter("weight_logits_scale", shape=(), dtype=x.dtype, init=jnp.zeros)
+    ls_scale = hk.get_parameter("log_scales_scale", shape=(), dtype=x.dtype, init=jnp.zeros)
 
-    # weight_logits *= wl_scale
-    # log_scales *= ls_scale
+    weight_logits *= wl_scale
+    log_scales *= ls_scale
 
     if self.with_affine_coupling:
-      batch_dim = x.ndim - len(self.unbatched_input_shapes["x"])
+      batch_dim = x.ndim - len(self.batch_shape)
       name_prefix = "transform_" if conditioned_params else ""
 
       # Initialize log_s to divide off the stddev

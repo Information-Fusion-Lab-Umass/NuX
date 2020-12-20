@@ -63,3 +63,12 @@ def constrain_log_scale(log_x):
   return jnp.logaddexp(jax.nn.log_sigmoid(log_x), -7)
 
 ################################################################################################################
+
+def get_plot_bounds(data):
+  (xmin, ymin), (xmax, ymax) = data.min(axis=0), data.max(axis=0)
+  xspread, yspread = xmax - xmin, ymax - ymin
+  xmin -= 0.1*xspread
+  xmax += 0.1*xspread
+  ymin -= 0.1*yspread
+  ymax += 0.1*yspread
+  return (xmin, xmax), (ymin, ymax)

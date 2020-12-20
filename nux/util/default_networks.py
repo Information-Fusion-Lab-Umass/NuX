@@ -25,6 +25,8 @@ def get_default_network(out_shape, network_kwargs=None, resnet=True, lipschitz=F
       if lipschitz:
         network_kwargs["parameter_norm"] = "spectral_norm"
         network_kwargs["nonlinearity"] = "lipswish"
+        network_kwargs["max_singular_value"] = 0.9
+        network_kwargs["max_power_iters"] = 5
 
     network_kwargs["out_dim"] = out_dim
 
@@ -44,6 +46,8 @@ def get_default_network(out_shape, network_kwargs=None, resnet=True, lipschitz=F
       if lipschitz:
         network_kwargs["parameter_norm"] = "spectral_norm"
         network_kwargs["normalization"] = None
+        network_kwargs["max_singular_value"] = 0.9
+        network_kwargs["max_power_iters"] = 5
 
     network_kwargs["out_channel"] = out_dim
 

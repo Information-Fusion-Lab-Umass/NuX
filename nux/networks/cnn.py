@@ -5,7 +5,6 @@ import jax
 import haiku as hk
 import nux.util as util
 from typing import Optional, Mapping, Callable, Sequence, Any
-# import nux.weight_initializers
 import nux.util.weight_initializers as init
 import warnings
 
@@ -25,6 +24,7 @@ def data_dependent_param_init(x: jnp.ndarray,
                               parameter_norm: str=None,
                               use_bias: bool=True,
                               is_training: bool=True,
+                              update_params: bool=True,
                               **conv_kwargs):
   batch_size, H, W, C = x.shape
   w_shape = kernel_shape + (C, out_channel)
@@ -38,6 +38,7 @@ def data_dependent_param_init(x: jnp.ndarray,
                                                b_init=b_init,
                                                use_bias=use_bias,
                                                is_training=is_training,
+                                               update_params=update_params,
                                                **conv_kwargs)
 
   elif parameter_norm == "weight_norm":
@@ -313,6 +314,7 @@ class CNN(hk.Module):
                block_type: str="reverse_bottleneck",
                zero_init: bool=False,
                dropout_rate: Optional[float]=0.2,
+               use_bias: bool=True,
                name=None):
     super().__init__(name=name)
 
@@ -320,13 +322,15 @@ class CNN(hk.Module):
                                   parameter_norm=parameter_norm,
                                   normalization=normalization,
                                   nonlinearity=nonlinearity,
-                                  dropout_rate=dropout_rate)
+                                  dropout_rate=dropout_rate,
+                                  use_bias=use_bias)
 
     self.hidden_channel = hidden_channel
     self.n_blocks       = n_blocks
     self.out_channel    = out_channel
     self.squeeze_excite = squeeze_excite
     self.zero_init      = zero_init
+    self.use_bias       = use_bias
 
     if working_channel is None:
       self.working_channel = hidden_channel
@@ -339,11 +343,11 @@ class CNN(hk.Module):
       assert 0, "Invalid block type"
 
   def __call__(self, x, rng, is_training=True, **kwargs):
-    rngs = random.split(rng, len(self.n_blocks))
+    rngs = random.split(rng, 3*self.n_blocks).reshape((self.n_blocks, 3, -1))
 
-    for i, rng in enumerate(rngs):
+    for i, rng_for_convs in enumerate(rngs):
       x = self.conv_block(out_channel=self.hidden_channel,
-                          **self.conv_block_kwargs)(x, rng, is_training=is_training)
+                          **self.conv_block_kwargs)(x, rng_for_convs, is_training=is_training)
 
       if self.squeeze_excite:
         x = nux.SqueezeExcitation(reduce_ratio=4)(x)
@@ -354,7 +358,7 @@ class CNN(hk.Module):
                 stride=(1, 1),
                 padding="SAME",
                 parameter_norm=self.conv_block_kwargs["parameter_norm"],
-                use_bias=False,
+                use_bias=self.use_bias,
                 zero_init=self.zero_init)
     x = conv(x, is_training=is_training)
 

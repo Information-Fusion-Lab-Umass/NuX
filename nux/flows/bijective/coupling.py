@@ -94,7 +94,8 @@ class Coupling(CouplingBase):
     # computing the log determinant and also mask the output
     if mask is not None:
       z *= mask
-      log_s *= mask
+      if self.kind == "affine":
+        log_s *= mask
 
     # Compute the log determinant
     if self.kind == "affine":
