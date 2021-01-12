@@ -20,6 +20,7 @@ from haiku._src.transform import TransformedWithState, \
 
 __all__ = ["Layer",
            "transform_flow",
+           "transform_flow_from_fun",
            "Flow"]
 
 ################################################################################################################
@@ -46,7 +47,10 @@ class Layer(hk.Module, ABC):
 
   batch_axes = ()
 
-  def __init__(self, name=None, invertible_ad=False, use_flow_norm_init=False):
+  def __init__(self,
+               name=None,
+               invertible_ad=False,
+               use_flow_norm_init=False):
     """ This base class will keep track of the input and output shapes of each function call
         so that we can know the batch size of inputs and automatically use vmap to make unbatched
         code work with batched code.
@@ -103,6 +107,8 @@ class Layer(hk.Module, ABC):
 
     if self.use_flow_norm_init:
       self.flow_norm_init(inputs, rng, sample, **kwargs)
+
+    # print(self, outputs["x"].mean(), outputs["x"].std())
 
     return outputs
 
@@ -231,6 +237,58 @@ class Layer(hk.Module, ABC):
 
 ################################################################################################################
 
+def transform_flow_from_fun(fun) -> TransformedWithState:
+
+  # We will keep the expected shapes for the flow here so that
+  # JAX will compile these constants
+  constants = None
+
+  def init_fn(rng: Optional[Union[PRNGKey]],
+              inputs: Mapping[str, jnp.ndarray],
+              batch_axes=(),
+              return_initial_output=False,
+              **kwargs
+  ) -> Tuple[Params, State]:
+    """ Initializes your function collecting parameters and state. """
+    rng = to_prng_sequence(rng, err_msg=INIT_RNG_ERROR)
+    with new_custom_context(rng=rng) as ctx:
+      # Load the batch axes for the inputs
+      Layer.batch_axes = batch_axes
+
+      key = hk.next_rng_key()
+
+      # Initialize the model
+      outputs = fun(inputs, key, **kwargs)
+
+      # Unset the batch axes
+      Layer.batch_axes = ()
+
+    nonlocal constants
+    params, state, constants = ctx.collect_params(), ctx.collect_initial_state(), ctx.collect_constants()
+
+    if return_initial_output:
+      return params, state, outputs
+
+    return params, state
+
+  def apply_fn(params: Optional[Params],
+               state: Optional[State],
+               rng: Optional[Union[PRNGKey]],
+               inputs,
+               **kwargs
+  ) -> Tuple[Any, State]:
+    """ Applies your function injecting parameters and state. """
+    params = check_mapping("params", params)
+    state = check_mapping("state", state)
+
+    rng = to_prng_sequence(rng, err_msg=(APPLY_RNG_STATE_ERROR if state else APPLY_RNG_ERROR))
+    with new_custom_context(params=params, state=state, constants=constants, rng=rng) as ctx:
+      key = hk.next_rng_key()
+      out = fun(inputs, key, **kwargs)
+    return out, ctx.collect_state()
+
+  return TransformedWithState(init_fn, apply_fn)
+
 def transform_flow(create_fun) -> TransformedWithState:
 
   # We will keep the expected shapes for the flow here so that
@@ -304,6 +362,7 @@ class Flow():
                key: PRNGKey,
                inputs: Mapping[str,jnp.ndarray],
                batch_axes: Sequence[int],
+               check_for_bad_init: Optional[bool]=True,
                **kwargs):
 
     self._flow = transform_flow(create_fun)
@@ -311,15 +370,28 @@ class Flow():
                                                        inputs,
                                                        batch_axes=batch_axes,
                                                        return_initial_output=True)
+
+    if check_for_bad_init:
+      self.check_init(outputs)
+
+    self.n_params = jax.flatten_util.ravel_pytree(self.params)[0].size
+
     self.data_shape   = inputs["x"].shape[len(batch_axes):]
     self.latent_shape = outputs["x"].shape[len(batch_axes):]
-    self.scan_apply_loop = jit(partial(jax.lax.scan, self.scan_body))
+    self.scan_apply_loop = jit(partial(jax.lax.scan, partial(self.scan_body, is_training=True)))
+    self.scan_apply_test_loop = jit(partial(jax.lax.scan, partial(self.scan_body, is_training=False)))
 
   def to_bits_per_dim(self, log_likelihood):
     return log_likelihood/util.list_prod(self.data_shape)/jnp.log(2)
 
   def get_batch_shape(self, inputs):
-    return inputs["x"].shape[-len(self.data_shape):]
+    return inputs["x"].shape[:-len(self.data_shape)]
+
+  #############################################################################
+
+  def check_init(self, outputs):
+    pass
+    # import pdb; pdb.set_trace()
 
   #############################################################################
 
@@ -350,42 +422,40 @@ class Flow():
   def stateful_apply(self,
                      key: PRNGKey,
                      inputs: Mapping[str, jnp.ndarray],
+                     params: Params,
                      state: State,
                      **kwargs
   ) -> Mapping[str, jnp.ndarray]:
-    outputs, state = self._flow.apply(self.params, state, key, inputs, **kwargs)
+    outputs, state = self._flow.apply(params, state, key, inputs, **kwargs)
     return self.process_outputs(outputs), state
 
   #############################################################################
 
-  def scan_body(self, carry, scan_inputs):
+  def scan_body(self, carry, scan_inputs, **kwargs):
     key, _inputs = scan_inputs
-    state = carry
-    outputs, state = self.stateful_apply(key, _inputs, state, **kwargs)
-    return state, outputs
+    params, state = carry
+    outputs, state = self.stateful_apply(key, _inputs, params, state, **kwargs)
+    return (params, state), outputs
 
   def scan_apply(self,
                  key: PRNGKey,
                  inputs: Mapping[str, jnp.ndarray],
-                 **kwargs
+                 is_training: bool=True
   ) -> Mapping[str, jnp.ndarray]:
     """ Applies a lax.scan loop to the first batch axis
     """
     if len(inputs["x"].shape) == len(self.data_shape):
       assert 0, "Expect a batched or doubly-batched input"
 
-    # def scan_body(carry, scan_inputs):
-    #   key, _inputs = scan_inputs
-    #   state = carry
-    #   outputs, state = self.stateful_apply(key, _inputs, state, **kwargs)
-    #   return state, outputs
-
     # Get the inputs for the scan loop
     n_iters = inputs["x"].shape[0]
     keys = random.split(key, n_iters)
     scan_inputs = (keys, inputs)
-    self.state, outputs = self.scan_apply_loop(self.state, scan_inputs)
-    # self.state, outputs = jax.lax.scan(scan_body, self.state, scan_inputs)
+    scan_carry = (self.params, self.state)
+    if is_training:
+      (_, self.state), outputs = self.scan_apply_loop(scan_carry, scan_inputs)
+    else:
+      (_, self.state), outputs = self.scan_apply_test_loop(scan_carry, scan_inputs)
     return self.process_outputs(outputs)
 
   #############################################################################
@@ -394,14 +464,15 @@ class Flow():
              key: PRNGKey,
              n_samples: int,
              n_batches: Optional[int]=None,
+             labels: Optional=None,
              **kwargs
   ) -> Mapping[str, jnp.ndarray]:
     if n_batches is None:
       dummy_z = jnp.zeros((n_samples,) + self.latent_shape)
-      outputs = self.apply(key, {"x": dummy_z}, sample=True, **kwargs)
+      outputs = self.apply(key, {"x": dummy_z}, sample=True, is_training=False, **kwargs)
     else:
       dummy_z = jnp.zeros((n_batches, n_samples) + self.latent_shape)
-      outputs = self.scan_apply(key, {"x": dummy_z}, sample=True, **kwargs)
+      outputs = self.scan_apply_test_loop(key, {"x": dummy_z}, sample=True, **kwargs)
     return self.process_outputs(outputs)
 
   def reconstruct(self,

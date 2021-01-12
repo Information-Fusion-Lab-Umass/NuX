@@ -16,6 +16,7 @@ class ActNorm(Layer):
 
   def __init__(self,
                axis=-1,
+               safe_diag: bool=False,
                name: str="act_norm"
   ):
     """ Act norm.  Used in GLOW https://arxiv.org/pdf/1807.03039.pdf
@@ -28,6 +29,8 @@ class ActNorm(Layer):
     self.axes = (axis,) if isinstance(axis, int) else axis
     for ax in self.axes:
       assert ax < 0, "For convenience, pass in negative indexed axes"
+
+    self.safe_diag = safe_diag
 
   def call(self,
            inputs: Mapping[str, jnp.ndarray],
@@ -57,12 +60,16 @@ class ActNorm(Layer):
     b     = hk.get_parameter("b", shape=param_shape, dtype=x.dtype, init=b_init)
     log_s = hk.get_parameter("log_s", shape=param_shape, dtype=x.dtype, init=log_s_init)
 
+    if self.safe_diag:
+      s = util.proximal_relu(log_s) + 1e-5
+      log_s = jnp.log(s)
+
     if sample == False:
       outputs["x"] = (x - b)*jnp.exp(-log_s)
     else:
       outputs["x"] = jnp.exp(log_s)*x + b
 
-    log_det = -log_s*jnp.ones(x_shape)
+    log_det = jnp.broadcast_to(-log_s, x_shape)
     outputs["log_det"] = log_det.sum()
 
     return outputs
