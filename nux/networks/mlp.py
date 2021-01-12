@@ -5,6 +5,7 @@ import jax
 import haiku as hk
 from typing import Optional, Mapping, Callable, Sequence, Any
 import nux.util.weight_initializers as init
+import nux.util as util
 
 __all__ = ["MLP"]
 
@@ -62,10 +63,13 @@ class MLP(hk.Module):
                nonlinearity: str="relu",
                dropout_rate: Optional[float]=None,
                parameter_norm: str=None,
+               normalization: str=None,
                w_init: Callable=None,
                b_init: Callable=None,
                zero_init: bool=False,
                skip_connection: bool=False,
+               max_singular_value: float=0.99,
+               max_power_iters: int=5,
                name: str=None):
     super().__init__(name=name)
     self.out_dim         = out_dim
@@ -74,6 +78,9 @@ class MLP(hk.Module):
     self.zero_init       = zero_init
     self.dropout_rate    = dropout_rate
     self.skip_connection = skip_connection
+
+    self.max_singular_value = max_singular_value
+    self.max_power_iters = max_power_iters
 
     if nonlinearity == "relu":
       self.nonlinearity = jax.nn.relu
@@ -88,6 +95,27 @@ class MLP(hk.Module):
     else:
       assert 0, "Invalid nonlinearity"
 
+    if normalization == "batch_norm":
+      self.norm = lambda name: hk.BatchNorm(name=name, create_scale=True, create_offset=True, decay_rate=0.9, data_format="channels_last")
+
+    elif normalization == "instance_norm":
+      def norm(name):
+        instance_norm = hk.InstanceNorm(name=name, create_scale=True, create_offset=True)
+        def norm_apply(x, **kwargs): # So that this code works with the is_training kwarg
+          return instance_norm(x)
+        return norm_apply
+      self.norm = norm
+
+    elif normalization == "layer_norm":
+      def norm(name):
+        instance_norm = hk.LayerNorm(axis=-1, name=name, create_scale=True, create_offset=True)
+        def norm_apply(x, **kwargs): # So that this code works with the is_training kwarg
+          return instance_norm(x)
+        return norm_apply
+      self.norm = norm
+
+    else:
+      self.norm = None
     self.w_init = hk.initializers.VarianceScaling(1.0, "fan_avg", "truncated_normal") if w_init is None else w_init
     self.b_init = jnp.zeros if b_init is None else b_init
 
@@ -106,6 +134,8 @@ class MLP(hk.Module):
                                          b_init=jnp.zeros,
                                          is_training=is_training,
                                          update_params=update_params,
+                                         max_singular_value=self.max_singular_value,
+                                         max_power_iters=self.max_power_iters,
                                          parameter_norm=None)
       else:
         w, b = data_dependent_param_init(x,
@@ -115,8 +145,13 @@ class MLP(hk.Module):
                                          b_init=self.b_init,
                                          is_training=is_training,
                                          update_params=update_params,
+                                         max_singular_value=self.max_singular_value,
+                                         max_power_iters=self.max_power_iters,
                                          parameter_norm=self.parameter_norm)
       z = jnp.dot(x, w.T) + b
+
+      if self.norm is not None:
+        x = self.norm(f"norm_{i}")(x, is_training=is_training)
 
       if i < len(self.layer_sizes) - 1:
         z = self.nonlinearity(z)

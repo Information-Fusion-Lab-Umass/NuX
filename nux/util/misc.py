@@ -64,6 +64,16 @@ def constrain_log_scale(log_x):
 
 ################################################################################################################
 
+def proximal_relu(x, gamma=0.5):
+  # https://arxiv.org/pdf/1901.08431.pdf
+  return 0.5*(x + jnp.sqrt(x**2 + 4*gamma))
+
+def proximal_sigmoid(x, gamma=0.5):
+  # Derivative of proximal relu.  Basically sigmoid without saturated gradients.
+  return 0.5*(1 + x*jax.lax.rsqrt(x**2 + 4*gamma))
+
+################################################################################################################
+
 def get_plot_bounds(data):
   (xmin, ymin), (xmax, ymax) = data.min(axis=0), data.max(axis=0)
   xspread, yspread = xmax - xmin, ymax - ymin
@@ -72,3 +82,14 @@ def get_plot_bounds(data):
   ymin -= 0.1*yspread
   ymax += 0.1*yspread
   return (xmin, xmax), (ymin, ymax)
+
+################################################################################################################
+
+# There is a bug in logsumexp!
+def lse(a, axis=None, b=None, keepdims=False, return_sign=False):
+  if b is not None:
+    a, b = jnp.broadcast_arrays(a, b)
+    a = a + jnp.where(b, jnp.log(jnp.abs(b)), -jnp.inf)
+    b = jnp.sign(b)
+
+  return jax.scipy.special.logsumexp(a, axis=axis, b=b, keepdims=keepdims, return_sign=return_sign)

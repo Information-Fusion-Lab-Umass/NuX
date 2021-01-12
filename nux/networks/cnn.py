@@ -157,6 +157,7 @@ class RepeatedConv(hk.Module):
                nonlinearity: str="relu",
                dropout_rate: Optional[float]=None,
                gate: bool=True,
+               activate_last: bool=False,
                name=None):
     super().__init__(name=name)
 
@@ -165,6 +166,7 @@ class RepeatedConv(hk.Module):
     self.kernel_shapes = kernel_shapes
     self.dropout_rate  = dropout_rate
     self.gate          = gate
+    self.activate_last = activate_last
 
     self.conv_kwargs = dict(parameter_norm=parameter_norm,
                             stride=stride,
@@ -235,7 +237,7 @@ class RepeatedConv(hk.Module):
       if self.norm is not None:
         x = self.norm(f"norm_{i}")(x, is_training=is_training)
 
-      if i < len(self.channel_sizes) - 1:
+      if self.activate_last or i < len(self.channel_sizes) - 1:
         x = self.nonlinearity(x)
 
         if self.dropout_rate is not None:
@@ -257,6 +259,7 @@ class BottleneckConv(RepeatedConv):
                dropout_rate: Optional[float]=None,
                gate: bool=True,
                use_bias: bool=False,
+               activate_last: bool=False,
                name=None):
 
     channel_sizes = [hidden_channel, hidden_channel, out_channel]
@@ -270,6 +273,7 @@ class BottleneckConv(RepeatedConv):
                      use_bias=use_bias,
                      dropout_rate=dropout_rate,
                      gate=gate,
+                     activate_last=activate_last,
                      name=name)
 
 class ReverseBottleneckConv(RepeatedConv):
@@ -283,6 +287,7 @@ class ReverseBottleneckConv(RepeatedConv):
                dropout_rate: Optional[float]=None,
                gate: bool=True,
                use_bias: bool=False,
+               activate_last: bool=False,
                name=None):
 
     channel_sizes = [hidden_channel, hidden_channel, out_channel]
@@ -296,6 +301,7 @@ class ReverseBottleneckConv(RepeatedConv):
                      use_bias=use_bias,
                      dropout_rate=dropout_rate,
                      gate=gate,
+                     activate_last=activate_last,
                      name=name)
 
 ################################################################################################################
@@ -315,6 +321,8 @@ class CNN(hk.Module):
                zero_init: bool=False,
                dropout_rate: Optional[float]=0.2,
                use_bias: bool=True,
+               gate: bool=False,
+               gate_final: bool=True,
                name=None):
     super().__init__(name=name)
 
@@ -323,7 +331,14 @@ class CNN(hk.Module):
                                   normalization=normalization,
                                   nonlinearity=nonlinearity,
                                   dropout_rate=dropout_rate,
-                                  use_bias=use_bias)
+                                  use_bias=use_bias,
+                                  gate=gate,
+                                  activate_last=True)
+    self.hidden_channel = hidden_channel
+    self.parameter_norm = parameter_norm
+    self.normalization  = normalization
+    self.nonlinearity   = nonlinearity
+    self.dropout_rate   = dropout_rate
 
     self.hidden_channel = hidden_channel
     self.n_blocks       = n_blocks
@@ -331,9 +346,10 @@ class CNN(hk.Module):
     self.squeeze_excite = squeeze_excite
     self.zero_init      = zero_init
     self.use_bias       = use_bias
+    self.gate           = gate
+    self.gate_final     = gate_final
 
-    if working_channel is None:
-      self.working_channel = hidden_channel
+    self.working_channel = working_channel if working_channel is not None else hidden_channel
 
     if block_type == "bottleneck":
       self.conv_block = BottleneckConv
@@ -346,20 +362,32 @@ class CNN(hk.Module):
     rngs = random.split(rng, 3*self.n_blocks).reshape((self.n_blocks, 3, -1))
 
     for i, rng_for_convs in enumerate(rngs):
-      x = self.conv_block(out_channel=self.hidden_channel,
+      x = self.conv_block(out_channel=self.working_channel,
                           **self.conv_block_kwargs)(x, rng_for_convs, is_training=is_training)
 
       if self.squeeze_excite:
         x = nux.SqueezeExcitation(reduce_ratio=4)(x)
 
     # Add an extra convolution to change the out channels
-    conv = Conv(self.out_channel,
-                kernel_shape=(1, 1),
-                stride=(1, 1),
-                padding="SAME",
-                parameter_norm=self.conv_block_kwargs["parameter_norm"],
-                use_bias=self.use_bias,
-                zero_init=self.zero_init)
-    x = conv(x, is_training=is_training)
+    if self.gate_final:
+      conv = Conv(2*self.out_channel,
+                  kernel_shape=(1, 1),
+                  stride=(1, 1),
+                  padding="SAME",
+                  parameter_norm=self.parameter_norm,
+                  use_bias=self.use_bias,
+                  zero_init=self.zero_init)
+      ab = conv(x, is_training=is_training)
+      a, b = jnp.split(ab, 2, axis=-1)
+      x = a*jax.nn.sigmoid(b)
+    else:
+      conv = Conv(self.out_channel,
+                  kernel_shape=(1, 1),
+                  stride=(1, 1),
+                  padding="SAME",
+                  parameter_norm=self.parameter_norm,
+                  use_bias=self.use_bias,
+                  zero_init=self.zero_init)
+      x = conv(x, is_training=is_training)
 
     return x

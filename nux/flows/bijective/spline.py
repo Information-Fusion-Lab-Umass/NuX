@@ -10,7 +10,8 @@ import nux.util as util
 from nux.flows.bijective.coupling_base import CouplingBase
 import nux.networks as net
 
-__all__ = ["NeuralSpline"]
+__all__ = ["RQSpline",
+           "NeuralSpline"]
 
 def get_knot_params(theta: jnp.ndarray,
                     K: int,
@@ -26,7 +27,8 @@ def get_knot_params(theta: jnp.ndarray,
   tw, th = jax.nn.softmax(tw), jax.nn.softmax(th)
   tw = min_width + (1.0 - min_width*K)*tw
   th = min_height + (1.0 - min_height*K)*th
-  td = min_derivative + jax.nn.softplus(td)
+  td = min_derivative + util.proximal_relu(td)
+  # td = min_derivative + jax.nn.softplus(td)
   knot_x, knot_y = jnp.cumsum(tw, axis=-1), jnp.cumsum(th, axis=-1)
 
   # Pad the knots so that the first element is 0
@@ -130,20 +132,69 @@ def spline(theta: jnp.ndarray,
 
 ################################################################################################################
 
+class RQSpline(Layer):
+
+  def __init__(self,
+               K: int=4,
+               bounds: Sequence[float]=((-10.0, 10.0), (-10.0, 10.0)),
+               axis: Optional[int]=-1,
+               name: str="rq_spline",
+               **kwargs
+  ):
+    """ Neural spline flow https://arxiv.org/pdf/1906.04032.pdf
+    Args:
+      K                : Number of bins to use
+      bounds           : The interval to apply the spline to
+      name             : Optional name for this module.
+    """
+    super().__init__(name=name)
+    self.K              = K
+    self.bounds         = bounds
+    self.forward_spline = partial(spline, K=K, sample=False, bounds=bounds)
+    self.inverse_spline = partial(spline, K=K, sample=True, bounds=bounds)
+
+  def call(self,
+           inputs: Mapping[str, jnp.ndarray],
+           rng: jnp.ndarray=None,
+           sample: Optional[bool]=False,
+           **kwargs
+  ) -> Mapping[str, jnp.ndarray]:
+    x = inputs["x"]
+    x_flat = x.reshape(self.batch_shape + (-1,))
+    param_dim = (3*self.K - 1)
+
+    x_shape = x_flat.shape[len(self.batch_shape):]
+    theta = hk.get_parameter("theta", shape=(x_flat.shape[-1],) + (param_dim,), dtype=x_flat.dtype, init=hk.initializers.RandomNormal())
+    in_axes = (None, 0)
+
+    if sample == False:
+      z, ew_log_det = self.auto_batch(self.forward_spline, in_axes=in_axes)(theta, x_flat)
+    else:
+      z, ew_log_det = self.auto_batch(self.inverse_spline, in_axes=in_axes)(theta, x_flat)
+
+    z = z.reshape(x.shape)
+    ew_log_det = ew_log_det.reshape(x.shape)
+
+    sum_axes = util.last_axes(x.shape[len(self.batch_shape):])
+    log_det = ew_log_det.sum(axis=sum_axes)
+
+    return {"x": z, "log_det": log_det}
+
+################################################################################################################
+
 class NeuralSpline(CouplingBase):
 
   def __init__(self,
                K: int=4,
-               bounds: Sequence[float]=((-4.0, 4.0), (-4.0, 4.0)),
+               bounds: Sequence[float]=((-10.0, 10.0), (-10.0, 10.0)),
                create_network: Optional[Callable]=None,
-               kind: Optional[str]="affine",
                axis: Optional[int]=-1,
                split_kind: str="channel",
                masked: bool=False,
                use_condition: bool=False,
                apply_to_both_halves: Optional[bool]=True,
                network_kwargs: Optional[Mapping]=None,
-               name: str="rq_spline",
+               name: str="rq_neural_spline",
                **kwargs
   ):
     """ Neural spline flow https://arxiv.org/pdf/1906.04032.pdf
@@ -166,7 +217,6 @@ class NeuralSpline(CouplingBase):
                      **kwargs)
     self.K              = K
     self.bounds         = bounds
-
     self.forward_spline = partial(spline, K=K, sample=False, bounds=bounds)
     self.inverse_spline = partial(spline, K=K, sample=True, bounds=bounds)
 
@@ -175,7 +225,7 @@ class NeuralSpline(CouplingBase):
     out_dim = x_shape[-1]*(3*self.K - 1)
     return x_shape[:-1] + (out_dim,)
 
-  def transform(self, x, params=None, sample=False, mask=None):
+  def transform(self, x, params=None, sample=False, mask=None, rng=None, **kwargs):
     x_flat = x.reshape(self.batch_shape + (-1,))
     param_dim = (3*self.K - 1)
     if params is None:

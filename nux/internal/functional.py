@@ -65,10 +65,10 @@ def make_functional_modules(modules):
 
   def wrap_module(module):
 
-    def wrapped(params, bundled_state, x, rng):
+    def wrapped(params, bundled_state, x, rng, **kwargs):
       frame_data = to_frame_data(params, bundled_state)
       with temporary_frame_data(frame_data):
-        out = module(x, rng)
+        out = module(x, rng, **kwargs)
         return out, get_bundled_state()
 
     return wrapped

@@ -6,6 +6,7 @@ import nux.util as util
 import haiku as hk
 import nux.util.spectral_norm as sn
 from typing import Optional, Mapping, Callable, Sequence, Any
+import haiku._src.base as hk_base
 
 ################################################################################################################
 
@@ -19,24 +20,35 @@ def weight_with_spectral_norm(x: jnp.ndarray,
                               use_bias: bool=True,
                               force_in_dim: Optional=None,
                               max_singular_value: float=0.99,
-                              max_power_iters: int=5,
+                              max_power_iters: int=1,
                               **kwargs):
   in_dim, dtype = x.shape[-1], x.dtype
   if force_in_dim:
     in_dim = force_in_dim
 
-  def w_init_whiten(shape, dtype):
-    w = w_init(shape, dtype)
-    return util.whiten(w)*max_singular_value
-
-  w = hk.get_parameter(f"w_{name_suffix}", (out_dim, in_dim), dtype, init=w_init_whiten)
+  w = hk.get_parameter(f"w_{name_suffix}", (out_dim, in_dim), dtype, init=w_init)
   if use_bias:
     b = hk.get_parameter(f"b_{name_suffix}", (out_dim,), dtype, init=b_init)
 
   u = hk.get_state(f"u_{name_suffix}", (out_dim,), dtype, init=hk.initializers.RandomNormal())
   v = hk.get_state(f"v_{name_suffix}", (in_dim,), dtype, init=hk.initializers.RandomNormal())
-  w, u, v = sn.spectral_norm_apply(w, u, v, max_singular_value, max_power_iters, update_params)
-  if is_training == True:
+  w, u, v = sn.spectral_norm_apply(w,
+                                   u,
+                                   v,
+                                   max_singular_value,
+                                   max_power_iters,
+                                   update_params)
+
+  running_init_fn = not hk_base.params_frozen()
+  if running_init_fn:
+      w, u, v = sn.spectral_norm_apply(w,
+                                       u,
+                                       v,
+                                       max_singular_value,
+                                       None,
+                                       True)
+
+  if is_training == True or running_init_fn:
     hk.set_state(f"u_{name_suffix}", u)
     hk.set_state(f"v_{name_suffix}", v)
 
@@ -53,17 +65,13 @@ def conv_weight_with_spectral_norm(x: jnp.ndarray,
                                    use_bias: bool=True,
                                    is_training: bool=True,
                                    update_params: bool=True,
-                                   max_singular_value: float=0.99,
-                                   max_power_iters: int=5,
+                                   max_singular_value: float=0.8,
+                                   max_power_iters: int=1,
                                    **conv_kwargs):
   batch_size, H, W, C = x.shape
   w_shape = kernel_shape + (C, out_channel)
 
-  def w_init_whiten(shape, dtype):
-    w = w_init(shape, dtype)
-    return w*0.7
-
-  w = hk.get_parameter(f"w_{name_suffix}", w_shape, x.dtype, init=w_init_whiten)
+  w = hk.get_parameter(f"w_{name_suffix}", w_shape, x.dtype, init=w_init)
   if use_bias:
     b = hk.get_parameter(f"b_{name_suffix}", (out_channel,), init=b_init)
 
@@ -77,7 +85,20 @@ def conv_weight_with_spectral_norm(x: jnp.ndarray,
                                         max_singular_value,
                                         max_power_iters,
                                         update_params)
-  if is_training == True:
+
+  # Run for a lot of steps when we're first initializing
+  running_init_fn = not hk_base.params_frozen()
+  if running_init_fn:
+    w, u, v = sn.spectral_norm_conv_apply(w,
+                                          u,
+                                          v,
+                                          conv_kwargs["stride"],
+                                          conv_kwargs["padding"],
+                                          max_singular_value,
+                                          None,
+                                          True)
+
+  if is_training == True or running_init_fn:
     hk.set_state(f"u_{name_suffix}", u)
     hk.set_state(f"v_{name_suffix}", v)
 

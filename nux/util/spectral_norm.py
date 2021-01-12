@@ -49,14 +49,17 @@ def spectral_norm_apply(W: jnp.ndarray,
     # Perform the spectral norm iterations
     # For some reason using a for loop is way faster and uses way less memory
     # than using the lax loops in fixed_point.py
-    for i in range(n_iters):
-      uv = spectral_norm_iter(W, (u, v))
-      u, v = uv
+    if n_iters is None:
+      (u, v) = util.fixed_point(spectral_norm_iter, W, (u, v), 5000)
+    else:
+      for i in range(n_iters):
+        uv = spectral_norm_iter(W, (u, v))
+        u, v = uv
 
-      # Relaxation method
-      # https://hal-cea.archives-ouvertes.fr/cea-01403292/file/residual-method.pdf Eq.(8)
-      u = 0.5*uv[0] + 0.5*u
-      v = 0.5*uv[1] + 0.5*v
+        # Relaxation method
+        # https://hal-cea.archives-ouvertes.fr/cea-01403292/file/residual-method.pdf Eq.(8)
+        u = 0.5*uv[0] + 0.5*u
+        v = 0.5*uv[1] + 0.5*v
 
     u = jax.lax.stop_gradient(u)
     v = jax.lax.stop_gradient(v)
@@ -98,12 +101,21 @@ def spectral_norm_conv_apply(W: jnp.ndarray,
 
   if update_params:
     # Perform the spectral norm iterations
-    body = partial(spectral_norm_conv_iter, stride=stride, padding=padding)
-    fp = jax.jit(util.fixed_point, static_argnums=(0,))
-    (u, v) = fp(body, W, (u, v), n_iters)
+    if n_iters is None:
+      body = partial(spectral_norm_conv_iter, stride=stride, padding=padding)
+      (u, v) = util.fixed_point(body, W, (u, v), 5000)
 
-    # Other implementations stop the gradient, but we can get the gradient
-    # wrt W efficiently by backprop-ing through the fixed point iters.
+    else:
+
+      # For loops are way faster than scan on GPUs when n_iters is low
+      for i in range(n_iters):
+        uv = spectral_norm_conv_iter(W, (u, v), stride, padding)
+
+        # Relaxation method
+        # https://hal-cea.archives-ouvertes.fr/cea-01403292/file/residual-method.pdf Eq.(8)
+        u = 0.5*uv[0] + 0.5*u
+        v = 0.5*uv[1] + 0.5*v
+
     u = jax.lax.stop_gradient(u)
     v = jax.lax.stop_gradient(v)
 

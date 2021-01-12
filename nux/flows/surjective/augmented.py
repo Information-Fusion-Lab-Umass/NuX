@@ -22,6 +22,7 @@ class ZeroPadding(Layer):
                output_dim: int,
                generative_only: bool=False,
                flow: Optional[Callable]=None,
+               create_network: Optional[Callable]=None,
                network_kwargs: Optional=None,
                name: str="zero_padding",
                **kwargs):
@@ -32,6 +33,7 @@ class ZeroPadding(Layer):
 
     self.flow           = flow
     self.network_kwargs = network_kwargs
+    self.create_network = create_network
     super().__init__(name=name, **kwargs)
 
   @property
@@ -68,26 +70,31 @@ class ZeroPadding(Layer):
 
   def default_flow(self):
 
-    def create_network(out_shape):
-      return net.MLP(out_dim=out_shape[-1],
-                     layer_sizes=[64]*4,
-                     nonlinearity="relu",
-                     parameter_norm="weight_norm",
-                     zero_init=True,
-                     dropout_rate=None)
+    # return nux.sequential(nux.Coupling(create_network=self.create_network,
+    #                                    network_kwargs=self.network_kwargs),
+    #                       nux.AffineLDU(safe_diag=True),
+    #                       nux.Coupling(create_network=self.create_network,
+    #                                    network_kwargs=self.network_kwargs),
+    #                       nux.AffineLDU(safe_diag=True),
+    #                       nux.Coupling(create_network=self.create_network,
+    #                                    network_kwargs=self.network_kwargs),
+    #                       nux.ParametrizedGaussianPrior(network_kwargs=self.network_kwargs,
+    #                                                     create_network=self.create_network))
 
-    kwargs = dict(n_components=8,
-                  create_network=create_network,
-                  use_condition=True)
-    main_flow = nux.sequential(nux.AffineLDU(),
-                               nux.CouplingLogitsticMixtureLogit(**kwargs),
-                               nux.AffineLDU(),
-                               nux.CouplingLogitsticMixtureLogit(**kwargs),
-                               nux.AffineLDU(),
-                               nux.CouplingLogitsticMixtureLogit(**kwargs),
-                               nux.AffineLDU())
-    return nux.sequential(nux.reverse_flow(main_flow),
-                          nux.UnitGaussianPrior())
+    def work():
+      f = nux.NeuralSpline(K=8,
+                           network_kwargs=self.network_kwargs,
+                           create_network=self.create_network)
+      f = nux.condition_by_coupling(f)
+      f = nux.reverse_flow(f)
+      return f
+
+    return nux.sequential(nux.AffineLDU(safe_diag=True),
+                          work(),
+                          nux.AffineLDU(safe_diag=True),
+                          work(),
+                          nux.ParametrizedGaussianPrior(network_kwargs=self.network_kwargs,
+                                                        create_network=self.create_network))
 
   def call(self,
            inputs: Mapping[str, jnp.ndarray],
@@ -111,8 +118,11 @@ class ZeroPadding(Layer):
     flow = self.flow if self.flow is not None else self.default_flow()
     noise_dim = self.big_dim - self.small_dim
 
+    captured_output = None
+
     if big_to_small:
       z, noise = x[...,:self.small_dim], x[...,self.small_dim:]
+      captured_output = x
 
       flow_inputs = {"x": noise, "condition": z}
       outputs = flow(flow_inputs, rng, sample=False)
@@ -122,9 +132,15 @@ class ZeroPadding(Layer):
     else:
       flow_inputs = {"x": jnp.zeros(self.batch_shape + (noise_dim,)), "condition": x}
       outputs = flow(flow_inputs, rng, sample=True)
+
       noise = outputs["x"]
+
       z = jnp.concatenate([x, noise], axis=-1)
       log_qepsgs = outputs["log_det"] + outputs["log_pz"]
       log_det -= log_qepsgs
+
+    if captured_output is not None:
+      return {"x": z, "log_det": log_det, "captured_output": captured_output}
+
 
     return {"x": z, "log_det": log_det}

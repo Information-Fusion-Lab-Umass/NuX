@@ -1,1 +1,1 @@
-from nux.models.image_architectures import *
+from nux.models.flow_architectures import *

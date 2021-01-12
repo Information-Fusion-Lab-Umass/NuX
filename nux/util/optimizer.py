@@ -120,6 +120,11 @@ def add_noise(eta: float, gamma: float, seed: int) -> GradientTransformation:
 def linear_lr(i, lr=1e-4):
   return lr
 
+def linear_warmup_schedule(i, warmup=1000, lr_decay=1.0):
+  return jnp.where(i < warmup,
+                   i/warmup,
+                   (lr_decay**(i - warmup)))
+
 def linear_warmup_lr_schedule(i, warmup=1000, lr_decay=1.0, lr=1e-4):
   return jnp.where(i < warmup,
                    lr*i/warmup,

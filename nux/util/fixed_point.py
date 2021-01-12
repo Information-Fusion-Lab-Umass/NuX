@@ -11,10 +11,8 @@ import haiku as hk
 __all__ = ["fixed_point",
            "fixed_point_scan"]
 
-@partial(jit, static_argnums=(0, 2))
 def fixed_point_scan(f, x_init, max_iters, relaxed=False):
 
-  @jit
   def body_fun(carry, inputs):
     _, x = carry
     fx = f(x)
@@ -23,7 +21,7 @@ def fixed_point_scan(f, x_init, max_iters, relaxed=False):
     carry = (x, fx)
     return carry, ()
 
-  (_, x), _ = jax.lax.scan(body_fun, (x_init, f(x_init)), jnp.arange(max_iters), unroll=10)
+  (_, x), _ = jax.lax.scan(body_fun, (x_init, f(x_init)), jnp.arange(max_iters))
   return x, max_iters
 
 def _fixed_point_while(f, x_init, max_iters):
@@ -43,10 +41,7 @@ def _fixed_point_while(f, x_init, max_iters):
     fx = f(x)
     return x, fx, i + 1
 
-  w = jax.jit(partial(jax.lax.while_loop, cond_fun, body_fun))
-
-  _, x, N = w((x_init, f(x_init), 0.0))
-  # _, x, N = jax.lax.while_loop(cond_fun, body_fun, (x_init, f(x_init), 0.0))
+  _, x, N = jax.lax.while_loop(cond_fun, body_fun, (x_init, f(x_init), 0.0))
   return x, N
 
 @partial(jax.custom_vjp, nondiff_argnums=(0,))
@@ -65,7 +60,7 @@ def fixed_point_fwd(f, u, x_init, max_iters, *nondiff_args):
 def fixed_point_rev(f, ctx, dLdx):
   u, x, max_iters, *nondiff_args = ctx
 
-  max_iters = 20
+  max_iters = 5000
 
   _, vjp_x = jax.vjp(lambda x: f(u, x, *nondiff_args), x)
 

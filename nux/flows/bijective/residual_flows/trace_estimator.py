@@ -7,7 +7,6 @@ from typing import Optional, Mapping, Callable, Sequence
 from nux.internal.base import CustomFrame
 from haiku._src.typing import PRNGKey
 import haiku._src.base as hk_base
-
 from nux.flows.bijective.residual_flows.power_series import unbiased_neumann_vjp_terms
 
 ################################################################################################################
@@ -21,7 +20,8 @@ def log_det_sliced_estimate(apply_fun,
   trace_key, roulette_key = random.split(rng, 2)
 
   # Evaluate the flow and get the vjp function
-  gx, vjp_fun, state = jax.vjp(lambda x: apply_fun(params, state, x, rng), x, has_aux=True)
+  gx, state = apply_fun(params, state, x, rng, update_params=True)
+  _, vjp_fun, _ = jax.vjp(lambda x: apply_fun(params, state, x, rng, update_params=False), x, has_aux=True)
   z = x + gx
 
   # Generate the probe vector for the trace estimate
@@ -45,11 +45,11 @@ def log_det_sliced_estimate(apply_fun,
 
 @partial(jax.custom_vjp, nondiff_argnums=(0,))
 def res_flow_sliced_estimate(apply_fun, params, state, x, rng, batch_info):
-  z, log_det, _, _, _ = log_det_sliced_estimate(apply_fun, params, state, x, rng, batch_info)
-  return z, log_det
+  z, log_det, _, _, state = log_det_sliced_estimate(apply_fun, params, state, x, rng, batch_info)
+  return z, log_det, state
 
 def sliced_estimate_fwd(apply_fun, params, state, x, rng, batch_info):
-  z, log_det, v, terms, _ = log_det_sliced_estimate(apply_fun, params, state, x, rng, batch_info)
+  z, log_det, v, terms, state = log_det_sliced_estimate(apply_fun, params, state, x, rng, batch_info)
 
   # Accumulate the terms we need for the gradient
   summed_terms_for_grad = terms.sum(axis=0)
@@ -62,10 +62,10 @@ def sliced_estimate_fwd(apply_fun, params, state, x, rng, batch_info):
   def vjvp(params, unbatched_x, unbatched_summed_terms, unbatched_v):
     # Remember that apply_fun is autobatched and can automatically pad leading dims!
     if batch_dim > 0:
-      _, vjp_fun, _ = jax.vjp(lambda x: apply_fun(params, state, x[None], rng), unbatched_x, has_aux=True)
+      _, vjp_fun, _ = jax.vjp(lambda x: apply_fun(params, state, x[None], rng, update_params=False), unbatched_x, has_aux=True)
       w, = vjp_fun(unbatched_summed_terms[None])
     else:
-      _, vjp_fun, _ = jax.vjp(lambda x: apply_fun(params, state, x, rng), unbatched_x, has_aux=True)
+      _, vjp_fun, _ = jax.vjp(lambda x: apply_fun(params, state, x, rng, update_params=False), unbatched_x, has_aux=True)
       w, = vjp_fun(unbatched_summed_terms)
     return jnp.sum(w*unbatched_v)
 
@@ -79,10 +79,10 @@ def sliced_estimate_fwd(apply_fun, params, state, x, rng, batch_info):
 
   # Store off everything for the backward pass
   ctx = x, params, state, rng, batch_info, dlogdet_dtheta, dlogdet_dx
-  return (z, log_det), ctx
+  return (z, log_det, state), ctx
 
 def sliced_estimate_bwd(apply_fun, ctx, g):
-  dLdz, dLdlogdet = g
+  dLdz, dLdlogdet, _ = g
   x, params, state, rng, batch_info, dlogdet_dtheta, dlogdet_dx = ctx
   x_shape, batch_shape = batch_info
   batch_dim = len(batch_shape)
@@ -107,7 +107,7 @@ def sliced_estimate_bwd(apply_fun, ctx, g):
   with hk_base.frame_stack(CustomFrame.create_from_params_and_state(params, state)):
 
     # Add in the partial derivatives wrt x
-    _, vjp_fun = jax.vjp(lambda params, x: x + apply_fun(params, state, x, rng)[0], params, x, has_aux=False)
+    _, vjp_fun = jax.vjp(lambda params, x: x + apply_fun(params, state, x, rng, update_params=False)[0], params, x, has_aux=False)
     dtheta, dx = vjp_fun(dLdz)
 
     # Combine the partial derivatives

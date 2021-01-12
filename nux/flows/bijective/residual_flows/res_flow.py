@@ -67,22 +67,24 @@ class ResidualFlow(Layer):
     if running_init_fn:
       self.auto_batched_res_block(x, rng)
 
-  def forward(self, x, rng):
+  def forward(self, x, rng, update_params):
     self.init_if_needed(x, rng)
 
     batch_info = self.unbatched_input_shapes["x"], self.batch_shape
 
-    fun = partial(self.auto_batched_res_block, update_params=False)
-    with make_functional_modules([fun]) as ([apply_fun], \
-                                             params, \
-                                             state, \
-                                             finalize):
+    with make_functional_modules([self.auto_batched_res_block]) as ([apply_fun], \
+                                                                    params, \
+                                                                    state, \
+                                                                    finalize):
       if self.use_trace_estimator:
-        z, log_det = res_flow_sliced_estimate(apply_fun, params, state, x, rng, batch_info)
+        z, log_det, state = res_flow_sliced_estimate(apply_fun, params, state, x, rng, batch_info)
       else:
-        assert 0
-        z, log_det = res_flow_estimate(apply_fun, params, state, x, rng, batch_info)
+        z, log_det, state = res_flow_estimate(apply_fun, params, state, x, rng, batch_info)
 
+      # Ensure that we don't backprop through state (this shouldn't affect anything)
+      state = jax.lax.stop_gradient(state)
+
+      # Update the Haiku global states
       finalize(params, state)
 
     return z, log_det
@@ -125,11 +127,9 @@ class ResidualFlow(Layer):
         z, log_det = self.exact_forward(x, rng)
       else:
 
-        # Update the singular vectors
-        # TODO: Figure out how to do this inside the custom_vjp
         update_params = True if kwargs.get("is_training", True) else False
-        self.auto_batched_res_block(x, rng, update_params=update_params)
-        z, log_det = self.forward(x, rng)
+        # self.auto_batched_res_block(x, rng, update_params=update_params)
+        z, log_det = self.forward(x, rng, update_params)
 
       outputs = {"x": z, "log_det": log_det}
     else:

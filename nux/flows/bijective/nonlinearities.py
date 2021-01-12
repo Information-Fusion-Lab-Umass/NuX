@@ -88,7 +88,7 @@ class LeakyReLU(Layer):
 class SneakyReLU(Layer):
 
   """ Adapted from https://github.com/didriknielsen/survae_flows/blob/master/survae/transforms/bijections/elementwise_nonlinear.py
-      Originally from https://invertibleworkshop.github.io/accepted_papers/pdfs/INNF_2019_paper_26.pdf """
+      Originally from https://invertibleworkshop.github.io/INNF_2019/accepted_papers/pdfs/INNF_2019_paper_26.pdf """
 
   def __init__(self,
                alpha: float=0.1,

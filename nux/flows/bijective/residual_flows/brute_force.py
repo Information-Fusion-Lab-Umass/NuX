@@ -42,15 +42,15 @@ def log_det_estimate(apply_fun, params, state, x, rng, batch_info):
   # Compute the log det
   log_det = vmap_trace(summed_log_det_terms)
 
-  return z, log_det, terms
+  return z, log_det, terms, state
 
 @partial(jax.custom_vjp, nondiff_argnums=(0,))
 def res_flow_estimate(apply_fun, params, state, x, rng, batch_info):
-  z, log_det, _ = log_det_estimate(apply_fun, params, state, x, rng, batch_info)
-  return z, log_det
+  z, log_det, state = log_det_estimate(apply_fun, params, state, x, rng, batch_info)
+  return z, log_det, state
 
 def estimate_fwd(apply_fun, params, state, x, rng, batch_info):
-  z, log_det, terms = log_det_estimate(apply_fun, params, state, x, rng, batch_info)
+  z, log_det, terms, state = log_det_estimate(apply_fun, params, state, x, rng, batch_info)
 
   # Accumulate the terms we need for the gradient
   summed_terms_for_grad = terms.sum(axis=0)
@@ -71,10 +71,10 @@ def estimate_fwd(apply_fun, params, state, x, rng, batch_info):
   dlogdet_dtheta, dlogdet_dx = vmapped_grad_vjvp(params, x, summed_terms_for_grad)
 
   ctx = x, params, state, rng, batch_info, dlogdet_dtheta, dlogdet_dx
-  return (z, log_det), ctx
+  return (z, log_det, state), ctx
 
 def estimate_bwd(apply_fun, ctx, g):
-  dLdz, dLdlogdet = g
+  dLdz, dLdlogdet, _ = g
   x, params, state, rng, batch_info, dlogdet_dtheta, dlogdet_dx = ctx
   x_shape, batch_shape = batch_info
   batch_axes = tuple(range(len(batch_shape)))

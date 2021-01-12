@@ -40,7 +40,6 @@ class ParametrizedGaussian(Layer):
            rng: PRNGKey,
            sample: Optional[bool]=False,
            no_noise: Optional[bool]=False,
-           return_params: Optional[bool]=False,
            **kwargs
   ) -> Mapping[str, jnp.ndarray]:
     network = self.get_generator_network()
@@ -48,6 +47,9 @@ class ParametrizedGaussian(Layer):
     network_in = inputs["x"]
     network_out = self.auto_batch(network, expected_depth=1, in_axes=(0, None))(network_in, rng)
     mu, log_diag_cov = jnp.split(network_out, 2, axis=-1)
+
+    diag_cov = util.proximal_relu(log_diag_cov) + 1e-5
+    log_diag_cov = jnp.log(diag_cov)
 
     x = mu
     if no_noise == False:
@@ -101,7 +103,6 @@ class GaussianVAE(Layer):
            rng: PRNGKey,
            sample: Optional[bool]=False,
            no_noise: Optional[bool]=False,
-           return_params: Optional[bool]=False,
            **kwargs
   ) -> Mapping[str, jnp.ndarray]:
 

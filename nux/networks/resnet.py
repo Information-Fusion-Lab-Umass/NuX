@@ -22,7 +22,8 @@ class ResNet(hk.Module):
                block_type: str="reverse_bottleneck",
                zero_init: bool=False,
                dropout_rate: Optional[float]=0.2,
-               gate: bool=True,
+               gate: bool=False,
+               gate_final: bool=True,
                use_bias: bool=True,
                name=None):
     super().__init__(name=name)
@@ -34,12 +35,19 @@ class ResNet(hk.Module):
                                   dropout_rate=dropout_rate,
                                   gate=gate,
                                   use_bias=use_bias)
+    self.hidden_channel = hidden_channel
+    self.parameter_norm = parameter_norm
+    self.normalization  = normalization
+    self.nonlinearity   = nonlinearity
+    self.dropout_rate   = dropout_rate
 
     self.n_blocks       = n_blocks
     self.out_channel    = out_channel
     self.squeeze_excite = squeeze_excite
     self.zero_init      = zero_init
     self.use_bias       = use_bias
+    self.gate           = gate
+    self.gate_final     = gate_final
 
     if block_type == "bottleneck":
       self.conv_block = BottleneckConv
@@ -73,7 +81,6 @@ class ResNet(hk.Module):
 
   def __call__(self, x, rng, is_training=True, **kwargs):
     channel = x.shape[-1]
-
     rngs = random.split(rng, 3*self.n_blocks).reshape((self.n_blocks, 3, -1))
 
     for i, rng_for_convs in enumerate(rngs):
@@ -81,7 +88,7 @@ class ResNet(hk.Module):
                           **self.conv_block_kwargs)(x, rng_for_convs, is_training=is_training)
 
       if self.squeeze_excite:
-        z = nux.SqueezeExcitation(reduce_ratio=4)(z)
+        z = SqueezeExcitation(reduce_ratio=4)(z)
 
       x += z
 
@@ -89,13 +96,25 @@ class ResNet(hk.Module):
         x = self.norm(f"norm_{i}")(x, is_training=is_training)
 
     # Add an extra convolution to change the out channels
-    conv = Conv(self.out_channel,
-                kernel_shape=(1, 1),
-                stride=(1, 1),
-                padding="SAME",
-                parameter_norm=self.conv_block_kwargs["parameter_norm"],
-                use_bias=True,
-                zero_init=self.zero_init)
-    x = conv(x, is_training=is_training)
+    if self.gate_final:
+      conv = Conv(2*self.out_channel,
+                  kernel_shape=(1, 1),
+                  stride=(1, 1),
+                  padding="SAME",
+                  parameter_norm=self.parameter_norm,
+                  use_bias=self.use_bias,
+                  zero_init=self.zero_init)
+      ab = conv(x, is_training=is_training)
+      a, b = jnp.split(ab, 2, axis=-1)
+      x = a*jax.nn.sigmoid(b)
+    else:
+      conv = Conv(self.out_channel,
+                  kernel_shape=(1, 1),
+                  stride=(1, 1),
+                  padding="SAME",
+                  parameter_norm=self.parameter_norm,
+                  use_bias=self.use_bias,
+                  zero_init=self.zero_init)
+      x = conv(x, is_training=is_training)
 
     return x

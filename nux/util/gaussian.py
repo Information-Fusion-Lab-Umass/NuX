@@ -24,13 +24,13 @@ def gaussian_full_cov_logpdf(x, mean, cov):
 
 @jit
 def gaussian_centered_diag_cov_logpdf(x, log_diag_cov):
-  log_px = -0.5*jnp.sum(x*jnp.exp(-log_diag_cov)*x, axis=-1)
+  log_px = -0.5*jnp.sum(x**2*jnp.exp(-log_diag_cov), axis=-1)
   return log_px - 0.5*jnp.sum(log_diag_cov) - 0.5*x.shape[-1]*jnp.log(2*jnp.pi)
 
 @jit
 def gaussian_diag_cov_logpdf(x, mean, log_diag_cov):
   dx = x - mean
-  log_px = -0.5*jnp.sum(dx*jnp.exp(-log_diag_cov)*dx, axis=-1)
+  log_px = -0.5*jnp.sum(dx**2*jnp.exp(-log_diag_cov), axis=-1)
   return log_px - 0.5*jnp.sum(log_diag_cov) - 0.5*x.shape[-1]*jnp.log(2*jnp.pi)
 
 @jit

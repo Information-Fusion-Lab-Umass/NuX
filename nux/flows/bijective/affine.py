@@ -12,6 +12,7 @@ import nux.util.weight_initializers as init
 __all__ = ["Bias",
            "Identity",
            "Scale",
+           "ShiftScale",
            "ElementwiseScale",
            "AffineDense",
            "AffineLDU",
@@ -69,6 +70,50 @@ class Identity(Layer):
 
 ################################################################################################################
 
+class ShiftScale(Layer):
+
+  def __init__(self,
+               axis=-1,
+               name: str="shift_scale"
+  ):
+    """ Elementwise shift + scale
+    Args:
+      axis: Axes to apply to
+      name: Optional name for this module.
+    """
+    super().__init__(name=name)
+    self.axes = (axis,) if isinstance(axis, int) else axis
+    for ax in self.axes:
+      assert ax < 0, "For convenience, pass in negative indexed axes"
+
+  def call(self,
+           inputs: Mapping[str, jnp.ndarray],
+           rng: jnp.ndarray=None,
+           sample: Optional[bool]=False,
+           **kwargs
+  ) -> Mapping[str, jnp.ndarray]:
+    outputs = {}
+    x = inputs["x"]
+    x_shape = self.get_unbatched_shapes(sample)["x"]
+
+    param_shape = tuple([x_shape[ax] for ax in self.axes])
+    b     = hk.get_parameter("b", shape=param_shape, dtype=x.dtype, init=jnp.zeros)
+    log_s = hk.get_parameter("log_s", shape=param_shape, dtype=x.dtype, init=jnp.zeros)
+
+    s = util.proximal_relu(log_s) + 1e-5
+
+    if sample == False:
+      outputs["x"] = (x - b)/s
+    else:
+      outputs["x"] = s*x + b
+
+    log_det = jnp.broadcast_to(-jnp.log(s), x_shape)
+    outputs["log_det"] = log_det.sum()
+
+    return outputs
+
+################################################################################################################
+
 class Scale(Layer):
 
   def __init__(self,
@@ -105,7 +150,7 @@ class Scale(Layer):
 class ElementwiseScale(Layer):
 
   def __init__(self,
-               scale: jnp.ndarray,
+               scale: jnp.ndarray=None,
                name: str="scale"
   ):
     """ Scale an input by a specified scalar
@@ -124,15 +169,21 @@ class ElementwiseScale(Layer):
   ) -> Mapping[str, jnp.ndarray]:
     outputs = {}
 
-    assert self.scale.shape == self.unbatched_input_shapes["x"]
+    x = inputs["x"]
+
+    if self.scale is None:
+      scale = hk.get_parameter("scale", shape=self.unbatched_input_shapes["x"], dtype=x.dtype, init=jnp.zeros)
+    else:
+      scale = self.scale
+      assert self.scale.shape == self.unbatched_input_shapes["x"]
 
     if sample == False:
-      outputs["x"] = inputs["x"]/self.scale
+      outputs["x"] = inputs["x"]/scale
     else:
-      outputs["x"] = inputs["x"]*self.scale
+      outputs["x"] = inputs["x"]*scale
 
     shape = self.get_unbatched_shapes(sample)["x"]
-    outputs["log_det"] = -jnp.log(self.scale).sum()
+    outputs["log_det"] = -jnp.log(scale).sum()
 
     return outputs
 
@@ -141,7 +192,7 @@ class ElementwiseScale(Layer):
 class AffineDense(Layer):
 
   def __init__(self,
-               weight_norm: bool=False,
+               weight_norm: bool=True,
                spectral_norm: bool=False,
                max_singular_value: float=1.0,
                name: str="affine_dense",
@@ -208,6 +259,7 @@ U_solve = jax.jit(partial(tri_solve, lower=False, unit_diagonal=True))
 class AffineLDU(Layer):
 
   def __init__(self,
+               safe_diag: bool=False,
                name: str="affine_ldu"
   ):
     """ LDU parametrized matrix multiplication.  Costs O(D^2) to invert and O(D) for a regular pass.
@@ -215,6 +267,7 @@ class AffineLDU(Layer):
       name:  Optional name for this module.
     """
     super().__init__(name=name)
+    self.safe_diag = safe_diag
 
   def call(self,
            inputs: Mapping[str, jnp.ndarray],
@@ -224,16 +277,31 @@ class AffineLDU(Layer):
   ) -> Mapping[str, jnp.ndarray]:
     outputs = {}
 
-    init = hk.initializers.RandomNormal(0.1)
-
     dim, dtype = inputs["x"].shape[-1], inputs["x"].dtype
-    L     = hk.get_parameter("L", shape=(dim, dim), dtype=dtype, init=init)
-    U     = hk.get_parameter("U", shape=(dim, dim), dtype=dtype, init=init)
+
+    L     = hk.get_parameter("L", shape=(dim, dim), dtype=dtype, init=hk.initializers.RandomNormal(0.01))
+    U     = hk.get_parameter("U", shape=(dim, dim), dtype=dtype, init=hk.initializers.RandomNormal(0.01))
     log_d = hk.get_parameter("log_d", shape=(dim,), dtype=dtype, init=jnp.zeros)
     lower_mask = jnp.ones((dim, dim), dtype=bool)
     lower_mask = jax.ops.index_update(lower_mask, jnp.triu_indices(dim), False)
 
-    b = hk.get_parameter("b", shape=(dim,), dtype=dtype, init=jnp.zeros)
+    if self.safe_diag:
+      d = util.proximal_relu(log_d) + 1e-5
+      log_d = jnp.log(d)
+
+    def b_init(shape, dtype):
+      x = inputs["x"]
+      if x.ndim == 1:
+        return jnp.zeros(shape, dtype=dtype)
+
+      # Initialize to the batch mean
+      z = jnp.dot(x, (U*lower_mask.T).T) + x
+      z *= jnp.exp(log_d)
+      z = jnp.dot(z, (L*lower_mask).T) + z
+      b = -jnp.mean(z, axis=0)
+      return b
+
+    b = hk.get_parameter("b", shape=(dim,), dtype=dtype, init=b_init)
 
     # Its way faster to allocate a full matrix for L and U and then mask than it
     # is to allocate only the lower/upper parts and the reshape.

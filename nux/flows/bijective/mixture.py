@@ -14,8 +14,8 @@ import nux
 from nux.flows.bijective.coupling_base import CouplingBase
 from abc import ABC, abstractmethod
 
-__all__ = ["LogitsticMixtureLogit",
-           "CouplingLogitsticMixtureLogit"]
+__all__ = ["LogisticMixtureLogit",
+           "CouplingLogisticMixtureLogit"]
 
 ################################################################################################################
 
@@ -259,10 +259,10 @@ class CouplingMixtureCDF(_MixtureCDFMixin, CouplingBase):
     out_dim = x_shape[-1]*(3*self.n_components + self.extra)
     return x_shape[:-1] + (out_dim,)
 
-  def transform(self, x, params=None, sample=False, mask=None):
+  def transform(self, x, params=None, sample=False, mask=None, rng=None, **kwargs):
     conditioned_params = params is not None
+    x_shape = x.shape[len(self.batch_shape):]
     if params is None:
-      x_shape = x.shape[len(self.batch_shape):]
       theta = hk.get_parameter("theta", shape=x_shape + (3*self.n_components + self.extra,), dtype=x.dtype, init=hk.initializers.RandomNormal(1.0))
     else:
       theta = params.reshape(x.shape + (3*self.n_components + self.extra,))
@@ -305,11 +305,12 @@ class CouplingMixtureCDF(_MixtureCDFMixin, CouplingBase):
 
 ################################################################################################################
 
-class _LogitsticMixtureLogitMixin():
+class _LogisticMixtureLogitMixin():
 
   def __init__(self,
                n_components: int=4,
                restrict_scales: bool=True,
+               safe_diag: bool=False,
                name: str="logistic_mixture_cdf_logit",
                **kwargs
   ):
@@ -324,31 +325,40 @@ class _LogitsticMixtureLogitMixin():
     """
     super().__init__(n_components=n_components, name=name, **kwargs)
     self.restrict_scales = restrict_scales
+    self.safe_diag = safe_diag
 
   def f(self, weight_logits, means, log_scales, x):
     if self.restrict_scales:
-      log_scales = jnp.maximum(-7.0, log_scales)
+      if self.safe_diag == False:
+        log_scales = jnp.maximum(-7.0, log_scales)
+      else:
+        scales = util.proximal_relu(log_scales) + 1e-5
+        log_scales = jnp.log(scales)
 
-    return jax.jit(logistic_cdf_mixture_logit)(weight_logits, means, log_scales, x)
+    return logistic_cdf_mixture_logit(weight_logits, means, log_scales, x)
 
   def elementwise_log_det(self, weight_logits, means, log_scales, x):
     return self.f_and_elementwise_log_det(weight_logits, means, log_scales, x)[1]
 
   def f_and_elementwise_log_det(self, weight_logits, means, log_scales, x):
     if self.restrict_scales:
-      log_scales = jnp.maximum(-7.0, log_scales)
+      if self.safe_diag == False:
+        log_scales = jnp.maximum(-7.0, log_scales)
+      else:
+        scales = util.proximal_relu(log_scales) + 1e-5
+        log_scales = jnp.log(scales)
 
     primals = weight_logits, means, log_scales, x
     tangents = jax.tree_map(jnp.zeros_like, primals[:-1]) + (jnp.ones_like(x),)
-    z, dzdx = jax.jit(jax.jvp, static_argnums=(0,))(logistic_cdf_mixture_logit, primals, tangents)
+    z, dzdx = jax.jvp(logistic_cdf_mixture_logit, primals, tangents)
 
     ew_log_det = jnp.log(dzdx)
     return z, ew_log_det
 
 ################################################################################################################
 
-class LogitsticMixtureLogit(_LogitsticMixtureLogitMixin, MixtureCDF):
+class LogisticMixtureLogit(_LogisticMixtureLogitMixin, MixtureCDF):
   pass
 
-class CouplingLogitsticMixtureLogit(_LogitsticMixtureLogitMixin, CouplingMixtureCDF):
+class CouplingLogisticMixtureLogit(_LogisticMixtureLogitMixin, CouplingMixtureCDF):
   pass

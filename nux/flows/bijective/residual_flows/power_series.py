@@ -47,7 +47,6 @@ def vjp_iterations_scan(vjp_fun, v, n_terms):
 
   return terms
 
-@partial(jit, static_argnums=(0, 2))
 def vjp_iterations_for_loop(vjp_fun, v, n_terms):
 
   terms = [None]*n_terms

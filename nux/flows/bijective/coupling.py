@@ -9,7 +9,8 @@ from nux.internal.layer import Layer
 import nux.util as util
 import nux.networks as net
 
-__all__ = ["Coupling"]
+__all__ = ["Coupling",
+           "condition_by_coupling"]
 
 from nux.flows.bijective.coupling_base import CouplingBase
 
@@ -23,6 +24,7 @@ class Coupling(CouplingBase):
                use_condition: bool=False,
                apply_to_both_halves: Optional[bool]=True,
                network_kwargs: Optional[Mapping]=None,
+               safe_diag: bool=False,
                name: str="coupling",
                **kwargs
   ):
@@ -49,13 +51,14 @@ class Coupling(CouplingBase):
                      network_kwargs=network_kwargs,
                      **kwargs)
     self.kind = kind
+    self.safe_diag = safe_diag
 
   def get_out_shape(self, x):
     x_shape = x.shape[len(self.batch_shape):]
     out_dim = x_shape[-1] if self.kind == "additive" else 2*x_shape[-1]
     return x_shape[:-1] + (out_dim,)
 
-  def transform(self, x, params=None, sample=False, mask=None):
+  def transform(self, x, params=None, sample=False, mask=None, rng=None, **kwargs):
     # Remember that self.get_unbatched_shapes(sample)["x"] is NOT the shape of x here!
     # The x we see here is only half of the actual x!
 
@@ -84,6 +87,11 @@ class Coupling(CouplingBase):
       if self.kind == "affine":
         log_s = scale_scale*log_s
 
+    if self.kind == "affine":
+      if self.safe_diag:
+        s = util.proximal_relu(log_s) + 1e-5
+        log_s = jnp.log(s)
+
     # Evaluate the transformation
     if sample == False:
       z = (x - t)*jnp.exp(-log_s) if self.kind == "affine" else x - t
@@ -105,3 +113,47 @@ class Coupling(CouplingBase):
       log_det = jnp.zeros(self.batch_shape)
 
     return z, log_det
+
+################################################################################################################
+
+class condition_by_coupling(Layer):
+
+  def __init__(self,
+               flow,
+               name: str="condition_by_coupling"
+  ):
+    """ If we want to use a "condition" input in conjunction with an input,
+        this provides a way to do that using whats already implemented for coupling.
+    Args:
+      name: Optional name for this module.
+    """
+    assert isinstance(flow, CouplingBase)
+    self.flow = flow
+    self.flow.axis = -1
+    self.flow.use_condition = False
+    self.flow.apply_to_both_halves = False
+    self.flow.split_kind = "channel"
+    self.flow.masked = False
+    super().__init__(name=name)
+
+  def call(self,
+           inputs: Mapping[str, jnp.ndarray],
+           rng: jnp.ndarray=None,
+           sample: Optional[bool]=False,
+           **kwargs
+  ) -> Mapping[str, jnp.ndarray]:
+    x = inputs["x"]
+
+    assert "condition" in inputs
+    condition = inputs["condition"]
+
+    # Just concatenate the input with condition
+    coupling_inputs = inputs.copy()
+    coupling_inputs["x"] = jnp.concatenate([x, condition], axis=-1)
+    coupling_outputs = self.flow(coupling_inputs, rng, sample=sample, **kwargs)
+
+    split_index = x.shape[-1]
+    z, _ = jnp.split(coupling_outputs["x"], jnp.array([split_index]), axis=-1)
+
+    outputs = {"x": z, "log_det": coupling_outputs["log_det"]}
+    return outputs

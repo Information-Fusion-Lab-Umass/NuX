@@ -3,6 +3,7 @@ from typing import Optional, Mapping, Callable, Sequence
 from functools import partial
 
 __all__ = ["multiscale_architecture",
+           "FlatLogisticCDFMixtureFlow",
            "RealNVP",
            "GLOW",
            "FlowPlusPlus"]
@@ -76,6 +77,32 @@ def build_architecture(architecture: Sequence[Callable],
     layers.append(nux.UnSqueeze())
 
   return nux.sequential(*layers)
+
+################################################################################################################
+
+def FlatLogisticCDFMixtureFlow(n_components=32,
+                               n_blocks=4,
+                               masked_coupling=False,
+                               apply_transform_to_both_halves=False,
+                               network_kwargs=None,
+                               create_network=None):
+
+  coupling_algorithm = partial(nux.CouplingLogisticMixtureLogit,
+                               n_components=n_components,
+                               with_affine_coupling=True,
+                               masked=masked_coupling,
+                               apply_to_both_halves=apply_transform_to_both_halves,
+                               network_kwargs=network_kwargs,
+                               create_network=create_network)
+
+  architecture = ["chnl"]*n_blocks
+
+  return build_architecture(architecture,
+                            coupling_algorithm,
+                            actnorm=True,
+                            actnorm_axes=(-1,),
+                            glow=True,
+                            one_dim=True)
 
 ################################################################################################################
 
@@ -157,7 +184,7 @@ def FlowPlusPlus(n_components=32,
                  create_network=None,
                  one_dim=False):
 
-  coupling_algorithm = partial(nux.CouplingLogitsticMixtureLogit,
+  coupling_algorithm = partial(nux.CouplingLogisticMixtureLogit,
                                n_components=n_components,
                                with_affine_coupling=True,
                                masked=masked_coupling,
