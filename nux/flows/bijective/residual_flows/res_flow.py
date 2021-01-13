@@ -140,9 +140,7 @@ class ResidualFlow(Layer):
         if self.exact_log_det or use_exact_log_det:
           _, log_det = self.exact_forward(x, rng)
         else:
-          update_params = True if kwargs.get("is_training", True) else False
-          self.auto_batched_res_block(x, rng, update_params=update_params)
-          _, log_det = self.forward(x, rng)
+          _, log_det = self.forward(x, rng, update_params=False)
       else:
         log_det = jnp.zeros(self.batch_shape)
 
