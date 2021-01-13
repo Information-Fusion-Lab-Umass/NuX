@@ -65,7 +65,7 @@ def get_tf_dataset(quantize_bits,
       labels = x["y_non_one_hot"]
       x["y_is_labeled"] = rng.binomial(shape=labels.shape,
                                        counts=tf.ones(labels.shape),
-                                       probs=tf.ones(labels.shape)*0.5)
+                                       probs=tf.ones(labels.shape)*label_keep_percent)
       del x["y_non_one_hot"]
     return x
 
@@ -74,6 +74,7 @@ def get_tf_dataset(quantize_bits,
     ds = ds.map(central_crop)
 
   ds = ds.map(to_float)
+  ds = ds.map(random_flip)
   ds = ds.map(quantize)
   ds = ds.map(to_expected_input)
   ds = ds.map(make_semi_supervised)

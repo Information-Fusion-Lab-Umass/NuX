@@ -79,13 +79,13 @@ class ResNet(hk.Module):
     else:
       self.norm = None
 
-  def __call__(self, x, rng, is_training=True, **kwargs):
+  def __call__(self, x, rng, aux=None, is_training=True, **kwargs):
     channel = x.shape[-1]
     rngs = random.split(rng, 3*self.n_blocks).reshape((self.n_blocks, 3, -1))
 
     for i, rng_for_convs in enumerate(rngs):
       z = self.conv_block(out_channel=channel,
-                          **self.conv_block_kwargs)(x, rng_for_convs, is_training=is_training)
+                          **self.conv_block_kwargs)(x, rng_for_convs, aux=aux, is_training=is_training)
 
       if self.squeeze_excite:
         z = SqueezeExcitation(reduce_ratio=4)(z)

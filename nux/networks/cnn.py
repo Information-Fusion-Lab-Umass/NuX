@@ -55,7 +55,6 @@ def data_dependent_param_init(x: jnp.ndarray,
     else:
       warnings.warn("Not using weight normalization!")
 
-
   w = hk.get_parameter(f"w_{name_suffix}", w_shape, x.dtype, init=w_init)
   if use_bias:
     b = hk.get_parameter(f"b_{name_suffix}", (out_channel,), x.dtype, init=b_init)
@@ -213,7 +212,7 @@ class RepeatedConv(hk.Module):
     else:
       self.norm = None
 
-  def __call__(self, x, rng, is_training=True, **kwargs):
+  def __call__(self, x, rng, aux=None, is_training=True, **kwargs):
     # This function assumes that the input is batched!
     batch_size, H, W, C = x.shape
 
@@ -233,6 +232,11 @@ class RepeatedConv(hk.Module):
         x = a*jax.nn.sigmoid(b)
       else:
         x = Conv(out_channel, kernel_shape, name=f"conv_{i}", **self.conv_kwargs)(x, is_training=is_training)
+
+      # Network-in-network
+      if aux is not None:
+        aux = self.nonlinearity(aux)
+        x += Conv(out_channel, kernel_shape, name=f"conv_{i}_aux", **self.conv_kwargs)(aux, is_training=is_training)
 
       if self.norm is not None:
         x = self.norm(f"norm_{i}")(x, is_training=is_training)
@@ -358,12 +362,12 @@ class CNN(hk.Module):
     else:
       assert 0, "Invalid block type"
 
-  def __call__(self, x, rng, is_training=True, **kwargs):
+  def __call__(self, x, rng, aux=None, is_training=True, **kwargs):
     rngs = random.split(rng, 3*self.n_blocks).reshape((self.n_blocks, 3, -1))
 
     for i, rng_for_convs in enumerate(rngs):
       x = self.conv_block(out_channel=self.working_channel,
-                          **self.conv_block_kwargs)(x, rng_for_convs, is_training=is_training)
+                          **self.conv_block_kwargs)(x, rng_for_convs, aux=aux, is_training=is_training)
 
       if self.squeeze_excite:
         x = nux.SqueezeExcitation(reduce_ratio=4)(x)

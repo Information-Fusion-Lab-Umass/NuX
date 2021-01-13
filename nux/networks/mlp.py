@@ -119,7 +119,7 @@ class MLP(hk.Module):
     self.w_init = hk.initializers.VarianceScaling(1.0, "fan_avg", "truncated_normal") if w_init is None else w_init
     self.b_init = jnp.zeros if b_init is None else b_init
 
-  def __call__(self, x, rng, is_training=True, update_params=True, **kwargs):
+  def __call__(self, x, rng, aux=None, is_training=True, update_params=True, **kwargs):
     # This function assumes that the input is batched!
     batch_size, in_dim = x.shape
 
