@@ -9,6 +9,7 @@ from nux.internal.layer import Layer
 import nux.util as util
 import nux.networks as net
 from abc import ABC, abstractmethod
+import warnings
 
 __all__ = ["CouplingBase"]
 
@@ -18,9 +19,11 @@ class CouplingBase(Layer, ABC):
                *,
                create_network: Optional[Callable],
                axis: Optional[int],
+               split: bool,
                split_kind: str,
                masked: bool,
                use_condition: bool,
+               condition_method: str,
                network_kwargs: Optional[Mapping],
                apply_to_both_halves: Optional[bool],
                name: str,
@@ -44,10 +47,13 @@ class CouplingBase(Layer, ABC):
     self.create_network       = create_network
     self.network_kwargs       = network_kwargs
     self.use_condition        = use_condition
+    self.condition_method     = condition_method
     self.apply_to_both_halves = apply_to_both_halves
+    self.split                = split
     self.split_kind           = split_kind
     self.masked               = masked
     assert split_kind in ["checkerboard", "channel"]
+    assert condition_method in ["concat", "nin"]
 
   def get_network(self, out_shape):
     if hasattr(self, "_network"):
@@ -83,6 +89,54 @@ class CouplingBase(Layer, ABC):
     assert Hc == H and Wc == W
     return condition
 
+  def apply_conditioner_network(self, key, x, condition):
+    if self.use_condition and self.condition_method == "nin":
+      if len(self.unbatched_input_shapes["x"]) == 1:
+        warnings.warn("Using 'nin' conditioning method on 1d inputs is currently not supported.")
+      network_out = self.auto_batch(self.network, expected_depth=1, in_axes=(0, None, 0))(x, key, condition)
+    else:
+      network_in = jnp.concatenate([x, condition], axis=self.axis) if self.use_condition else x
+      network_out = self.auto_batch(self.network, expected_depth=1, in_axes=(0, None))(network_in, key)
+    return network_out
+
+  def standard_call(self,
+                    inputs: Mapping[str, jnp.ndarray],
+                    rng: jnp.ndarray=None,
+                    sample: Optional[bool]=False,
+                    **kwargs
+  ) -> Mapping[str, jnp.ndarray]:
+    """ Perform coupling by splitting the input
+    """
+    k1, k2, k3 = random.split(rng, 3)
+    x = inputs["x"]
+    unbatched_dim = len(self.get_unbatched_shapes(sample)["x"])
+    if self.use_condition:
+      assert "condition" in inputs
+      condition = inputs["condition"]
+    else:
+      condition = None
+
+    # Initialize the network
+    out_shape = self.get_out_shape(x)
+    self.network = self.get_network(out_shape)
+
+    # Pass in whatever other kwargs we might have
+    extra_kwargs = inputs.copy()
+    extra_kwargs.update(kwargs)
+    extra_kwargs.pop("x")
+
+    if sample == False:
+      # z = f(x; condition, theta)
+      network_out = self.apply_conditioner_network(k2, condition, None) if condition is not None else None
+      z, log_det = self.transform(x, params=network_out, sample=False, rng=k3, **extra_kwargs)
+    else:
+      # xb = f^{-1}(zb; theta).  (x and z are swapped so that the code is a bit cleaner)
+      network_out = self.apply_conditioner_network(k2, condition, None) if condition is not None else None
+      z, log_det = self.transform(x, params=network_out, sample=True, rng=k3, **extra_kwargs)
+
+    outputs = {"x": z, "log_det": log_det}
+    return outputs
+
   def split_call(self,
                  inputs: Mapping[str, jnp.ndarray],
                  rng: jnp.ndarray=None,
@@ -97,6 +151,8 @@ class CouplingBase(Layer, ABC):
     if self.use_condition:
       assert "condition" in inputs
       condition = inputs["condition"]
+    else:
+      condition = None
 
     if self.split_kind == "checkerboard":
       if unbatched_dim == 1:
@@ -111,7 +167,7 @@ class CouplingBase(Layer, ABC):
 
     # Initialize the network
     out_shape = self.get_out_shape(xa)
-    network = self.get_network(out_shape)
+    self.network = self.get_network(out_shape)
 
     # Pass in whatever other kwargs we might have
     extra_kwargs = inputs.copy()
@@ -126,8 +182,7 @@ class CouplingBase(Layer, ABC):
         zb, log_detb = xb, 0.0
 
       # za = f(xa; NN(xb))
-      network_in = jnp.concatenate([xb, condition], axis=self.axis) if self.use_condition else xb
-      network_out = self.auto_batch(network, expected_depth=1, in_axes=(0, None))(network_in, k2)
+      network_out = self.apply_conditioner_network(k2, xb, condition)
       za, log_deta = self.transform(xa, params=network_out, sample=False, rng=k3, **extra_kwargs)
     else:
       # xb = f^{-1}(zb; theta).  (x and z are swapped so that the code is a bit cleaner)
@@ -137,8 +192,7 @@ class CouplingBase(Layer, ABC):
         zb, log_detb = xb, 0.0
 
       # xa = f^{-1}(za; NN(xb)).
-      network_in = jnp.concatenate([zb, condition], axis=self.axis) if self.use_condition else zb
-      network_out = self.auto_batch(network, expected_depth=1, in_axes=(0, None))(network_in, k2)
+      network_out = self.apply_conditioner_network(k2, zb, condition)
       za, log_deta = self.transform(xa, params=network_out, sample=True, rng=k3, **extra_kwargs)
 
     # Recombine
@@ -185,6 +239,8 @@ class CouplingBase(Layer, ABC):
     if self.use_condition:
       assert "condition" in inputs
       condition = inputs["condition"]
+    else:
+      condition = None
 
     # Mask the input
     x_mask = x*mask
@@ -192,7 +248,7 @@ class CouplingBase(Layer, ABC):
 
     # Initialize the network
     out_shape = self.get_out_shape(x_mask)
-    network = self.get_network(out_shape)
+    self.network = self.get_network(out_shape)
 
     if sample == False:
       # zb = f(xb; theta)
@@ -202,8 +258,7 @@ class CouplingBase(Layer, ABC):
         z_nmask, log_det_b = x_nmask, 0.0
 
       # za = f(xa; NN(xb))
-      network_in = jnp.concatenate([x_nmask, condition], axis=self.axis) if self.use_condition else x_nmask
-      network_out = self.auto_batch(network, expected_depth=1, in_axes=(0, None))(network_in, k2)
+      network_out = self.apply_conditioner_network(k2, x_nmask, condition)
       z_mask, log_det_a = self.transform(x, params=network_out, sample=False, mask=mask, rng=k3)
     else:
       # xb = f^{-1}(zb; theta).  (x and z are swapped so that the code is a bit cleaner)
@@ -212,8 +267,8 @@ class CouplingBase(Layer, ABC):
       else:
         z_nmask, log_det_b = x_nmask, 0.0
 
-      network_in = jnp.concatenate([z_nmask, condition], axis=self.axis) if self.use_condition else z_nmask
-      network_out = self.auto_batch(network, expected_depth=1, in_axes=(0, None))(network_in, k2)
+      # xa = f^{-1}(za; NN(xb)).
+      network_out = self.apply_conditioner_network(k2, z_nmask, condition)
       x_in = z_nmask + x_mask
       z_mask, log_det_a = self.transform(x_in, params=network_out, sample=True, mask=mask, rng=k3)
 
@@ -230,6 +285,8 @@ class CouplingBase(Layer, ABC):
            sample: Optional[bool]=False,
            **kwargs
   ) -> Mapping[str, jnp.ndarray]:
+    if self.split == False:
+      return self.standard_call(inputs, rng, sample=sample, **kwargs)
     if self.masked:
       return self.masked_call(inputs, rng, sample=sample, **kwargs)
     return self.split_call(inputs, rng, sample=sample, **kwargs)
