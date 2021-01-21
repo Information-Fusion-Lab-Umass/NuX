@@ -98,6 +98,9 @@ class MLP(hk.Module):
     if normalization == "batch_norm":
       self.norm = lambda name: hk.BatchNorm(name=name, create_scale=True, create_offset=True, decay_rate=0.9, data_format="channels_last")
 
+    elif normalization == "mean_only_batch_norm":
+      self.norm = lambda name: util.BatchNorm(name=name, mean_only=True, create_offset=True, decay_rate=0.9, data_format="channels_last")
+
     elif normalization == "instance_norm":
       def norm(name):
         instance_norm = hk.InstanceNorm(name=name, create_scale=True, create_offset=True)

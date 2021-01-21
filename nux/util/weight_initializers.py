@@ -7,6 +7,196 @@ import haiku as hk
 import nux.util.spectral_norm as sn
 from typing import Optional, Mapping, Callable, Sequence, Any
 import haiku._src.base as hk_base
+import types
+
+################################################################################################################
+
+def apply_sn(mvp,
+             mvpT,
+             w_shape,
+             b_shape,
+             out_shape,
+             dtype,
+             w_init,
+             b_init,
+             name_suffix,
+             is_training,
+             use_bias,
+             max_singular_value,
+             max_power_iters):
+
+  w_exists = util.check_if_parameter_exists(f"w_{name_suffix}")
+
+  w = hk.get_parameter(f"w_{name_suffix}", w_shape, dtype, init=w_init)
+  u = hk.get_state(f"u_{name_suffix}", out_shape, dtype, init=hk.initializers.RandomNormal())
+  zeta = hk.get_state(f"zeta_{name_suffix}", out_shape, dtype, init=hk.initializers.RandomNormal())
+
+  estimate_max_singular_value = jax.jit(sn.max_singular_value, static_argnums=(0, 1))
+
+  if w_exists == False:
+    max_power_iters = 1000
+
+  for i in range(max_power_iters):
+    sigma, u, zeta = estimate_max_singular_value(mvp, mvpT, w, u, zeta)
+
+  u, zeta = jax.lax.stop_gradient((u, zeta))
+  factor = jnp.where(max_singular_value < sigma, max_singular_value/sigma, 1.0)
+  w = w*factor
+
+  if is_training == True or running_init_fn:
+    hk.set_state(f"u_{name_suffix}", u)
+    hk.set_state(f"zeta_{name_suffix}", zeta)
+
+  if use_bias:
+    b = hk.get_parameter(f"b_{name_suffix}", b_shape, dtype, init=b_init)
+    return w, b
+  return w
+
+def weight_with_good_spectral_norm(x: jnp.ndarray,
+                                   out_dim: int,
+                                   name_suffix: str="",
+                                   w_init: Callable=None,
+                                   b_init: Callable=None,
+                                   is_training: bool=True,
+                                   update_params: bool=True,
+                                   use_bias: bool=True,
+                                   force_in_dim: Optional=None,
+                                   max_singular_value: float=0.99,
+                                   max_power_iters: int=1,
+                                   **kwargs):
+  in_dim, dtype = x.shape[-1], x.dtype
+  if force_in_dim:
+    in_dim = force_in_dim
+
+  w_shape   = (out_dim, in_dim)
+  b_shape   = (out_dim,)
+  out_shape = (out_dim,)
+
+  def mvp(A, x):
+    return A@x
+
+  def mvpT(A, x):
+    return A.T@x
+
+  return apply_sn(mvp,
+                  mvpT,
+                  w_shape,
+                  b_shape,
+                  out_shape,
+                  dtype,
+                  w_init,
+                  b_init,
+                  name_suffix,
+                  is_training,
+                  use_bias,
+                  max_singular_value,
+                  max_power_iters)
+
+def conv_weight_with_good_spectral_norm(x: jnp.ndarray,
+                                        kernel_shape: Sequence[int],
+                                        out_channel: int,
+                                        name_suffix: str="",
+                                        w_init: Callable=None,
+                                        b_init: Callable=None,
+                                        use_bias: bool=True,
+                                        is_training: bool=True,
+                                        update_params: bool=True,
+                                        max_singular_value: float=0.95,
+                                        max_power_iters: int=1,
+                                        **conv_kwargs):
+  batch_size, H, W, C = x.shape
+  dtype = x.dtype
+  stride, padding = conv_kwargs["stride"], conv_kwargs["padding"]
+
+  w_shape   = kernel_shape + (C, out_channel)
+  b_shape   = (out_channel,)
+  out_shape = (H, W, out_channel)
+
+  def mvp(A, x):
+    return jax.lax.conv_general_dilated(x[None],
+                                        A,
+                                        window_strides=stride,
+                                        padding=padding,
+                                        dimension_numbers=("NHWC", "HWIO", "NHWC"))[0]
+
+  def mvpT(A, x):
+    return jax.lax.conv_transpose(x[None],
+                                  A,
+                                  strides=stride,
+                                  padding=padding,
+                                  dimension_numbers=("NHWC", "HWIO", "NHWC"),
+                                  transpose_kernel=True)[0]
+
+  return apply_sn(mvp,
+                  mvpT,
+                  w_shape,
+                  b_shape,
+                  out_shape,
+                  dtype,
+                  w_init,
+                  b_init,
+                  name_suffix,
+                  is_training,
+                  use_bias,
+                  max_singular_value,
+                  max_power_iters)
+
+def i2c_conv_weight_with_good_spectral_norm(x: jnp.ndarray,
+                                            kernel_shape: Sequence[int],
+                                            out_channel: int,
+                                            name_suffix: str="",
+                                            w_init: Callable=None,
+                                            b_init: Callable=None,
+                                            use_bias: bool=True,
+                                            is_training: bool=True,
+                                            update_params: bool=True,
+                                            max_singular_value: float=0.95,
+                                            max_power_iters: int=1,
+                                            **conv_kwargs):
+  batch_size, H, W, C = x.shape
+  Kx, Ky = kernel_shape
+  dtype = x.dtype
+  stride, padding = conv_kwargs["stride"], conv_kwargs["padding"]
+
+  w_shape   = (H, W, Kx, Ky, C, out_channel)
+  b_shape   = (out_channel,)
+  out_shape = (H, W, out_channel)
+
+  def mvp(A, x):
+    assert x.ndim == 3
+    out = util.apply_im2col_conv(x,
+                                  A,
+                                  filter_shape=kernel_shape,
+                                  stride=stride,
+                                  padding=padding,
+                                  lhs_dilation=(1, 1),
+                                  rhs_dilation=(1, 1),
+                                  dimension_numbers=("NHWC", "HWIO", "NHWC"),
+                                  transpose=False)
+    assert out.ndim == 3
+    return out
+
+  def mvpT(A, y):
+    assert y.ndim == 3
+    input_image = types.SimpleNamespace(shape=(H, W, C), dtype=jnp.float32)
+    mvpt = jax.linear_transpose(lambda x: mvp(A, x), input_image)
+    out = mvpt(y)[0]
+    assert out.ndim == 3
+    return out
+
+  return apply_sn(mvp,
+                  mvpT,
+                  w_shape,
+                  b_shape,
+                  out_shape,
+                  dtype,
+                  w_init,
+                  b_init,
+                  name_suffix,
+                  is_training,
+                  use_bias,
+                  max_singular_value,
+                  max_power_iters)
 
 ################################################################################################################
 
@@ -65,7 +255,7 @@ def conv_weight_with_spectral_norm(x: jnp.ndarray,
                                    use_bias: bool=True,
                                    is_training: bool=True,
                                    update_params: bool=True,
-                                   max_singular_value: float=0.8,
+                                   max_singular_value: float=0.95,
                                    max_power_iters: int=1,
                                    **conv_kwargs):
   batch_size, H, W, C = x.shape
@@ -75,8 +265,8 @@ def conv_weight_with_spectral_norm(x: jnp.ndarray,
   if use_bias:
     b = hk.get_parameter(f"b_{name_suffix}", (out_channel,), init=b_init)
 
-  u = hk.get_state(f"u_{name_suffix}", kernel_shape + (out_channel,), init=hk.initializers.RandomNormal())
-  v = hk.get_state(f"v_{name_suffix}", kernel_shape + (C,), init=hk.initializers.RandomNormal())
+  u = hk.get_state(f"u_{name_suffix}", (H, W, out_channel), init=hk.initializers.RandomNormal())
+  v = hk.get_state(f"v_{name_suffix}", (H, W, C), init=hk.initializers.RandomNormal())
   w, u, v = sn.spectral_norm_conv_apply(w,
                                         u,
                                         v,

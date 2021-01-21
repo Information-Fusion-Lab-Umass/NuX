@@ -11,3 +11,6 @@ from nux.util.optimizer import *
 from nux.util.misc import *
 from nux.util.logistic_cdf_mixture import *
 from nux.util.mmd import *
+from nux.util.batch_norm import *
+from nux.util.convolution import *
+from nux.util.levenshtein_matching import *

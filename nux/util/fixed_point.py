@@ -9,7 +9,8 @@ import haiku as hk
     and refactored to match http://www.autodiff.org/Docs/euroad/Second%20EuroAd%20Workshop%20-%20Sebastian%20Schlenkrich%20-%20Differentianting%20Fixed%20Point%20Iterations%20with%20ADOL-C.pdf"""
 
 __all__ = ["fixed_point",
-           "fixed_point_scan"]
+           "fixed_point_scan",
+           "fixed_point_while"]
 
 def fixed_point_scan(f, x_init, max_iters, relaxed=False):
 
@@ -24,8 +25,9 @@ def fixed_point_scan(f, x_init, max_iters, relaxed=False):
   (_, x), _ = jax.lax.scan(body_fun, (x_init, f(x_init)), jnp.arange(max_iters))
   return x, max_iters
 
-def _fixed_point_while(f, x_init, max_iters):
+def fixed_point_while(f, x_init, max_iters):
   atol = 1e-5
+  relaxed = True
 
   def cond_fun(val):
     x_prev, x, i = val
@@ -36,10 +38,16 @@ def _fixed_point_while(f, x_init, max_iters):
     tolerance_achieved = jnp.allclose(flat_x_prev, flat_x, atol=atol)
     return ~(max_iters_reached | tolerance_achieved)
 
-  def body_fun(val):
-    _, x, i = val
-    fx = f(x)
-    return x, fx, i + 1
+  if relaxed == False:
+    def body_fun(val):
+      _, x, i = val
+      fx = f(x)
+      return x, fx, i + 1
+  else:
+    def body_fun(val):
+      _, x, i = val
+      fx = jax.tree_multimap(lambda x, y: 0.5*x + 0.5*y, x, f(x))
+      return x, fx, i + 1
 
   _, x, N = jax.lax.while_loop(cond_fun, body_fun, (x_init, f(x_init), 0.0))
   return x, N
@@ -50,7 +58,7 @@ def fixed_point(f, u, x_init, max_iters, *nondiff_args):
   def fixed_point_iter(x):
     return f(u, x, *nondiff_args)
 
-  x, N = _fixed_point_while(fixed_point_iter, x_init, max_iters)
+  x, N = fixed_point_while(fixed_point_iter, x_init, max_iters)
   return x
 
 def fixed_point_fwd(f, u, x_init, max_iters, *nondiff_args):
@@ -68,7 +76,7 @@ def fixed_point_rev(f, ctx, dLdx):
     zetaT_dFdx, = vjp_x(zeta)
     return jax.tree_multimap(lambda x, y: x + y, dLdx, zetaT_dFdx)
 
-  zeta, N = _fixed_point_while(rev_iter, dLdx, max_iters)
+  zeta, N = fixed_point_while(rev_iter, dLdx, max_iters)
 
   _, vjp_u = jax.vjp(lambda u: f(u, x, *nondiff_args), u)
   dLdu, = vjp_u(zeta)

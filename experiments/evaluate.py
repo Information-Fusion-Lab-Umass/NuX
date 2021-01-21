@@ -110,33 +110,41 @@ def evaluate_image_model(create_model,
     inputs["y"] = doubly_batched_inputs["y"][0]
 
   flow = nux.Flow(create_model, init_key, inputs, batch_axes=(0,))
-
-  outputs = flow.apply(init_key, inputs)
-
   print("n_params", flow.n_params)
 
-  # trainer = initialize_trainer(flow,
-  #                              clip=args.clip,
-  #                              lr=args.lr,
-  #                              warmup=args.warmup,
-  #                              cosine_decay_steps=args.cosine_decay_steps,
-  #                              save_path=args.save_path,
-  #                              retrain=args.retrain,
-  #                              classification=classification)
+  # Evaluate the test set
+  trainer = initialize_trainer(flow,
+                               clip=args.clip,
+                               lr=args.lr,
+                               warmup=args.warmup,
+                               cosine_decay_steps=args.cosine_decay_steps,
+                               save_path=args.save_path,
+                               retrain=args.retrain,
+                               classification=classification)
 
-  # test_losses = sorted(trainer.test_losses.items(), key=lambda x:x[0])
-  # test_losses = jnp.array(test_losses)
+  # Generate reconstructions
+  outputs = flow.apply(init_key, inputs)
+  reconstr = flow.reconstruct(init_key, outputs, generate_image=True)
 
-  # test_ds = get_test_ds()
-  # res = trainer.evaluate_test(eval_key, test_ds, bits_per_dim=True)
-  # print("test", trainer.summarize_losses_and_aux(res))
+  # Plot the reconstructions
+  fig, axes = plt.subplots(4, 4); axes = axes.ravel()
+  for i, ax in enumerate(axes[:8]):
+    ax.imshow(reconstr["image"][i])
 
+  # Generate samples
   samples = flow.sample(eval_key, n_samples=8, generate_image=True)
-
-  fig, axes = plt.subplots(2, 4); axes = axes.ravel()
-  for i, ax in enumerate(axes):
+  for i, ax in enumerate(axes[8:]):
     ax.imshow(samples["image"][i])
 
   plt.show()
 
-  assert 0
+  import pdb; pdb.set_trace()
+
+
+  test_losses = sorted(trainer.test_losses.items(), key=lambda x:x[0])
+  test_losses = jnp.array(test_losses)
+
+  test_ds = get_test_ds()
+  res = trainer.evaluate_test(eval_key, test_ds, bits_per_dim=True)
+  print("test", trainer.summarize_losses_and_aux(res))
+

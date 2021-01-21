@@ -1,5 +1,6 @@
 from functools import partial
 import jax.numpy as jnp
+import numpy as np
 import jax
 from jax import random, jit, vmap
 import haiku as hk
@@ -7,12 +8,259 @@ from typing import Optional, Mapping, Type, Callable, Iterable, Any, Sequence, U
 import nux.util as util
 from nux.internal.layer import Layer
 import nux
+from nux.internal.functional import make_functional_modules
+from haiku._src import data_structures
+from nux.internal.base import get_constant
+import haiku._src.base as hk_base
+from haiku._src.base import ThreadLocalStack, \
+                            MutableParams, \
+                            MutableState, \
+                            PRNGSequence, \
+                            Frame, \
+                            frame_stack, \
+                            extract_state, \
+                            Stack, \
+                            ModuleState, \
+                            StatePair, \
+                            current_frame, \
+                            current_bundle_name
 
-__all__ = ["sequential",
+__all__ = ["repeat",
+           "sequential",
            "factored",
            "multi_scale",
            "reverse_flow",
            "track"]
+
+################################################################################################################
+
+def _batch_repeated_layers(params, param_hashes):
+  # Generate a mapping from hash to parameter name
+  param_hash_map = {hash(k): k for k in params.keys()}
+
+  # Go through the parameter hashes and find the order that we should
+  # batch the parameters together.
+  batched_params = {}
+  for h_base, all_hashes in param_hashes.items():
+    base_layer_name = param_hash_map[h_base]
+    batched_params[base_layer_name] = []
+    for h in all_hashes:
+      layer_name = param_hash_map[h]
+      batched_params[base_layer_name].append(params[layer_name])
+
+    # Batch the parameters
+    batched_params[base_layer_name] = jax.tree_multimap(lambda *xs: jnp.stack([*xs]), *batched_params[base_layer_name])
+
+  return batched_params
+
+class repeat(Layer):
+
+  def __init__(self,
+               layer_create_fun: Iterable[Callable],
+               n_repeats: int,
+               name: str="repeat"
+  ):
+    """ Create a flow sequentially
+    Args:
+      layers: An iterable that contains flow layers
+      name  : Optional name for this module.
+    """
+    super().__init__(name=name)
+    self.layer_create_fun = layer_create_fun
+    self.n_repeats = n_repeats
+
+  def get_parameter_and_state_names(self, layer):
+
+    # Store the names of the parameters for the scan loop
+    with make_functional_modules([layer]) as ([apply_fun], \
+                                               params, \
+                                               (state, constants, rng_seq), \
+                                               finalize):
+      bundle_name = current_bundle_name()
+
+      # Filter out the params and states that aren't a part of this repeat
+      filtered_params = {key: val for (key, val) in params.items() if key.startswith(bundle_name)}
+      filtered_state  = {key: val for (key, val) in state.items() if key.startswith(bundle_name)}
+
+      # Order the parameters correctly and separate the keys from values
+      sorted_params = sorted(filtered_params.items(), key=lambda x: x[0])
+      sorted_state  = sorted(filtered_state.items(), key=lambda x: x[0])
+
+      param_names, _ = zip(*sorted_params)
+      if len(sorted_state) == 0:
+        state_names = ()
+      else:
+        state_names, _ = zip(*sorted_state)
+
+      finalize(params, (state, constants, rng_seq))
+
+    return param_names, state_names
+
+  @hk.transparent
+  def call_no_scan(self,
+                   inputs: Mapping[str, jnp.ndarray],
+                   rng: jnp.ndarray=None,
+                   sample: Optional[bool]=False,
+                   **kwargs
+  ) -> Mapping[str, jnp.ndarray]:
+
+    # Want to make sure that we're passing all inputs/outputs to the next layer
+    final_outputs = inputs.copy()
+    log_det = 0.0
+
+    # Split the random key
+    rngs = random.split(rng, self.n_repeats) if rng is not None else [None]*self.n_repeats
+
+    # We might need to sort out what parameter names correspond to each other
+    # across repeated layers
+    init_names = False
+    if get_constant("param_state_name_hashes", value=None) is None:
+      init_names = True
+
+      # Keep track of the parameter names for a single layer call
+      layer_param_names = {}
+      layer_state_names = {}
+
+      # Keep track of the parameter names for each layer
+      used_param_names = set()
+      used_state_names = set()
+
+    # Run the rest of the layers
+    layer_inputs = inputs.copy()
+    for i, rng in enumerate(rngs):
+      layer = self.layer_create_fun()
+      outputs = layer(layer_inputs, rng, sample=sample, **kwargs)
+      layer_inputs["x"] = outputs["x"]
+      final_outputs.update(outputs)
+
+      # Remember to accumulate the outputs
+      log_det += outputs.get("log_det", 0.0)
+
+      # Match the new layers parameters with the original layer's parameters
+      if init_names:
+        param_names, state_names = self.get_parameter_and_state_names(layer)
+
+        # Find the new names
+        new_param_names = set(param_names).difference(used_param_names)
+        new_state_names = set(state_names).difference(used_state_names)
+
+        if i == 0:
+          layer_param_names = {k:[k] for k in new_param_names}
+          layer_state_names = {k:[k] for k in new_state_names}
+
+        else:
+          # Match the new names to the existing ones
+          param_matching = util.match_strings(layer_param_names.keys(), new_param_names)
+          state_matching = util.match_strings(layer_state_names.keys(), new_state_names)
+
+          # Update the layer lists
+          for k, v in param_matching.items():
+            layer_param_names[k].append(v)
+
+          for k, v in state_matching.items():
+            layer_state_names[k].append(v)
+
+        # Update the set of names that have been used
+        used_param_names.update(new_param_names)
+        used_state_names.update(new_state_names)
+
+    if init_names:
+      # Turn the strings into hashes so that they can be used in JAX
+      param_hashes = {hash(k): v for (k, v) in jax.tree_map(hash, layer_param_names).items()}
+      state_hashes = {hash(k): v for (k, v) in jax.tree_map(hash, layer_state_names).items()}
+      get_constant("param_state_name_hashes", (param_hashes, state_hashes))
+
+    # Swap in the accumulated outputs
+    final_outputs["log_det"] = log_det
+
+    return final_outputs
+
+  @hk.transparent
+  def call(self,
+           inputs: Mapping[str, jnp.ndarray],
+           rng: jnp.ndarray=None,
+           sample: Optional[bool]=False,
+           no_scan: bool=False,
+           **kwargs
+  ) -> Mapping[str, jnp.ndarray]:
+    if Layer._is_initializing:
+      return self.call_no_scan(inputs, rng, sample=sample, **kwargs)
+
+    # Want to make sure that we're passing all inputs/outputs to the next layer
+    final_outputs = inputs.copy()
+    log_det = 0.0
+
+    # Need to get the funcitonal apply fun
+    with make_functional_modules([self.layer_create_fun()]) as ([apply_fun], \
+                                                                params, \
+                                                                (state, constants, rng_seq), \
+                                                                finalize):
+      # Retrieve the hashes of the names of the parameters and states for the layer call
+      param_hashes, state_hashes = get_constant("param_state_name_hashes", None)
+
+      # Batch together the parameters and state across the repeated layers
+      scan_params = _batch_repeated_layers(params, param_hashes)
+      scan_params = data_structures.to_immutable_dict(scan_params)
+      scan_state = _batch_repeated_layers(state, state_hashes)
+
+      # Pass other inputs we might have through the network
+      shared_inputs = inputs.copy()
+      del shared_inputs["x"]
+
+      # Use a scan loop so that we only need to compile layer once!
+      def scan_body(carry, scan_inputs):
+        x = carry
+        params, state, rng = scan_inputs
+
+        # Bundle the non-parameter state together
+        bundled_state = (state, constants, rng_seq)
+
+        # Make sure that we're passing all of the inputs (such as labels) to the layer
+        inputs = shared_inputs.copy()
+        inputs["x"] = x
+
+        # Run the function
+        outputs, bundled_state = apply_fun(params, bundled_state, inputs, rng, **kwargs)
+
+        # Retrieve the state because it might have changed
+        state, _, _ = bundled_state
+
+        # Return the stuff we need
+        x = outputs["x"]
+        log_det = outputs["log_det"]
+        return x, (log_det, state)
+
+      # Run the scan function
+      rngs = random.split(rng, self.n_repeats) if rng is not None else [None]*self.n_repeats
+      x, (log_dets, batched_updated_state) = jax.lax.scan(scan_body, inputs["x"], (scan_params, scan_state, rngs))
+      log_det = log_dets.sum(axis=0)
+
+      # Convert the output of the scan into the same state data structure that was passed in.
+      hash_map = {hash(k): k for k in state.keys()}
+      rev_hash_map = {k: hash(k) for k in state.keys()}
+      updated_state = state.copy()
+      for base_layer_name, pytree in batched_updated_state.items():
+
+        # Retrieve the names of each repeated layer
+        layer_names = [hash_map[k] for k in state_hashes[rev_hash_map[base_layer_name]]]
+
+        # Split the batched parameters
+        leaves, treedef = jax.tree_flatten(batched_updated_state[base_layer_name])
+        split_states = [jax.tree_unflatten(treedef, [l[i] for l in leaves]) for i in range(self.n_repeats)]
+
+        # Update the state dictionary
+        updated_state.update(dict(zip(layer_names, split_states)))
+
+      updated_state = jax.lax.stop_gradient(updated_state)
+
+      # Only state might be different
+      bundled_state = (updated_state, constants, rng_seq)
+      finalize(params, bundled_state)
+
+    # Will make this more general later.
+    outputs = {"x": x, "log_det": log_det}
+
+    return outputs
 
 ################################################################################################################
 
@@ -241,3 +489,54 @@ class track(Layer):
     else:
       outputs[self.name] = self.reducer(flow_outputs)
     return outputs
+
+################################################################################################################
+
+if __name__ == "__main__":
+  from debug import *
+  from nux.flows.bijective.affine import ShiftScale, AffineDense, Scale
+
+  Dense = partial(AffineDense, weight_norm=False, spectral_norm=True)
+
+  def block():
+    # return ShiftScale()
+    return nux.sequential(Dense(), ShiftScale())
+
+  def create_fun(should_repeat=True, n_repeats=2):
+    if should_repeat:
+      repeated = repeat(block, n_repeats=n_repeats)
+    else:
+      repeated = nux.sequential(*[block() for _ in range(n_repeats)])
+    return repeated
+    # return sequential(ShiftScale(),
+    #                   sequential(repeated),
+    #                              Scale(0.2))
+
+  rng = random.PRNGKey(1)
+  x = random.normal(rng, (10, 7, 3))
+  inputs = {"x": x[0]}
+  flow = nux.Flow(create_fun, rng, inputs, batch_axes=(0,))
+
+  outputs1 = flow.apply(rng, inputs)
+  outputs2 = flow.apply(rng, inputs, no_scan=True)
+
+  doubly_batched_inputs = {"x": x}
+  trainer = nux.MaximumLikelihoodTrainer(flow)
+
+  trainer.grad_step(rng, inputs)
+  trainer.grad_step_for_loop(rng, doubly_batched_inputs)
+  trainer.grad_step_scan_loop(rng, doubly_batched_inputs)
+
+
+
+
+
+  rng = random.PRNGKey(1)
+  x = random.normal(rng, (10, 3))
+  inputs = {"x": x}
+  flow = nux.Flow(partial(create_fun, should_repeat=False), rng, inputs, batch_axes=(0,))
+
+  outputs3 = flow.apply(rng, inputs)
+  outputs4 = flow.apply(rng, inputs)
+
+  import pdb; pdb.set_trace()

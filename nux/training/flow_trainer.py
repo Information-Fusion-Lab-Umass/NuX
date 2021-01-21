@@ -52,7 +52,6 @@ class Trainer(ABC):
 
     # Build the value and grad function
     self.valgrad = jax.value_and_grad(self.loss, has_aux=True)
-    self.valgrad = self.valgrad
     self.valgrad = jit(self.valgrad)
 
     self.scan_train_loop = jit(partial(jax.lax.scan, partial(self.scan_grad_step, _loss_has_aux=self.loss_has_aux)))
@@ -191,6 +190,7 @@ class Trainer(ABC):
     if self.loss_has_aux == False:
       return train_loss
     else:
+      all_aux = jnp.array(all_aux)
       return train_loss, all_aux
 
   def grad_step_scan_loop(self,
@@ -284,6 +284,13 @@ class MaximumLikelihoodTrainer(Trainer):
       while True:
         key, test_key = random.split(key, 2)
         inputs = next(input_iterator)
+
+        # If we're using a residual flow, catch up estimating the singular values
+        # if our estimate is bad
+        if total_examples == 0:
+          inputs_batched = jax.tree_map(lambda x: x[0], inputs)
+          self.flow.apply(test_key, inputs_batched, is_training=True, force_update_params=True, **kwargs)
+
         outputs = self.flow.scan_apply(test_key, inputs, is_training=False, **kwargs)
 
         # Accumulate the total sum of the log likelihoods in case the batch sizes differ
@@ -348,6 +355,13 @@ class JointClassificationTrainer(Trainer):
       while True:
         key, test_key = random.split(key, 2)
         inputs = next(input_iterator)
+
+        # If we're using a residual flow, catch up estimating the singular values
+        # if our estimate is bad
+        if total_examples == 0:
+          inputs_batched = jax.tree_map(lambda x: x[0], inputs)
+          self.flow.apply(test_key, inputs_batched, is_training=True, force_update_params=True, **kwargs)
+
         outputs = self.flow.scan_apply(test_key, inputs, is_training=False, **kwargs)
 
         # Accumulate the total sum of the log likelihoods in case the batch sizes differ

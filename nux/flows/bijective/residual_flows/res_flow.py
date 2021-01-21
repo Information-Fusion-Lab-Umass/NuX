@@ -9,7 +9,7 @@ from nux.internal.layer import Layer
 from nux.internal.base import CustomFrame
 from haiku._src.typing import PRNGKey
 import nux.networks as net
-from nux.internal.functional import make_functional_modules, make_functional_modules_with_fixed_state
+from nux.internal.functional import make_functional_modules
 
 import nux.internal.functional as functional
 import haiku._src.base as hk_base
@@ -56,15 +56,15 @@ class ResidualFlow(Layer):
 
   def exact_forward(self, x, rng):
     res_fun = partial(res_flow_exact, self.res_block)
-    # res_fun = partial(res_flow_exact, self.auto_batched_res_block)
     z, log_det = self.auto_batch(res_fun, in_axes=(0, None))(x, rng)
     return z, log_det
 
   def init_if_needed(self, x, rng):
     # Before extracting the frame data, we need to make sure that the
     # network is initialized!
-    running_init_fn = not hk_base.params_frozen()
-    if running_init_fn:
+    # running_init_fn = not hk_base.params_frozen()
+    # if running_init_fn:
+    if Layer._is_initializing:
       self.auto_batched_res_block(x, rng)
 
   def forward(self, x, rng, update_params):
@@ -94,13 +94,20 @@ class ResidualFlow(Layer):
 
     # State will be held constant during the fixed point iterations
     fun = partial(self.auto_batched_res_block, update_params=False)
-    (apply_fun,), params, state = make_functional_modules_with_fixed_state([fun])
 
-    # Make sure we don't use a different random key at every step of the fixed point iterations.
-    deterministic_apply_fun = lambda params, state, x: apply_fun(params, state, x, rng)
+    with make_functional_modules([fun]) as ([apply_fun], \
+                                            params, \
+                                            state, \
+                                            finalize):
+      # Make sure we don't use a different random key at every step of the fixed point iterations.
+      deterministic_apply_fun = lambda params, state, x: apply_fun(params, state, x, rng)
 
-    # Run the fixed point iterations to invert at z.  We can do reverse-mode through this!
-    x = fixed_point(deterministic_apply_fun, params, state, z, rng)
+      # Run the fixed point iterations to invert at z.  We can do reverse-mode through this!
+      x = fixed_point(deterministic_apply_fun, params, state, z, rng)
+
+      # Update the Haiku global states
+      finalize(params, state)
+
     return x
 
   def call(self,
@@ -109,11 +116,16 @@ class ResidualFlow(Layer):
            sample: Optional[bool]=False,
            res_block_only: bool=False,
            use_exact_log_det: bool=False,
-           no_log_det:  bool=False,
+           no_log_det: bool=False,
+           force_update_params: bool=False,
            **kwargs
     ) -> Mapping[str, jnp.ndarray]:
     x_shape = self.get_unbatched_shapes(sample)["x"]
     self.res_block = self.get_network(x_shape)
+
+    # Every once in a while we might want to forcibly run a lot of power iterations
+    if force_update_params:
+      self.res_block.max_power_iters = 100
 
     if res_block_only:
       x = inputs["x"]
@@ -128,7 +140,6 @@ class ResidualFlow(Layer):
       else:
 
         update_params = True if kwargs.get("is_training", True) else False
-        # self.auto_batched_res_block(x, rng, update_params=update_params)
         z, log_det = self.forward(x, rng, update_params)
 
       outputs = {"x": z, "log_det": log_det}

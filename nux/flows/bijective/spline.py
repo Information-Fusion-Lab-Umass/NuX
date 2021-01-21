@@ -7,7 +7,7 @@ import haiku as hk
 from typing import Optional, Mapping, Callable, Sequence
 from nux.internal.layer import Layer
 import nux.util as util
-from nux.flows.bijective.coupling_base import CouplingBase
+from nux.flows.bijective.coupling_base import Elementwise
 import nux.networks as net
 
 __all__ = ["RQSpline",
@@ -168,28 +168,28 @@ class RQSpline(Layer):
     in_axes = (None, 0)
 
     if sample == False:
-      z, ew_log_det = self.auto_batch(self.forward_spline, in_axes=in_axes)(theta, x_flat)
+      z, elementwise_log_det = self.auto_batch(self.forward_spline, in_axes=in_axes)(theta, x_flat)
     else:
-      z, ew_log_det = self.auto_batch(self.inverse_spline, in_axes=in_axes)(theta, x_flat)
+      z, elementwise_log_det = self.auto_batch(self.inverse_spline, in_axes=in_axes)(theta, x_flat)
 
     z = z.reshape(x.shape)
-    ew_log_det = ew_log_det.reshape(x.shape)
+    elementwise_log_det = elementwise_log_det.reshape(x.shape)
 
     sum_axes = util.last_axes(x.shape[len(self.batch_shape):])
-    log_det = ew_log_det.sum(axis=sum_axes)
+    log_det = elementwise_log_det.sum(axis=sum_axes)
 
     return {"x": z, "log_det": log_det}
 
 ################################################################################################################
 
-class NeuralSpline(CouplingBase):
+class NeuralSpline(Elementwise):
 
   def __init__(self,
                K: int=4,
                bounds: Sequence[float]=((-10.0, 10.0), (-10.0, 10.0)),
                create_network: Optional[Callable]=None,
                axis: Optional[int]=-1,
-               split: bool=True,
+               coupling: bool=True,
                split_kind: str="channel",
                masked: bool=False,
                use_condition: bool=False,
@@ -210,7 +210,7 @@ class NeuralSpline(CouplingBase):
     """
     super().__init__(create_network=create_network,
                      axis=-1,
-                     split=split,
+                     coupling=coupling,
                      split_kind=split_kind,
                      masked=masked,
                      use_condition=use_condition,
@@ -229,7 +229,7 @@ class NeuralSpline(CouplingBase):
     out_dim = x_shape[-1]*(3*self.K - 1)
     return x_shape[:-1] + (out_dim,)
 
-  def transform(self, x, params=None, sample=False, mask=None, rng=None, **kwargs):
+  def transform(self, x, params=None, sample=False, rng=None, **kwargs):
     x_flat = x.reshape(self.batch_shape + (-1,))
     param_dim = (3*self.K - 1)
     if params is None:
@@ -241,20 +241,11 @@ class NeuralSpline(CouplingBase):
       in_axes = (0, 0)
 
     if sample == False:
-      z, ew_log_det = self.auto_batch(self.forward_spline, in_axes=in_axes)(theta, x_flat)
+      z, elementwise_log_det = self.auto_batch(self.forward_spline, in_axes=in_axes)(theta, x_flat)
     else:
-      z, ew_log_det = self.auto_batch(self.inverse_spline, in_axes=in_axes)(theta, x_flat)
+      z, elementwise_log_det = self.auto_batch(self.inverse_spline, in_axes=in_axes)(theta, x_flat)
 
     z = z.reshape(x.shape)
-    ew_log_det = ew_log_det.reshape(x.shape)
+    elementwise_log_det = elementwise_log_det.reshape(x.shape)
 
-    # If we're doing mask coupling, need to correctly mask log_s before
-    # computing the log determinant and also mask the output
-    if mask is not None:
-      z *= mask
-      ew_log_det *= mask
-
-    sum_axes = util.last_axes(x.shape[len(self.batch_shape):])
-    log_det = ew_log_det.sum(axis=sum_axes)
-
-    return z, log_det
+    return z, elementwise_log_det

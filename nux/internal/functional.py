@@ -17,10 +17,7 @@ from haiku._src.base import PRNGSequence, \
                             params_frozen
 T = TypeVar("T")
 
-__all__ = ["make_functional_modules_init",
-           "make_functional_modules",
-           # "make_functional_modules_from_fixed_frame_data",
-           "make_functional_modules_with_fixed_state"]
+__all__ = ["make_functional_modules"]
 
 ################################################################################################################
 
@@ -40,26 +37,6 @@ __all__ = ["make_functional_modules_init",
 
 ################################################################################################################
 
-def make_functional_modules_with_fixed_state(modules):
-  # This doesn't updated the state
-
-  def wrap_module(module):
-
-    def wrapped(params, bundled_state, x, rng):
-      frame_data = to_frame_data(params, bundled_state)
-      with temporary_frame_data(frame_data):
-        out = module(x, rng)
-        return out, bundled_state
-
-    return wrapped
-
-  params, bundled_state = get_params_and_bundled_state()
-  wrapped_modules = [wrap_module(module) for module in modules]
-
-  return wrapped_modules, params, bundled_state
-
-################################################################################################################
-
 @contextlib.contextmanager
 def make_functional_modules(modules):
 
@@ -75,14 +52,18 @@ def make_functional_modules(modules):
 
   did_finalize = False
   exception = None
+  original_treedef = None
 
-  def finalize(params, bundled_state):
-    update_modified_frame_data_from_args(params, bundled_state)
-    nonlocal did_finalize
+  def finalize(params, bundled_state, state_only=True):
+    nonlocal did_finalize, original_treedef
+    assert jax.tree_structure(bundled_state) == original_treedef
+    update_modified_frame_data_from_args(params, bundled_state, state_only=state_only)
     did_finalize = True
 
   try:
     params, bundled_state = get_params_and_bundled_state()
+    original_treedef = jax.tree_structure(bundled_state)
+
     wrapped_modules = [wrap_module(module) for module in modules]
 
     yield wrapped_modules, params, bundled_state, finalize
@@ -92,112 +73,6 @@ def make_functional_modules(modules):
     if exception is not None:
       raise exception
     assert did_finalize, "Did you forget to call 'finalize(frame_data)' before exiting the with statement?"
-
-################################################################################################################
-
-# @contextlib.contextmanager
-# def make_functional_modules(modules):
-
-#   def wrap_module(module):
-
-#     def wrapped(frame_data, x):
-#       with temporary_frame_data(frame_data):
-#         out = module(x)
-#         return out#, get_frame_data()
-
-#     return wrapped
-
-#   did_finalize = False
-#   exception = None
-
-#   def finalize(frame_data):
-#     update_modified_frame_data(frame_data)
-#     nonlocal did_finalize
-#     did_finalize = True
-
-#   try:
-#     frame_data = get_frame_data()
-#     wrapped_modules = [wrap_module(module) for module in modules]
-
-#     yield wrapped_modules, frame_data, finalize
-#   except Exception as e:
-#     exception = e
-#   finally:
-#     if exception is not None:
-#       raise exception
-#     assert did_finalize, "Did you forget to call 'finalize(frame_data)' before exiting the with statement?"
-
-# @contextlib.contextmanager
-# def make_functional_modules(modules):
-
-#   def wrap_module(module):
-
-#     def wrapped(frame_data, *args, **kwargs):
-#       with temporary_frame_data(frame_data):
-#         out = module(*args, **kwargs)
-#         return out#, get_frame_data()
-
-#     return wrapped
-
-#   did_finalize = False
-#   exception = None
-
-#   def finalize(frame_data):
-#     update_modified_frame_data(frame_data)
-#     nonlocal did_finalize
-#     did_finalize = True
-
-#   try:
-#     frame_data = get_frame_data()
-#     wrapped_modules = [wrap_module(module) for module in modules]
-
-#     yield wrapped_modules, frame_data, finalize
-#   except Exception as e:
-#     exception = e
-#   finally:
-#     if exception is not None:
-#       raise exception
-#     assert did_finalize, "Did you forget to call 'finalize(frame_data)' before exiting the with statement?"
-
-################################################################################################################
-
-# Wrapped is not purely functional!
-
-@contextlib.contextmanager
-def make_functional_modules_init(modules):
-
-  def wrap_module(module):
-    def wrapped(params, state, *args, **kwargs):
-      update_frame_data(params, state)
-      out = module(*args, **kwargs)
-      state = copy_structure(current_frame().state)
-      return out, state
-    return wrapped
-
-  frame_data = get_frame_data()
-  did_finalize = False
-  exception = None
-
-  def finalize_params_and_state(params, state):
-    update_frame_data(params, state)
-    nonlocal did_finalize
-    did_finalize = True
-
-  with temporary_frame_data(frame_data):
-    try:
-
-      wrapped_modules = [wrap_module(module) for module in modules]
-
-      yield wrapped_modules, frame_data.params, frame_data.state, finalize_params_and_state
-    except Exception as e:
-      exception = e
-    finally:
-      if exception is not None:
-        raise exception
-      assert did_finalize, "Did you forget to call 'finalize_params_and_state(params, state)' before exiting the with statement?"
-      modified_frame_data = difference(frame_data, get_frame_data())
-
-  update_modified_frame_data(modified_frame_data)
 
 ################################################################################################################
 
@@ -245,31 +120,16 @@ def update_recursive_skip_none(dst: MutableMapping[Any, Any], src: Mapping[Any, 
         # NOTE: We only expect `None` values thanks to `difference`.
         dst[k] = v
 
-def update_frame_data(params, state):
-  frame = current_frame()
-  if not params_frozen():
-    update_recursive_skip_none(frame.params, params)
-  update_recursive_skip_none(frame.state, state)
-
-def update_modified_frame_data(frame_data: FrameData):
-  frame = current_frame()
-  if not params_frozen():
-    update_recursive_skip_none(frame.params, frame_data.params)
-  update_recursive_skip_none(frame.state, frame_data.state)
-  if not params_frozen():
-    update_recursive_skip_none(frame.constants, frame_data.constants)
-  rng = frame_data.rng
-  if rng is not None:
-    frame.rng_stack.peek().replace_internal_state(rng)
-
-def update_modified_frame_data_from_args(params, bundled_state):
+def update_modified_frame_data_from_args(params, bundled_state, state_only=False):
   (state, constants, rng) = bundled_state
   frame = current_frame()
-  if not params_frozen():
+  if state_only == False and not params_frozen():
     update_recursive_skip_none(frame.params, params)
+    assert 0
   update_recursive_skip_none(frame.state, state)
-  if not params_frozen():
+  if state_only == False and not params_frozen():
     update_recursive_skip_none(frame.constants, constants)
+    assert 0
   rng = rng
   if rng is not None:
     frame.rng_stack.peek().replace_internal_state(rng)

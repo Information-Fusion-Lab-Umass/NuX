@@ -41,6 +41,17 @@ def data_dependent_param_init(x: jnp.ndarray,
                                                update_params=update_params,
                                                **conv_kwargs)
 
+  elif parameter_norm == "differentiable_spectral_norm":
+    return init.conv_weight_with_good_spectral_norm(x=x,
+                                                    kernel_shape=kernel_shape,
+                                                    out_channel=out_channel,
+                                                    name_suffix=name_suffix,
+                                                    w_init=w_init,
+                                                    b_init=b_init,
+                                                    use_bias=use_bias,
+                                                    is_training=is_training,
+                                                    update_params=update_params,
+                                                    **conv_kwargs)
   elif parameter_norm == "weight_norm":
     if x.shape[0] > 1:
       return init.conv_weight_with_weight_norm(x,
@@ -80,6 +91,8 @@ class Conv(hk.Module):
                use_bias: bool=True,
                transpose: bool=False,
                zero_init: bool=False,
+               max_singular_value: float=0.95,
+               max_power_iters: int=1,
                name=None):
     super().__init__(name=name)
     self.out_channel = out_channel
@@ -103,13 +116,19 @@ class Conv(hk.Module):
     self.dimension_numbers = ('NHWC', 'HWIO', 'NHWC')
 
     self.transpose = transpose
+    self.max_singular_value = max_singular_value
+    self.max_power_iters    = max_power_iters
 
-    self.conv_kwargs = dict(stride=self.stride,
-                            padding=self.padding,
-                            lhs_dilation=self.lhs_dilation,
-                            rhs_dilation=self.rhs_dilation,
-                            dimension_numbers=self.dimension_numbers,
-                            transpose=self.transpose)
+  @property
+  def conv_kwargs(self):
+    return dict(stride=self.stride,
+                padding=self.padding,
+                lhs_dilation=self.lhs_dilation,
+                rhs_dilation=self.rhs_dilation,
+                dimension_numbers=self.dimension_numbers,
+                transpose=self.transpose,
+                max_singular_value=self.max_singular_value,
+                max_power_iters=self.max_power_iters)
 
   def __call__(self, x, is_training=True, **kwargs):
     # This function assumes that the input is batched!
@@ -157,6 +176,8 @@ class RepeatedConv(hk.Module):
                dropout_rate: Optional[float]=None,
                gate: bool=True,
                activate_last: bool=False,
+               max_singular_value: float=0.95,
+               max_power_iters: int=1,
                name=None):
     super().__init__(name=name)
 
@@ -167,15 +188,17 @@ class RepeatedConv(hk.Module):
     self.gate          = gate
     self.activate_last = activate_last
 
-    self.conv_kwargs = dict(parameter_norm=parameter_norm,
-                            stride=stride,
-                            padding=padding,
-                            lhs_dilation=lhs_dilation,
-                            rhs_dilation=rhs_dilation,
-                            w_init=w_init,
-                            b_init=b_init,
-                            use_bias=use_bias,
-                            transpose=False)
+
+    self.parameter_norm = parameter_norm
+    self.stride = stride
+    self.padding = padding
+    self.lhs_dilation = lhs_dilation
+    self.rhs_dilation = rhs_dilation
+    self.w_init = w_init
+    self.b_init = b_init
+    self.use_bias = use_bias
+    self.max_singular_value = max_singular_value
+    self.max_power_iters = max_power_iters
 
     if nonlinearity == "relu":
       self.nonlinearity = jax.nn.relu
@@ -192,6 +215,9 @@ class RepeatedConv(hk.Module):
 
     if normalization == "batch_norm":
       self.norm = lambda name: hk.BatchNorm(name=name, create_scale=True, create_offset=True, decay_rate=0.9, data_format="channels_last")
+
+    elif normalization == "mean_only_batch_norm":
+      self.norm = lambda name: util.BatchNorm(name=name, create_scale=False, create_offset=True, decay_rate=0.9, mean_only=True, data_format="channels_last")
 
     elif normalization == "instance_norm":
       def norm(name):
@@ -211,6 +237,20 @@ class RepeatedConv(hk.Module):
 
     else:
       self.norm = None
+
+  @property
+  def conv_kwargs(self):
+    return dict(parameter_norm=self.parameter_norm,
+                stride=self.stride,
+                padding=self.padding,
+                lhs_dilation=self.lhs_dilation,
+                rhs_dilation=self.rhs_dilation,
+                w_init=self.w_init,
+                b_init=self.b_init,
+                use_bias=self.use_bias,
+                transpose=False,
+                max_singular_value=self.max_singular_value,
+                max_power_iters=self.max_power_iters)
 
   def __call__(self, x, rng, aux=None, is_training=True, **kwargs):
     # This function assumes that the input is batched!
@@ -264,6 +304,8 @@ class BottleneckConv(RepeatedConv):
                gate: bool=True,
                use_bias: bool=False,
                activate_last: bool=False,
+               max_singular_value: float=0.95,
+               max_power_iters: int=1,
                name=None):
 
     channel_sizes = [hidden_channel, hidden_channel, out_channel]
@@ -278,6 +320,8 @@ class BottleneckConv(RepeatedConv):
                      dropout_rate=dropout_rate,
                      gate=gate,
                      activate_last=activate_last,
+                     max_singular_value=max_singular_value,
+                     max_power_iters=max_power_iters,
                      name=name)
 
 class ReverseBottleneckConv(RepeatedConv):
@@ -292,6 +336,8 @@ class ReverseBottleneckConv(RepeatedConv):
                gate: bool=True,
                use_bias: bool=False,
                activate_last: bool=False,
+               max_singular_value: float=0.95,
+               max_power_iters: int=1,
                name=None):
 
     channel_sizes = [hidden_channel, hidden_channel, out_channel]
@@ -306,6 +352,8 @@ class ReverseBottleneckConv(RepeatedConv):
                      dropout_rate=dropout_rate,
                      gate=gate,
                      activate_last=activate_last,
+                     max_singular_value=max_singular_value,
+                     max_power_iters=max_power_iters,
                      name=name)
 
 ################################################################################################################
@@ -327,6 +375,8 @@ class CNN(hk.Module):
                use_bias: bool=True,
                gate: bool=False,
                gate_final: bool=True,
+               max_singular_value: float=0.95,
+               max_power_iters: int=1,
                name=None):
     super().__init__(name=name)
 
@@ -337,7 +387,9 @@ class CNN(hk.Module):
                                   dropout_rate=dropout_rate,
                                   use_bias=use_bias,
                                   gate=gate,
-                                  activate_last=True)
+                                  activate_last=True,
+                                  max_singular_value=max_singular_value,
+                                  max_power_iters=max_power_iters)
     self.hidden_channel = hidden_channel
     self.parameter_norm = parameter_norm
     self.normalization  = normalization
@@ -352,6 +404,9 @@ class CNN(hk.Module):
     self.use_bias       = use_bias
     self.gate           = gate
     self.gate_final     = gate_final
+
+    self.max_singular_value = max_singular_value
+    self.max_power_iters    = max_power_iters
 
     self.working_channel = working_channel if working_channel is not None else hidden_channel
 
@@ -380,7 +435,9 @@ class CNN(hk.Module):
                   padding="SAME",
                   parameter_norm=self.parameter_norm,
                   use_bias=self.use_bias,
-                  zero_init=self.zero_init)
+                  zero_init=self.zero_init,
+                  max_singular_value=self.max_singular_value,
+                  max_power_iters=self.max_power_iters)
       ab = conv(x, is_training=is_training)
       a, b = jnp.split(ab, 2, axis=-1)
       x = a*jax.nn.sigmoid(b)
@@ -391,7 +448,9 @@ class CNN(hk.Module):
                   padding="SAME",
                   parameter_norm=self.parameter_norm,
                   use_bias=self.use_bias,
-                  zero_init=self.zero_init)
+                  zero_init=self.zero_init,
+                  max_singular_value=self.max_singular_value,
+                  max_power_iters=self.max_power_iters)
       x = conv(x, is_training=is_training)
 
     return x

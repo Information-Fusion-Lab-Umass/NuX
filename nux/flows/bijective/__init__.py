@@ -4,7 +4,8 @@ from nux.flows.bijective.conv import *
 from nux.flows.bijective.maf import *
 from nux.flows.bijective.nonlinearities import *
 from nux.flows.bijective.reshape import *
-from nux.flows.bijective.coupling import *
+from nux.flows.bijective.coupling_base import *
+from nux.flows.bijective.real_nvp import *
 from nux.flows.bijective.spline import *
 from nux.flows.bijective.residual_flows import *
 from nux.flows.bijective.mixture import *

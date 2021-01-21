@@ -25,6 +25,8 @@ class ResNet(hk.Module):
                gate: bool=False,
                gate_final: bool=True,
                use_bias: bool=True,
+               max_singular_value: float=0.95,
+               max_power_iters: int=1,
                name=None):
     super().__init__(name=name)
 
@@ -34,7 +36,10 @@ class ResNet(hk.Module):
                                   nonlinearity=nonlinearity,
                                   dropout_rate=dropout_rate,
                                   gate=gate,
-                                  use_bias=use_bias)
+                                  use_bias=use_bias,
+                                  activate_last=True,
+                                  max_singular_value=max_singular_value,
+                                  max_power_iters=max_power_iters)
     self.hidden_channel = hidden_channel
     self.parameter_norm = parameter_norm
     self.normalization  = normalization
@@ -48,6 +53,9 @@ class ResNet(hk.Module):
     self.use_bias       = use_bias
     self.gate           = gate
     self.gate_final     = gate_final
+
+    self.max_singular_value = max_singular_value
+    self.max_power_iters    = max_power_iters
 
     if block_type == "bottleneck":
       self.conv_block = BottleneckConv

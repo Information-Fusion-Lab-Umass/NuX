@@ -107,8 +107,8 @@ class ShiftScale(Layer):
     else:
       outputs["x"] = s*x + b
 
-    log_det = jnp.broadcast_to(-jnp.log(s), x_shape)
-    outputs["log_det"] = log_det.sum()
+    log_det = -jnp.log(s).sum()*jnp.ones(self.batch_shape)
+    outputs["log_det"] = log_det
 
     return outputs
 
@@ -195,6 +195,7 @@ class AffineDense(Layer):
                weight_norm: bool=True,
                spectral_norm: bool=False,
                max_singular_value: float=1.0,
+               max_power_iters: int=1,
                name: str="affine_dense",
                **kwargs
   ):
@@ -207,6 +208,7 @@ class AffineDense(Layer):
     self.spectral_norm = spectral_norm
     self.weight_norm = weight_norm
     self.max_singular_value = max_singular_value
+    self.max_power_iters = max_power_iters
 
   def call(self,
            inputs: Mapping[str, jnp.ndarray],
@@ -227,14 +229,15 @@ class AffineDense(Layer):
                                           is_training=kwargs.get("is_training", True),
                                           use_bias=True)
     elif self.spectral_norm:
-      W, b = init.weight_with_spectral_norm(x,
-                                            out_dim=x_dim,
-                                            w_init=hk.initializers.RandomNormal(0.1),
-                                            b_init=jnp.zeros,
-                                            is_training=kwargs.get("is_training", True),
-                                            update_params=kwargs.get("is_training", True),
-                                            max_singular_value=self.max_singular_value,
-                                            use_bias=True)
+      W, b = init.weight_with_good_spectral_norm(x,
+                                                 out_dim=x_dim,
+                                                 w_init=hk.initializers.RandomNormal(0.1),
+                                                 b_init=jnp.zeros,
+                                                 is_training=kwargs.get("is_training", True),
+                                                 update_params=kwargs.get("is_training", True),
+                                                 max_singular_value=self.max_singular_value,
+                                                 max_power_iters=self.max_power_iters,
+                                                 use_bias=True)
     else:
       W_init = hk.initializers.TruncatedNormal(1/jnp.sqrt(x_dim))
       W = hk.get_parameter("W", shape=(x_dim, x_dim), dtype=dtype, init=W_init)
@@ -253,8 +256,8 @@ class AffineDense(Layer):
 ################################################################################################################
 
 tri_solve = jax.scipy.linalg.solve_triangular
-L_solve = jax.jit(partial(tri_solve, lower=True, unit_diagonal=True))
-U_solve = jax.jit(partial(tri_solve, lower=False, unit_diagonal=True))
+L_solve = partial(tri_solve, lower=True, unit_diagonal=True)
+U_solve = partial(tri_solve, lower=False, unit_diagonal=True)
 
 class AffineLDU(Layer):
 

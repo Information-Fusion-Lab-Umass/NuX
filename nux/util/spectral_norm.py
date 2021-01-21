@@ -21,7 +21,6 @@ def check_spectral_norm(pytree):
 
 ################################################################################################################
 
-@jit
 def spectral_norm_iter(W, uv):
   """ Perform a single spectral norm iteration """
   u, v = uv
@@ -35,7 +34,6 @@ def spectral_norm_iter(W, uv):
 
   return (u, v)
 
-@partial(jit, static_argnums=(4, 5))
 def spectral_norm_apply(W: jnp.ndarray,
                         u: jnp.ndarray,
                         v: jnp.ndarray,
@@ -87,7 +85,6 @@ def spectral_norm_conv_iter(W, uv, stride, padding):
 
   return (u, v)
 
-# @partial(jit, static_argnums=(3, 4, 6, 7))
 def spectral_norm_conv_apply(W: jnp.ndarray,
                              u: jnp.ndarray,
                              v: jnp.ndarray,
@@ -106,15 +103,20 @@ def spectral_norm_conv_apply(W: jnp.ndarray,
       (u, v) = util.fixed_point(body, W, (u, v), 5000)
 
     else:
+      while_loop = False
+      if while_loop == False:
+        # For loops are way faster than scan on GPUs when n_iters is low
+        for i in range(n_iters):
+          uv = spectral_norm_conv_iter(W, (u, v), stride, padding)
 
-      # For loops are way faster than scan on GPUs when n_iters is low
-      for i in range(n_iters):
-        uv = spectral_norm_conv_iter(W, (u, v), stride, padding)
-
-        # Relaxation method
-        # https://hal-cea.archives-ouvertes.fr/cea-01403292/file/residual-method.pdf Eq.(8)
-        u = 0.5*uv[0] + 0.5*u
-        v = 0.5*uv[1] + 0.5*v
+          # Relaxation method
+          # https://hal-cea.archives-ouvertes.fr/cea-01403292/file/residual-method.pdf Eq.(8)
+          u = 0.5*uv[0] + 0.5*u
+          v = 0.5*uv[1] + 0.5*v
+      else:
+        assert 0, "This causes memory usage to blow up!"
+        body = partial(spectral_norm_conv_iter, stride=stride, padding=padding)
+        (u, v) = util.fixed_point(body, W, (u, v), 20)
 
     u = jax.lax.stop_gradient(u)
     v = jax.lax.stop_gradient(v)
@@ -127,3 +129,78 @@ def spectral_norm_conv_apply(W: jnp.ndarray,
   factor = jnp.where(scale < sigma, scale/sigma, 1.0)
 
   return W*factor, u, v
+
+################################################################################################################
+
+def f(mvp, A, x):
+  y_hat = mvp(A, x)
+  y_norm = jax.lax.rsqrt(jnp.sum(y_hat**2))
+  y = y_hat*y_norm
+  return y, y_hat
+
+def F(mvp, mvpT, ut, W):
+  vt, _ = f(mvpT, W, ut)
+  utp1, utp1_hat = f(mvp, W, vt)
+  return utp1, (vt, utp1_hat)
+
+@partial(jax.custom_jvp, nondiff_argnums=(0, 1))
+def max_singular_value(mvp, mvpT, W, ut, zt):
+  utp1, vjp, (vt, utp1_hat) = jax.vjp(partial(F, mvp, mvpT), ut, W, has_aux=True)
+  sigma = jnp.vdot(ut, utp1_hat)
+
+  vjp_u, _ = vjp(zt)
+  ztp1 = utp1_hat + vjp_u
+
+  return sigma, utp1, ztp1
+
+@max_singular_value.defjvp
+def max_singular_value_jvp(mvp, mvpT, primals, tangents):
+  W, ut, zt = primals
+  utp1, vjp, (vt, utp1_hat) = jax.vjp(partial(F, mvp, mvpT), ut, W, has_aux=True)
+
+  # Use this so that we can compute the outer product when we're doing convolutions
+  sigma, uvT = jax.value_and_grad(lambda W: jnp.vdot(ut, mvp(W, vt)))(W)
+
+  vjp_u, vjp_W = vjp(zt)
+  ztp1 = utp1_hat + vjp_u
+  dsigma = uvT + vjp_W
+
+  tangent_out = jnp.sum(tangents[0]*dsigma)
+
+  return (sigma, utp1, ztp1), (tangent_out, jnp.zeros_like(utp1), jnp.zeros_like(ztp1))
+
+if __name__ == "__main__":
+  from debug import *
+
+  def loss(W_hat):
+    return (jnp.sin(W_hat)**2).sum()
+
+  def truth(W):
+    sigma = jnp.linalg.svd(W, compute_uv=False)[0]
+    W_hat = W/sigma
+    return loss(W_hat)
+
+  def mvp(A, x):
+    return A@x
+
+  def mvpT(A, x):
+    return A.T@x
+
+  def comp(W, u, z):
+    sigma, u, z = max_singular_value(mvp, mvpT, W, u, z)
+    W_hat = W/sigma
+    (u, z) = jax.lax.stop_gradient((u, z))
+    return loss(W_hat), (u, z)
+
+  key = random.PRNGKey(0)
+  dim1, dim2 = 4, 3
+  W = random.normal(key, (dim1, dim2))
+  u, z = random.normal(key, (2, dim1))
+
+  for i in range(100):
+    sigma, u, z = max_singular_value(mvp, mvpT, W, u, z)
+
+  dW_true = jax.grad(truth)(W)
+  dW_comp, (u, z) = jax.grad(comp, has_aux=True)(W, u, z)
+
+  import pdb; pdb.set_trace()

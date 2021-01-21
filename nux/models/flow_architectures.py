@@ -135,7 +135,7 @@ def RealNVP(n_checkerboard_splits=3,
             create_network=None,
             one_dim=False):
 
-  coupling_algorithm = partial(nux.Coupling,
+  coupling_algorithm = partial(nux.RealNVP,
                                kind="affine",
                                masked=masked_coupling,
                                apply_to_both_halves=apply_transform_to_both_halves,
@@ -158,7 +158,7 @@ def GLOW(n_checkerboard_splits=3,
          create_network=None,
          one_dim=False):
 
-  coupling_algorithm = partial(nux.Coupling,
+  coupling_algorithm = partial(nux.RealNVP,
                                kind="affine",
                                masked=masked_coupling,
                                apply_to_both_halves=apply_transform_to_both_halves,

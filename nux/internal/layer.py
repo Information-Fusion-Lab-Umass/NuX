@@ -46,11 +46,13 @@ def get_tree_shapes(name: str,
 class Layer(hk.Module, ABC):
 
   batch_axes = ()
+  _is_initializing = False
 
   def __init__(self,
                name=None,
                invertible_ad=False,
-               use_flow_norm_init=False):
+               use_flow_norm_init=False,
+               monitor_stats=False):
     """ This base class will keep track of the input and output shapes of each function call
         so that we can know the batch size of inputs and automatically use vmap to make unbatched
         code work with batched code.
@@ -58,6 +60,7 @@ class Layer(hk.Module, ABC):
     super().__init__(name=name)
     self.invertible_ad = invertible_ad
     self.use_flow_norm_init = use_flow_norm_init
+    self.monitor_stats = monitor_stats
 
   def get_unbatched_shapes(self, sample):
     if sample == False:
@@ -107,6 +110,13 @@ class Layer(hk.Module, ABC):
 
     if self.use_flow_norm_init:
       self.flow_norm_init(inputs, rng, sample, **kwargs)
+
+    if self.monitor_stats:
+      x_mean, x_std = outputs["x"].mean(), outputs["x"].std()
+      if "log_det" in outputs:
+        llc_mean, llc_std = outputs["log_det"].mean(), outputs["log_det"].std()
+      elif "log_pz" in outputs:
+        llcmean, llcstd = outputs["log_pz"].mean(), outputs["log_pz"].std()
 
     # print(self, outputs["x"].mean(), outputs["x"].std())
 
@@ -254,6 +264,7 @@ def transform_flow_from_fun(fun) -> TransformedWithState:
     with new_custom_context(rng=rng) as ctx:
       # Load the batch axes for the inputs
       Layer.batch_axes = batch_axes
+      Layer._is_initializing = True
 
       key = hk.next_rng_key()
 
@@ -262,6 +273,7 @@ def transform_flow_from_fun(fun) -> TransformedWithState:
 
       # Unset the batch axes
       Layer.batch_axes = ()
+      Layer._is_initializing = False
 
     nonlocal constants
     params, state, constants = ctx.collect_params(), ctx.collect_initial_state(), ctx.collect_constants()
@@ -309,6 +321,7 @@ def transform_flow(create_fun) -> TransformedWithState:
 
       # Load the batch axes for the inputs
       Layer.batch_axes = batch_axes
+      Layer._is_initializing = True
 
       key = hk.next_rng_key()
 
@@ -317,6 +330,7 @@ def transform_flow(create_fun) -> TransformedWithState:
 
       # Unset the batch axes
       Layer.batch_axes = ()
+      Layer._is_initializing = False
 
     nonlocal constants
     params, state, constants = ctx.collect_params(), ctx.collect_initial_state(), ctx.collect_constants()
