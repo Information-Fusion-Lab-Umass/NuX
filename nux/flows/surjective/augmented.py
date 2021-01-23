@@ -146,6 +146,7 @@ class ZeroPaddingChannel(Layer):
                generative_only: bool=False,
                flow: Optional[Callable]=None,
                create_network: Optional[Callable]=None,
+               create_feature_network: Optional[Callable]=None,
                network_kwargs: Optional=None,
                name: str="zero_padding",
                **kwargs):
@@ -157,6 +158,7 @@ class ZeroPaddingChannel(Layer):
     self.flow           = flow
     self.network_kwargs = network_kwargs
     self.create_network = create_network
+    self.create_feature_network = create_feature_network
     super().__init__(name=name, **kwargs)
 
   @property
@@ -210,7 +212,7 @@ class ZeroPaddingChannel(Layer):
 
   def make_features(self, x, rng):
     # return x
-    network = self.create_network(self.input_shape)
+    network = self.create_feature_network(self.input_shape)
     return self.auto_batch(network, expected_depth=1, in_axes=(0, None))(x, rng)
 
   def call(self,
@@ -240,7 +242,7 @@ class ZeroPaddingChannel(Layer):
       z, noise = x[...,:self.small_dim], x[...,self.small_dim:]
 
       # Extract features to condition on
-      f = self.make_features(z, k1)
+      f = self.make_features(z, k1) if self.create_feature_network is not None else z
 
       flow_inputs = {"x": noise, "condition": f}
       outputs = flow(flow_inputs, k2, sample=False)
@@ -249,7 +251,7 @@ class ZeroPaddingChannel(Layer):
 
     else:
       # Extract features to condition on
-      f = self.make_features(x, k1)
+      f = self.make_features(x, k1) if self.create_feature_network is not None else x
 
       flow_inputs = {"x": jnp.zeros(self.batch_shape + noise_shape), "condition": f}
       outputs = flow(flow_inputs, k2, sample=True)

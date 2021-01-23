@@ -262,7 +262,7 @@ U_solve = partial(tri_solve, lower=False, unit_diagonal=True)
 class AffineLDU(Layer):
 
   def __init__(self,
-               safe_diag: bool=False,
+               safe_diag: bool=True,
                name: str="affine_ldu"
   ):
     """ LDU parametrized matrix multiplication.  Costs O(D^2) to invert and O(D) for a regular pass.

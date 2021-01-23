@@ -9,4 +9,3 @@ from nux.flows.bijective.real_nvp import *
 from nux.flows.bijective.spline import *
 from nux.flows.bijective.residual_flows import *
 from nux.flows.bijective.mixture import *
-from nux.flows.bijective.continuously_indexed import *

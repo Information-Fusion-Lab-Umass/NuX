@@ -16,13 +16,13 @@ class ActNorm(Layer):
 
   def __init__(self,
                axis=-1,
-               safe_diag: bool=False,
+               safe_diag: bool=True,
                name: str="act_norm"
   ):
     """ Act norm.  Used in GLOW https://arxiv.org/pdf/1807.03039.pdf
     Args:
       axis: Axes to normalize over.  -1 will normalize over the channel dim like in GLOW,
-            (-1, -2, -3) will normalize over every dimension like in Flow++
+            (-3, -2, -1) will normalize over every dimension like in Flow++
       name: Optional name for this module.
     """
     super().__init__(name=name)

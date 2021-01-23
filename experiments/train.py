@@ -55,7 +55,9 @@ def train_model(create_model,
                                       args.n_batches,
                                       args.test_batch_size,
                                       args.test_n_batches,
-                                      quantize_bits=args.quantize_bits)
+                                      quantize_bits=args.quantize_bits,
+                                      classification=classification,
+                                      label_keep_percent=args.percent_labeled)
 
   doubly_batched_inputs = next(train_ds)
 

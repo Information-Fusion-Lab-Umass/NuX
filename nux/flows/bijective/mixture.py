@@ -306,7 +306,7 @@ class _LogisticMixtureLogitMixin():
   def __init__(self,
                n_components: int=4,
                restrict_scales: bool=True,
-               safe_diag: bool=False,
+               safe_diag: bool=True,
                name: str="logistic_mixture_cdf_logit",
                **kwargs
   ):
