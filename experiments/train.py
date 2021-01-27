@@ -57,7 +57,8 @@ def train_model(create_model,
                                       args.test_n_batches,
                                       quantize_bits=args.quantize_bits,
                                       classification=classification,
-                                      label_keep_percent=args.percent_labeled)
+                                      label_keep_percent=args.label_keep_percent,
+                                      random_label_percent=args.random_label_percent)
 
   doubly_batched_inputs = next(train_ds)
 
@@ -81,6 +82,7 @@ def train_model(create_model,
                trainer,
                train_ds,
                get_test_ds,
+               max_iters=args.max_iters,
                save_path=args.save_path,
                eval_interval=args.eval_interval,
                bits_per_dim=image,
@@ -93,12 +95,13 @@ def train(train_key,
           trainer,
           train_ds,
           get_test_ds,
+          max_iters=1e7,
           save_path=None,
           eval_interval=None,
           classification=False,
           bits_per_dim=False):
 
-  pbar = tqdm.tqdm(jnp.arange(1e7))
+  pbar = tqdm.tqdm(jnp.arange(int(max_iters)))
   for i in pbar:
 
     train_key, key = random.split(train_key, 2)

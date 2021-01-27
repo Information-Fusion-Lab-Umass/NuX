@@ -4,7 +4,7 @@ from functools import partial
 
 __all__ = ["multiscale_architecture",
            "FlatLogisticCDFMixtureFlow",
-           "RealNVP",
+           "RealNVPModel",
            "GLOW",
            "FlowPlusPlus"]
 
@@ -126,7 +126,7 @@ def multiscale_architecture(coupling_algorithm,
                             glow=glow,
                             one_dim=False)
 
-def RealNVP(n_checkerboard_splits=3,
+def RealNVPModel(n_checkerboard_splits=3,
             n_channel_splits=3,
             n_scales=3,
             masked_coupling=True,

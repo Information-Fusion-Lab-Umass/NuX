@@ -22,7 +22,10 @@ def evaluate_2d_model(create_model,
                                       args.n_batches,
                                       args.test_batch_size,
                                       args.test_n_batches,
-                                      quantize_bits=args.quantize_bits)
+                                      quantize_bits=args.quantize_bits,
+                                      classification=classification,
+                                      label_keep_percent=1.0,
+                                      random_label_percent=0.0)
 
   doubly_batched_inputs = next(train_ds)
   inputs = {"x": doubly_batched_inputs["x"][0]}
@@ -59,30 +62,48 @@ def evaluate_2d_model(create_model,
   data = doubly_batched_inputs["x"].reshape((-1, 2))
   (xmin, ymin), (xmax, ymax) = data.min(axis=0), data.max(axis=0)
   xspread, yspread = xmax - xmin, ymax - ymin
-  xmin -= 0.1*xspread
-  xmax += 0.1*xspread
-  ymin -= 0.1*yspread
-  ymax += 0.1*yspread
+  xmin -= 0.25*xspread
+  xmax += 0.25*xspread
+  ymin -= 0.25*yspread
+  ymax += 0.25*yspread
 
   # Plot the samples against the true samples and also a dentisy plot
-  fig, (ax1, ax2, ax3, ax4) = plt.subplots(1, 4, figsize=(28, 7))
-  ax1.scatter(*data.T); ax1.set_title("True Samples")
-  ax2.scatter(*samples["x"].T, alpha=0.2, s=3, c=samples["prediction"]); ax2.set_title("Learned Samples")
-  ax1.set_xlim(xmin, xmax); ax1.set_ylim(ymin, ymax)
-  ax2.set_xlim(xmin, xmax); ax2.set_ylim(ymin, ymax)
+  if "prediction" in samples:
+    fig, (ax1, ax2, ax3, ax4) = plt.subplots(1, 4, figsize=(28, 7))
+    ax1.scatter(*data.T); ax1.set_title("True Samples")
+    ax2.scatter(*samples["x"].T, alpha=0.2, s=3, c=samples["prediction"]); ax2.set_title("Learned Samples")
+    ax1.set_xlim(xmin, xmax); ax1.set_ylim(ymin, ymax)
+    ax2.set_xlim(xmin, xmax); ax2.set_ylim(ymin, ymax)
 
-  n_importance_samples = 100
-  x_range, y_range = jnp.linspace(xmin, xmax, 100), jnp.linspace(ymin, ymax, 100)
-  X, Y = jnp.meshgrid(x_range, y_range); XY = jnp.dstack([X, Y]).reshape((-1, 2))
-  XY = jnp.broadcast_to(XY[None,...], (n_importance_samples,) + XY.shape)
-  outputs = flow.scan_apply(eval_key, {"x": XY})
-  outputs["log_px"] = jax.scipy.special.logsumexp(outputs["log_px"], axis=0) - jnp.log(n_importance_samples)
-  outputs["prediction"] = jnp.mean(outputs["prediction"], axis=0)
+    n_importance_samples = 100
+    x_range, y_range = jnp.linspace(xmin, xmax, 100), jnp.linspace(ymin, ymax, 100)
+    X, Y = jnp.meshgrid(x_range, y_range); XY = jnp.dstack([X, Y]).reshape((-1, 2))
+    XY = jnp.broadcast_to(XY[None,...], (n_importance_samples,) + XY.shape)
+    outputs = flow.scan_apply(eval_key, {"x": XY})
+    outputs["log_px"] = jax.scipy.special.logsumexp(outputs["log_px"], axis=0) - jnp.log(n_importance_samples)
+    outputs["prediction"] = jnp.mean(outputs["prediction"], axis=0)
 
-  Z = jnp.exp(outputs["log_px"])
-  ax3.contourf(X, Y, Z.reshape(X.shape))
-  ax4.contourf(X, Y, outputs["prediction"].reshape(X.shape))
-  plt.show()
+    Z = jnp.exp(outputs["log_px"])
+    ax3.contourf(X, Y, Z.reshape(X.shape))
+    ax4.contourf(X, Y, outputs["prediction"].reshape(X.shape))
+    plt.show()
+  else:
+    fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(21, 7))
+    ax1.scatter(*data.T); ax1.set_title("True Samples")
+    ax2.scatter(*samples["x"].T, alpha=0.2, s=3); ax2.set_title("Learned Samples")
+    ax1.set_xlim(xmin, xmax); ax1.set_ylim(ymin, ymax)
+    ax2.set_xlim(xmin, xmax); ax2.set_ylim(ymin, ymax)
+
+    n_importance_samples = 100
+    x_range, y_range = jnp.linspace(xmin, xmax, 100), jnp.linspace(ymin, ymax, 100)
+    X, Y = jnp.meshgrid(x_range, y_range); XY = jnp.dstack([X, Y]).reshape((-1, 2))
+    XY = jnp.broadcast_to(XY[None,...], (n_importance_samples,) + XY.shape)
+    outputs = flow.scan_apply(eval_key, {"x": XY})
+    outputs["log_px"] = jax.scipy.special.logsumexp(outputs["log_px"], axis=0) - jnp.log(n_importance_samples)
+
+    Z = jnp.exp(outputs["log_px"])
+    ax3.contourf(X, Y, Z.reshape(X.shape))
+    plt.show()
 
   assert 0
 
@@ -101,7 +122,10 @@ def evaluate_image_model(create_model,
                                       args.n_batches,
                                       args.test_batch_size,
                                       args.test_n_batches,
-                                      quantize_bits=args.quantize_bits)
+                                      quantize_bits=args.quantize_bits,
+                                      classification=classification,
+                                      label_keep_percent=1.0,
+                                      random_label_percent=0.0)
 
   doubly_batched_inputs = next(train_ds)
   inputs = {"x": doubly_batched_inputs["x"][0]}

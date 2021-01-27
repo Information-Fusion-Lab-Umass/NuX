@@ -112,7 +112,7 @@ class Elementwise(Layer, ABC):
         warnings.warn("Using 'nin' conditioning method on 1d inputs is currently not supported.")
       network_out = self.auto_batch(self.network, expected_depth=1, in_axes=(0, None, 0))(x, key, condition)
     else:
-      network_in = jnp.concatenate([x, condition], axis=self.axis) if self.use_condition else x
+      network_in = jnp.concatenate([x, condition], axis=self.axis) if condition is not None else x
       network_out = self.auto_batch(self.network, expected_depth=1, in_axes=(0, None))(network_in, key)
     return network_out
 

@@ -43,7 +43,7 @@ def apply_sn(mvp,
   factor = jnp.where(max_singular_value < sigma, max_singular_value/sigma, 1.0)
   w = w*factor
 
-  if is_training == True or running_init_fn:
+  if is_training == True or w_exists == False:
     hk.set_state(f"u_{name_suffix}", u)
     hk.set_state(f"zeta_{name_suffix}", zeta)
 

@@ -34,7 +34,7 @@ __all__ = ["repeat",
 
 ################################################################################################################
 
-def _batch_repeated_layers(params, param_hashes):
+def _batch_repeated_layers(params, param_hashes, sample=False):
   # Generate a mapping from hash to parameter name
   param_hash_map = {hash(k): k for k in params.keys()}
 
@@ -49,7 +49,10 @@ def _batch_repeated_layers(params, param_hashes):
       batched_params[base_layer_name].append(params[layer_name])
 
     # Batch the parameters
-    batched_params[base_layer_name] = jax.tree_multimap(lambda *xs: jnp.stack([*xs]), *batched_params[base_layer_name])
+    if sample == False:
+      batched_params[base_layer_name] = jax.tree_multimap(lambda *xs: jnp.stack([*xs]), *batched_params[base_layer_name])
+    else:
+      batched_params[base_layer_name] = jax.tree_multimap(lambda *xs: jnp.stack([*(xs[::-1])]), *batched_params[base_layer_name])
 
   return batched_params
 
@@ -199,9 +202,9 @@ class repeat(Layer):
       param_hashes, state_hashes = get_constant("param_state_name_hashes", None)
 
       # Batch together the parameters and state across the repeated layers
-      scan_params = _batch_repeated_layers(params, param_hashes)
+      scan_params = _batch_repeated_layers(params, param_hashes, sample=sample)
       scan_params = data_structures.to_immutable_dict(scan_params)
-      scan_state = _batch_repeated_layers(state, state_hashes)
+      scan_state = _batch_repeated_layers(state, state_hashes, sample=sample)
 
       # Pass other inputs we might have through the network
       shared_inputs = inputs.copy()
@@ -220,20 +223,21 @@ class repeat(Layer):
         inputs["x"] = x
 
         # Run the function
-        outputs, bundled_state = apply_fun(params, bundled_state, inputs, rng, **kwargs)
+        outputs, bundled_state = apply_fun(params, bundled_state, inputs, rng, sample=sample, **kwargs)
 
         # Retrieve the state because it might have changed
         state, _, _ = bundled_state
 
         # Return the stuff we need
         x = outputs["x"]
-        log_det = outputs["log_det"]
-        return x, (log_det, state)
+        del outputs["x"]
+        return x, (outputs, state)
 
       # Run the scan function
       rngs = random.split(rng, self.n_repeats) if rng is not None else [None]*self.n_repeats
-      x, (log_dets, batched_updated_state) = jax.lax.scan(scan_body, inputs["x"], (scan_params, scan_state, rngs))
-      log_det = log_dets.sum(axis=0)
+      x, (batched_outputs, batched_updated_state) = jax.lax.scan(scan_body, inputs["x"], (scan_params, scan_state, rngs))
+      log_det = batched_outputs["log_det"].sum(axis=0)
+      del batched_outputs["log_det"]
 
       # Convert the output of the scan into the same state data structure that was passed in.
       hash_map = {hash(k): k for k in state.keys()}
@@ -257,8 +261,8 @@ class repeat(Layer):
       bundled_state = (updated_state, constants, rng_seq)
       finalize(params, bundled_state)
 
-    # Will make this more general later.
     outputs = {"x": x, "log_det": log_det}
+    outputs.update(batched_outputs)
 
     return outputs
 
@@ -282,7 +286,7 @@ class sequential(Layer):
            inputs: Mapping[str, jnp.ndarray],
            rng: jnp.ndarray=None,
            sample: Optional[bool]=False,
-           accumulate: Iterable[str]=["log_det"],
+           accumulate: Iterable[str]=["log_det", "aux_loss"],
            **kwargs
   ) -> Mapping[str, jnp.ndarray]:
 
@@ -344,7 +348,7 @@ class factored(Layer):
            inputs: Mapping[str, jnp.ndarray],
            rng: jnp.ndarray=None,
            sample: Optional[bool]=False,
-           accumulate: Iterable[str]=["log_det"],
+           accumulate: Iterable[str]=["log_det", "aux_loss"],
            **kwargs
   ) -> Mapping[str, jnp.ndarray]:
 

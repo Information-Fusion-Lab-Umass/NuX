@@ -24,6 +24,7 @@ class ZeroPadding(Layer):
                generative_only: bool=False,
                flow: Optional[Callable]=None,
                create_network: Optional[Callable]=None,
+               create_feature_network: Optional[Callable]=None,
                network_kwargs: Optional=None,
                name: str="zero_padding",
                **kwargs):
@@ -35,6 +36,7 @@ class ZeroPadding(Layer):
     self.flow           = flow
     self.network_kwargs = network_kwargs
     self.create_network = create_network
+    self.create_feature_network = create_feature_network
     super().__init__(name=name, **kwargs)
 
   @property
@@ -76,7 +78,7 @@ class ZeroPadding(Layer):
                                              network_kwargs=self.network_kwargs,
                                              create_network=self.create_network,
                                              use_condition=True,
-                                             split=False,
+                                             coupling=True,
                                              condition_method="concat"),
                             nux.AffineLDU(safe_diag=True))
 
@@ -86,6 +88,11 @@ class ZeroPadding(Layer):
                           nux.ParametrizedGaussianPrior(network_kwargs=self.network_kwargs,
                                                         create_network=self.create_network))
 
+  def make_features(self, x, rng):
+    # return x
+    network = self.create_feature_network(self.input_shape)
+    return self.auto_batch(network, expected_depth=1, in_axes=(0, None))(x, rng)
+
   def call(self,
            inputs: Mapping[str, jnp.ndarray],
            rng: PRNGKey,
@@ -93,6 +100,9 @@ class ZeroPadding(Layer):
            no_noise: Optional[bool]=False,
            **kwargs
   ) -> Mapping[str, jnp.ndarray]:
+    k1, k2 = random.split(rng, 2)
+
+    assert self.big_dim - self.small_dim > 0
 
     # Figure out which direction we should go
     if sample == False:
@@ -108,30 +118,29 @@ class ZeroPadding(Layer):
     flow = self.flow if self.flow is not None else self.default_flow()
     noise_dim = self.big_dim - self.small_dim
 
-    captured_output = None
-
     if big_to_small:
       z, noise = x[...,:self.small_dim], x[...,self.small_dim:]
-      captured_output = x
 
-      flow_inputs = {"x": noise, "condition": z}
-      outputs = flow(flow_inputs, rng, sample=False)
+      # Extract features to condition on
+      f = self.make_features(z, k1) if self.create_feature_network is not None else z
+
+      flow_inputs = {"x": noise, "condition": f}
+      outputs = flow(flow_inputs, k2, sample=False)
       log_pepsgs = outputs["log_det"] + outputs["log_pz"]
       log_det += log_pepsgs
 
     else:
-      flow_inputs = {"x": jnp.zeros(self.batch_shape + (noise_dim,)), "condition": x}
-      outputs = flow(flow_inputs, rng, sample=True)
+      # Extract features to condition on
+      f = self.make_features(x, k1) if self.create_feature_network is not None else x
+
+      flow_inputs = {"x": jnp.zeros(self.batch_shape + (noise_dim,)), "condition": f}
+      outputs = flow(flow_inputs, k2, sample=True)
 
       noise = outputs["x"]
 
       z = jnp.concatenate([x, noise], axis=-1)
       log_qepsgs = outputs["log_det"] + outputs["log_pz"]
       log_det -= log_qepsgs
-
-    if captured_output is not None:
-      return {"x": z, "log_det": log_det, "captured_output": captured_output}
-
 
     return {"x": z, "log_det": log_det}
 

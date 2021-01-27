@@ -170,6 +170,7 @@ class RectangularMVP(Layer):
                                                     network_kwargs=self.network_kwargs)
 
     #######################
+    assert self.big_dim - self.small_dim > 0
 
     # Initialize the tall or wide matrix.  We might want to choose to parametrize a tall
     # matrix as the pseudo-inverse of a wide matrix or vice-versa.  B is wide and A is tall.
