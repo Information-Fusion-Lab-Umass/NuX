@@ -5,7 +5,7 @@ from jax import random, vmap
 from functools import partial
 import haiku as hk
 from typing import Optional, Mapping, Callable, Sequence
-from nux.internal.layer import Layer
+from nux.internal.layer import InvertibleLayer
 import nux.util as util
 from jax.scipy.special import logsumexp
 import nux.networks as net
@@ -179,7 +179,7 @@ class _MixtureCDFMixin(ABC):
 
 ################################################################################################################
 
-class MixtureCDF(_MixtureCDFMixin, Layer):
+class MixtureCDF(_MixtureCDFMixin, InvertibleLayer):
 
   def call(self,
            inputs: Mapping[str, jnp.ndarray],

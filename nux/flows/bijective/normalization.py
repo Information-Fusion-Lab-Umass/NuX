@@ -5,14 +5,14 @@ from jax import random, vmap
 from functools import partial
 import haiku as hk
 from typing import Optional, Mapping
-from nux.internal.layer import Layer
+from nux.internal.layer import InvertibleLayer
 import nux.util as util
 
 __all__ = ["ActNorm"]
 
 ################################################################################################################
 
-class ActNorm(Layer):
+class ActNorm(InvertibleLayer):
 
   def __init__(self,
                axis=-1,

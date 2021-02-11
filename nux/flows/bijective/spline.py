@@ -5,7 +5,7 @@ from jax import random, vmap, jit
 from functools import partial
 import haiku as hk
 from typing import Optional, Mapping, Callable, Sequence
-from nux.internal.layer import Layer
+from nux.internal.layer import InvertibleLayer
 import nux.util as util
 from nux.flows.bijective.coupling_base import Elementwise
 import nux.networks as net
@@ -132,7 +132,7 @@ def spline(theta: jnp.ndarray,
 
 ################################################################################################################
 
-class RQSpline(Layer):
+class RQSpline(InvertibleLayer):
 
   def __init__(self,
                K: int=4,

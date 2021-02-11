@@ -5,15 +5,15 @@ from jax import random, vmap, jit
 from functools import partial
 import haiku as hk
 from typing import Optional, Mapping, Sequence
+from nux.internal.layer import Layer
 import nux.util as util
 from jax.scipy.special import logsumexp
-# import nux.weight_initializers
 import nux.util.weight_initializers as init
 import nux.networks as net
 
 __all__ = ["MADE"]
 
-class MADE(hk.Module):
+class MADE(Layer):
 
   def __init__(self,
                input_sel,
@@ -93,6 +93,10 @@ class MADE(hk.Module):
   def get_params(i, x, output_size):
     w_init = hk.initializers.VarianceScaling(scale=1.0, mode="fan_avg", distribution="truncated_normal")
 
+    # Pass a singly batched input to the parameter functions.
+    # Don't use autobatching here because we might end up reducing
+    x, reshape = self.make_singly_batched(x)
+
     if self.parameter_norm == "weight_norm":
       w, b = init.weight_with_weight_norm(x=x,
                                           out_dim=output_size,
@@ -113,16 +117,22 @@ class MADE(hk.Module):
       w = hk.get_parameter(f"w_{i}", (output_size, x.shape[-1]), x.dtype, init=w_init)
       b = hk.get_parameter(f"b_{i}", (output_size,), init=jnp.zeros)
 
+    # x = reshape(x)
+
     return w.T, b
 
-  def __call__(self, inputs, rng, **kwargs):
-
+  def call(self,
+           inputs,
+           rng=None,
+           is_training=True,
+           update_params=True,
+           **kwargs):
 
     if self.triangular_jacobian:
       dx = jnp.ones_like(inputs)
 
     # Main autoregressive transform
-    x = inputs
+    x = inputs["x"]
     layer_sizes = [self.dim] + self.hidden_layer_sizes + [self.dim]
     self.gen_masks(self.input_sel, layer_sizes[1:], rng)
 
@@ -164,4 +174,4 @@ class MADE(hk.Module):
     alpha = jnp.dot(x, w_alpha*self.out_mask)
     alpha_bounded = jnp.tanh(alpha)
 
-    return mu, alpha_bounded
+    return {"mu": mu, "alpha": alpha_bounded}

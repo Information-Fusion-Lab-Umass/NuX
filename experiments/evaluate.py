@@ -147,22 +147,20 @@ def evaluate_image_model(create_model,
                                classification=classification)
 
   # Generate reconstructions
-  outputs = flow.apply(init_key, inputs)
+  outputs = flow.apply(init_key, inputs, is_training=False)
   reconstr = flow.reconstruct(init_key, outputs, generate_image=True)
 
   # Plot the reconstructions
   fig, axes = plt.subplots(4, 4); axes = axes.ravel()
   for i, ax in enumerate(axes[:8]):
-    ax.imshow(reconstr["image"][i])
+    ax.imshow(reconstr["image"][i].squeeze())
 
   # Generate samples
   samples = flow.sample(eval_key, n_samples=8, generate_image=True)
   for i, ax in enumerate(axes[8:]):
-    ax.imshow(samples["image"][i])
+    ax.imshow(samples["image"][i].squeeze())
 
   plt.show()
-
-  import pdb; pdb.set_trace()
 
 
   test_losses = sorted(trainer.test_losses.items(), key=lambda x:x[0])
@@ -172,3 +170,4 @@ def evaluate_image_model(create_model,
   res = trainer.evaluate_test(eval_key, test_ds, bits_per_dim=True)
   print("test", trainer.summarize_losses_and_aux(res))
 
+  import pdb; pdb.set_trace()

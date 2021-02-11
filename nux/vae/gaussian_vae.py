@@ -4,7 +4,7 @@ import jax.numpy as jnp
 from functools import partial
 import nux.util as util
 from typing import Optional, Mapping, Callable, Sequence
-from nux.internal.layer import Layer
+from nux.internal.layer import Layer, InvertibleLayer
 import haiku as hk
 from haiku._src.typing import PRNGKey
 from jax.scipy.special import gammaln, logsumexp
@@ -38,14 +38,14 @@ class ParametrizedGaussian(Layer):
   def call(self,
            inputs: Mapping[str, jnp.ndarray],
            rng: PRNGKey,
-           sample: Optional[bool]=False,
            no_noise: Optional[bool]=False,
            **kwargs
   ) -> Mapping[str, jnp.ndarray]:
     network = self.get_generator_network()
 
-    network_in = inputs["x"]
-    network_out = self.auto_batch(network, expected_depth=1, in_axes=(0, None))(network_in, rng)
+    # network_in = inputs["x"]
+    network_out = network(inputs, rng)["x"]
+    # network_out = self.auto_batch(network, expected_depth=1, in_axes=(0, None))(network_in, rng)
     mu, log_diag_cov = jnp.split(network_out, 2, axis=-1)
 
     diag_cov = util.proximal_relu(log_diag_cov) + 1e-5
@@ -53,7 +53,7 @@ class ParametrizedGaussian(Layer):
 
     x = mu
     if no_noise == False:
-      x += random.normal(rng, mu.shape)*jnp.exp(0.5*log_diag_cov)
+      x += random.normal(rng, mu.shape)*jnp.sqrt(diag_cov)
 
     outputs = {"x": x,
                "mu": mu,
@@ -63,7 +63,7 @@ class ParametrizedGaussian(Layer):
 
 ################################################################################################################
 
-class GaussianVAE(Layer):
+class GaussianVAE(InvertibleLayer):
 
   def __init__(self,
                output_dim: int,

@@ -5,7 +5,7 @@ from jax import random, vmap
 from functools import partial
 import haiku as hk
 from typing import Optional, Mapping, Callable, Sequence
-from nux.internal.layer import Layer
+from nux.internal.layer import InvertibleLayer
 import nux.util as util
 from jax.scipy.special import logsumexp
 from haiku._src.typing import PRNGKey
@@ -16,7 +16,7 @@ __all__ = ["UnitGaussianPrior",
            "AffineGaussianPriorDiagCov",
            "GMMPrior"]
 
-class UnitGaussianPrior(Layer):
+class UnitGaussianPrior(InvertibleLayer):
 
   def __init__(self,
                name: str="unit_gaussian_prior"
@@ -50,7 +50,7 @@ class UnitGaussianPrior(Layer):
 
 ################################################################################################################
 
-class ParametrizedGaussianPrior(Layer):
+class ParametrizedGaussianPrior(InvertibleLayer):
 
   def __init__(self,
                create_network: Optional[Callable]=None,
@@ -110,7 +110,7 @@ class ParametrizedGaussianPrior(Layer):
 
 ################################################################################################################
 
-class AffineGaussianPriorDiagCov(Layer):
+class AffineGaussianPriorDiagCov(InvertibleLayer):
 
   def __init__(self,
                output_dim: int,
@@ -233,7 +233,7 @@ class AffineGaussianPriorDiagCov(Layer):
 
 ################################################################################################################
 
-class GMMPrior(Layer):
+class GMMPrior(InvertibleLayer):
 
   def __init__(self,
                n_classes: int,

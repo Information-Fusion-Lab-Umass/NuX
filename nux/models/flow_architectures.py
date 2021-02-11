@@ -192,13 +192,22 @@ def FlowPlusPlus(n_components=32,
                                network_kwargs=network_kwargs,
                                create_network=create_network)
 
-  architecture = ["chk"]*n_checkerboard_splits_before + \
-                 ["sq"] + ["chnl"]*n_channel_splits + \
-                 ["chk"]*n_checkerboard_splits_after
+  architecture = ["chk"]*n_checkerboard_splits_before
+
+  if one_dim == False:
+    architecture += ["sq"]
+
+  architecture += ["chnl"]*n_channel_splits
+  architecture += ["chk"]*n_checkerboard_splits_after
+
+  if one_dim:
+    actnorm_axes = (-1,)
+  else:
+    actnorm_axes = (-3, -2, -1)
 
   return build_architecture(architecture,
                             coupling_algorithm,
                             actnorm=True,
-                            actnorm_axes=(-3, -2, -1),
+                            actnorm_axes=actnorm_axes,
                             glow=True,
-                            one_dim=False)
+                            one_dim=one_dim)

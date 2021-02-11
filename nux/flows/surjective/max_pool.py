@@ -4,7 +4,7 @@ import jax.numpy as jnp
 from functools import partial
 import nux.util as util
 from typing import Optional, Mapping, Callable, Sequence
-from nux.internal.layer import Layer
+from nux.internal.layer import InvertibleLayer
 import haiku as hk
 from haiku._src.typing import PRNGKey
 import nux
@@ -101,7 +101,7 @@ def contruct_from_max_elts(max_elts, non_max_elts, max_idx, non_max_idx):
 
 ################################################################################################################
 
-class MaxPool(Layer):
+class MaxPool(InvertibleLayer):
 
   def __init__(self,
                decoder: Callable=None,

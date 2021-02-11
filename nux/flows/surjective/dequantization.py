@@ -5,7 +5,7 @@ from jax import random, vmap
 from functools import partial
 import haiku as hk
 from typing import Optional, Mapping, Callable
-from nux.internal.layer import Layer
+from nux.internal.layer import InvertibleLayer
 import nux.util as util
 import nux
 from haiku._src.typing import PRNGKey
@@ -13,7 +13,7 @@ from haiku._src.typing import PRNGKey
 __all__ = ["UniformDequantization",
            "VariationalDequantization"]
 
-class UniformDequantization(Layer):
+class UniformDequantization(InvertibleLayer):
 
   def __init__(self,
                n_samples: int=1,
@@ -60,7 +60,7 @@ class UniformDequantization(Layer):
 
 ################################################################################################################
 
-class VariationalDequantization(Layer):
+class VariationalDequantization(InvertibleLayer):
   def __init__(self,
                flow: Optional[Callable]=None,
                network_kwargs: Optional=None,

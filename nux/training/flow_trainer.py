@@ -2,7 +2,7 @@ from functools import partial
 import jax.numpy as jnp
 import jax
 from jax import random, jit, vmap
-from nux.internal.layer import Flow
+from nux.internal.flow import Flow
 import nux.util as util
 from typing import Optional, Mapping, Callable, Sequence, Tuple, Any
 from haiku._src.typing import Params, State, PRNGKey
@@ -146,7 +146,7 @@ class Trainer(ABC):
                 key: PRNGKey,
                 inputs: Mapping[str, jnp.ndarray],
                 **kwargs):
-    carry = (self.flow.params, self.state, self.opt_state)
+    carry = (self.params, self.state, self.opt_state)
     carry, (train_loss, aux) = self.scan_grad_step(carry, (key, inputs), **kwargs)
     self.params, self.state, self.opt_state = carry
 

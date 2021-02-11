@@ -45,9 +45,10 @@ class BatchNorm(hk.BatchNorm):
       self,
       inputs: jnp.ndarray,
       is_training: bool,
-      test_local_stats: bool = False,
-      scale: Optional[jnp.ndarray] = None,
-      offset: Optional[jnp.ndarray] = None,
+      test_local_stats: bool=False,
+      scale: Optional[jnp.ndarray]=None,
+      offset: Optional[jnp.ndarray]=None,
+      return_lipschitz_const: bool=False,
   ) -> jnp.ndarray:
     """Computes the normalized version of the input.
     Args:
@@ -125,6 +126,14 @@ class BatchNorm(hk.BatchNorm):
     if self.mean_only == False:
       eps = jax.lax.convert_element_type(self.eps, var.dtype)
       inv = scale * jax.lax.rsqrt(var + eps)
-      return (inputs - mean) * inv + offset
+      ret = (inputs - mean) * inv + offset
+      lip = jnp.max(inv)
     else:
-      return inputs - mean + offset
+      ret = inputs - mean + offset
+      lip = 1.0
+
+    if return_lipschitz_const:
+      return ret, lip
+
+    return ret
+

@@ -4,24 +4,11 @@ import jax
 from jax import random, jit, vmap
 import haiku as hk
 from abc import ABC, abstractmethod
-import warnings
 from typing import Optional, Mapping, Type, Callable, Iterable, Any, Sequence, Union, Tuple, MutableMapping, NamedTuple, Set, TypeVar
-import nux.util as util
-from nux.internal.base import get_constant, new_custom_context
-from nux.internal.functional import make_functional_modules
-
+from nux.internal.base import get_constant
 from haiku._src.typing import PRNGKey, Params, State
-from haiku._src.transform import TransformedWithState, \
-                                 to_prng_sequence, \
-                                 check_mapping, \
-                                 INIT_RNG_ERROR, \
-                                 APPLY_RNG_STATE_ERROR, \
-                                 APPLY_RNG_ERROR
 
-__all__ = ["Layer",
-           "transform_flow",
-           "transform_flow_from_fun",
-           "Flow"]
+__all__ = ["Layer"]
 
 ################################################################################################################
 
@@ -50,79 +37,70 @@ class Layer(hk.Module, ABC):
 
   def __init__(self,
                name=None,
-               invertible_ad=False,
-               use_flow_norm_init=False,
                monitor_stats=False):
     """ This base class will keep track of the input and output shapes of each function call
         so that we can know the batch size of inputs and automatically use vmap to make unbatched
         code work with batched code.
     """
     super().__init__(name=name)
-    self.invertible_ad = invertible_ad
-    self.use_flow_norm_init = use_flow_norm_init
     self.monitor_stats = monitor_stats
 
-  def get_unbatched_shapes(self, sample):
-    if sample == False:
-      return self.unbatched_input_shapes
-    else:
-      return self.unbatched_output_shapes
+  def monitor_layer_stats(self, inputs, outputs):
+    assert 0, "Not implemented"
+
+  def get_unbatched_shapes(self):
+    return self.unbatched_input_shapes
 
   def __call__(self,
                inputs: Mapping[str, jnp.ndarray],
                rng: jnp.ndarray=None,
-               sample: Optional[bool]=False,
                **kwargs
     ) -> Mapping[str, jnp.ndarray]:
 
     batch_axes = Layer.batch_axes
 
-    if sample == False:
-      self.unbatched_input_shapes = get_tree_shapes("unbatched_input_shapes", inputs, batch_axes=batch_axes)
-      self.unbatched_output_shapes = get_tree_shapes("unbatched_output_shapes", None, batch_axes=batch_axes, do_not_set=True)
-    else:
-      self.unbatched_input_shapes = get_tree_shapes("unbatched_input_shapes", None, batch_axes=batch_axes, do_not_set=True)
-      self.unbatched_output_shapes = get_tree_shapes("unbatched_output_shapes", inputs, batch_axes=batch_axes)
+    self.unbatched_input_shapes = get_tree_shapes("unbatched_input_shapes", inputs, batch_axes=batch_axes)
+    self.unbatched_output_shapes = get_tree_shapes("unbatched_output_shapes", None, batch_axes=batch_axes, do_not_set=True)
 
     # For convenience, also get the batch axes
     try:
-      if sample == False:
-        self.batch_shape = inputs["x"].shape[:-len(self.unbatched_input_shapes["x"])]
-      else:
-        self.batch_shape = inputs["x"].shape[:-len(self.unbatched_output_shapes["x"])]
+      self.batch_shape = inputs["x"].shape[:-len(self.unbatched_input_shapes["x"])]
     except:
-      if sample == False:
-        self.batch_shape = jax.tree_leaves(inputs["x"])[0].shape[:-len(self.unbatched_input_shapes["x"][0])]
-      else:
-        self.batch_shape = jax.tree_leaves(inputs["x"])[0].shape[:-len(self.unbatched_output_shapes["x"][0])]
+      self.batch_shape = jax.tree_leaves(inputs["x"])[0].shape[:-len(self.unbatched_input_shapes["x"][0])]
 
     # Run the actual function
-    if self.invertible_ad == False:
-      outputs = self.call(inputs, rng, sample=sample, **kwargs)
-    else:
-      assert 0, "Not implemented"
+    outputs = self.call(inputs, rng, **kwargs)
 
-    if sample == False:
-      # Keep track of the initial output shapes
-      get_tree_shapes("unbatched_output_shapes", outputs, batch_axes=batch_axes)
-    else:
-      get_tree_shapes("unbatched_input_shapes", outputs, batch_axes=batch_axes)
-
-    if self.use_flow_norm_init:
-      self.flow_norm_init(inputs, rng, sample, **kwargs)
+    # Keep track of the initial output shapes
+    get_tree_shapes("unbatched_output_shapes", outputs, batch_axes=batch_axes)
 
     if self.monitor_stats:
-      x_mean, x_std = outputs["x"].mean(), outputs["x"].std()
-      if "log_det" in outputs:
-        llc_mean, llc_std = outputs["log_det"].mean(), outputs["log_det"].std()
-      elif "log_pz" in outputs:
-        llcmean, llcstd = outputs["log_pz"].mean(), outputs["log_pz"].std()
-
-    # print(self, outputs["x"].mean(), outputs["x"].std())
+      self.monitor_layer_stats(inputs, outputs)
 
     return outputs
 
-  def auto_batch(self, fun, in_axes=None, out_axes=None, expected_depth=None):
+  def make_singly_batched(self, x):
+    x_shape = self.unbatched_input_shapes["x"]
+
+    if len(self.batch_shape) > 1:
+      x = jax.tree_map(lambda x: x.reshape((-1,) + x_shape), x)
+      def reshape(x):
+        return jax.tree_map(lambda x: x.reshape(self.batch_shape + x_shape), x)
+
+    elif len(self.batch_shape) == 0:
+      x = jax.tree_map(lambda x: x[None], x)
+      def reshape(x):
+        return jax.tree_map(lambda x: x[0], x)
+    else:
+      reshape = lambda x: x
+
+    return x, reshape
+
+  def auto_batch(self,
+                 fun,
+                 in_axes=None,
+                 out_axes=None,
+                 expected_depth=None):
 
     vmap_kwargs = {}
     if in_axes is not None:
@@ -182,7 +160,6 @@ class Layer(hk.Module, ABC):
   def call(self,
            inputs: Mapping[str, jnp.ndarray],
            rng: jnp.ndarray=None,
-           sample: Optional[bool]=False,
            **kwargs
     ) -> Mapping[str, jnp.ndarray]:
     """ The expectation is that inputs will be a dicionary with
@@ -190,325 +167,81 @@ class Layer(hk.Module, ABC):
         can be passed in too """
     pass
 
-  def flow_norm_init(self,
-                     inputs: Mapping[str, jnp.ndarray],
-                     rng: jnp.ndarray=None,
-                     sample: Optional[bool]=False,
-                     **kwargs):
-    """ Initialize this layer so that its outputs are normally distributed
-    """
-
-    # Check if we've set flow norm (will be False the first time)
-    flow_norm_set = get_constant("flow_norm_set", False, do_not_set=True)
-
-    # Set that we're checking
-    get_constant("flow_norm_set", True, do_not_set=False)
-
-    if not flow_norm_set:
-      # Train this layer over the input batch to generate a unit normal output
-
-      def loss_fun(inputs, rng, sample=False, **kwargs):
-        outputs = self(inputs, rng, sample=sample, **kwargs)
-        z = outputs["x"]
-
-        @self.auto_batch
-        def unit_gaussian(z):
-          return -0.5*jnp.sum(z.ravel()**2) # + const
-        log_pz = unit_gaussian(z)
-
-        log_px = log_pz + outputs["log_det"]
-        return -log_px.mean()
-
-      with make_functional_modules([loss_fun]) as ([apply_fun], \
-                                                   params, \
-                                                   state, \
-                                                   finalize_params_and_state):
-        import optax
-        opt_init, opt_update = optax.adam(learning_rate=1e-4)
-        opt_state = opt_init(params)
-        opt_update = jit(opt_update)
-
-        grad_fun = jax.value_and_grad(apply_fun, has_aux=True)
-        grad_fun = partial(grad_fun, sample=sample, **kwargs)
-        grad_fun = jit(grad_fun)
-
-        import tqdm
-        pbar = tqdm.tqdm(list(enumerate(random.split(rng, 200))))
-        for i, rng in pbar:
-          (loss, state), grad = grad_fun(params, state, inputs, rng)
-          updates, opt_state = opt_update(grad, opt_state, params)
-          if jnp.any(jnp.isnan(jax.flatten_util.ravel_pytree(updates)[0])):
-            break
-          params = jit(optax.apply_updates)(params, updates)
-
-          pbar.set_description(f"loss: {loss}")
-
-        finalize_params_and_state(params, state)
-
 ################################################################################################################
 
-def transform_flow_from_fun(fun) -> TransformedWithState:
+class InvertibleLayer(Layer):
 
-  # We will keep the expected shapes for the flow here so that
-  # JAX will compile these constants
-  constants = None
-
-  def init_fn(rng: Optional[Union[PRNGKey]],
-              inputs: Mapping[str, jnp.ndarray],
-              batch_axes=(),
-              return_initial_output=False,
-              **kwargs
-  ) -> Tuple[Params, State]:
-    """ Initializes your function collecting parameters and state. """
-    rng = to_prng_sequence(rng, err_msg=INIT_RNG_ERROR)
-    with new_custom_context(rng=rng) as ctx:
-      # Load the batch axes for the inputs
-      Layer.batch_axes = batch_axes
-      Layer._is_initializing = True
-
-      key = hk.next_rng_key()
-
-      # Initialize the model
-      outputs = fun(inputs, key, **kwargs)
-
-      # Unset the batch axes
-      Layer.batch_axes = ()
-      Layer._is_initializing = False
-
-    nonlocal constants
-    params, state, constants = ctx.collect_params(), ctx.collect_initial_state(), ctx.collect_constants()
-
-    if return_initial_output:
-      return params, state, outputs
-
-    return params, state
-
-  def apply_fn(params: Optional[Params],
-               state: Optional[State],
-               rng: Optional[Union[PRNGKey]],
-               inputs,
-               **kwargs
-  ) -> Tuple[Any, State]:
-    """ Applies your function injecting parameters and state. """
-    params = check_mapping("params", params)
-    state = check_mapping("state", state)
-
-    rng = to_prng_sequence(rng, err_msg=(APPLY_RNG_STATE_ERROR if state else APPLY_RNG_ERROR))
-    with new_custom_context(params=params, state=state, constants=constants, rng=rng) as ctx:
-      key = hk.next_rng_key()
-      out = fun(inputs, key, **kwargs)
-    return out, ctx.collect_state()
-
-  return TransformedWithState(init_fn, apply_fn)
-
-def transform_flow(create_fun) -> TransformedWithState:
-
-  # We will keep the expected shapes for the flow here so that
-  # JAX will compile these constants
-  constants = None
-
-  def init_fn(rng: Optional[Union[PRNGKey]],
-              inputs: Mapping[str, jnp.ndarray],
-              batch_axes=(),
-              return_initial_output=False,
-              **kwargs
-  ) -> Tuple[Params, State]:
-    """ Initializes your function collecting parameters and state. """
-    rng = to_prng_sequence(rng, err_msg=INIT_RNG_ERROR)
-    with new_custom_context(rng=rng) as ctx:
-      # Create the model
-      model = create_fun()
-
-      # Load the batch axes for the inputs
-      Layer.batch_axes = batch_axes
-      Layer._is_initializing = True
-
-      key = hk.next_rng_key()
-
-      # Initialize the model
-      outputs = model(inputs, key, **kwargs)
-
-      # Unset the batch axes
-      Layer.batch_axes = ()
-      Layer._is_initializing = False
-
-    nonlocal constants
-    params, state, constants = ctx.collect_params(), ctx.collect_initial_state(), ctx.collect_constants()
-
-    if return_initial_output:
-      return params, state, outputs
-
-    return params, state
-
-  def apply_fn(params: Optional[Params],
-               state: Optional[State],
-               rng: Optional[Union[PRNGKey]],
-               inputs,
-               **kwargs
-  ) -> Tuple[Any, State]:
-    """ Applies your function injecting parameters and state. """
-    params = check_mapping("params", params)
-    state = check_mapping("state", state)
-
-    rng = to_prng_sequence(rng, err_msg=(APPLY_RNG_STATE_ERROR if state else APPLY_RNG_ERROR))
-    with new_custom_context(params=params, state=state, constants=constants, rng=rng) as ctx:
-      model = create_fun()
-      key = hk.next_rng_key()
-      out = model(inputs, key, **kwargs)
-    return out, ctx.collect_state()
-
-  return TransformedWithState(init_fn, apply_fn)
-
-################################################################################################################
-
-class Flow():
-  """ Convenience class to wrap a Layer class
-
-      Args:
-          flow     - A Flow object.
-          clip     - How much to clip gradients.  This is crucial for stable training!
-          warmup   - How much to warm up the learning rate.
-          lr_decay - Learning rate decay.
-          lr       - Max learning rate.
-  """
   def __init__(self,
-               create_fun: Callable,
-               key: PRNGKey,
-               inputs: Mapping[str,jnp.ndarray],
-               batch_axes: Sequence[int],
-               check_for_bad_init: Optional[bool]=True,
-               **kwargs):
+               name=None,
+               invertible_ad=False,
+               monitor_stats=False):
+    """ This base class will keep track of the input and output shapes of each function call
+        so that we can know the batch size of inputs and automatically use vmap to make unbatched
+        code work with batched code.
+    """
+    super().__init__(monitor_stats=monitor_stats,
+                     name=name)
+    self.invertible_ad = invertible_ad
 
-    self._flow = transform_flow(create_fun)
-    self.params, self.state, outputs = self._flow.init(key,
-                                                       inputs,
-                                                       batch_axes=batch_axes,
-                                                       return_initial_output=True)
+  def get_unbatched_shapes(self, sample):
+    if sample == False:
+      return self.unbatched_input_shapes
+    else:
+      return self.unbatched_output_shapes
 
-    if check_for_bad_init:
-      self.check_init(outputs)
+  def __call__(self,
+               inputs: Mapping[str, jnp.ndarray],
+               rng: jnp.ndarray=None,
+               sample: Optional[bool]=False,
+               **kwargs
+    ) -> Mapping[str, jnp.ndarray]:
 
-    self.n_params = jax.flatten_util.ravel_pytree(self.params)[0].size
+    batch_axes = Layer.batch_axes
 
-    self.data_shape   = inputs["x"].shape[len(batch_axes):]
-    self.latent_shape = outputs["x"].shape[len(batch_axes):]
-    self.scan_apply_loop = jit(partial(jax.lax.scan, partial(self.scan_body, is_training=True)))
-    self.scan_apply_test_loop = jit(partial(jax.lax.scan, partial(self.scan_body, is_training=False)))
+    if sample == False:
+      self.unbatched_input_shapes = get_tree_shapes("unbatched_input_shapes", inputs, batch_axes=batch_axes)
+      self.unbatched_output_shapes = get_tree_shapes("unbatched_output_shapes", None, batch_axes=batch_axes, do_not_set=True)
+    else:
+      self.unbatched_input_shapes = get_tree_shapes("unbatched_input_shapes", None, batch_axes=batch_axes, do_not_set=True)
+      self.unbatched_output_shapes = get_tree_shapes("unbatched_output_shapes", inputs, batch_axes=batch_axes)
 
-  def to_bits_per_dim(self, log_likelihood):
-    return log_likelihood/util.list_prod(self.data_shape)/jnp.log(2)
+    # For convenience, also get the batch axes
+    try:
+      if sample == False:
+        self.batch_shape = inputs["x"].shape[:-len(self.unbatched_input_shapes["x"])]
+      else:
+        self.batch_shape = inputs["x"].shape[:-len(self.unbatched_output_shapes["x"])]
+    except:
+      if sample == False:
+        self.batch_shape = jax.tree_leaves(inputs["x"])[0].shape[:-len(self.unbatched_input_shapes["x"][0])]
+      else:
+        self.batch_shape = jax.tree_leaves(inputs["x"])[0].shape[:-len(self.unbatched_output_shapes["x"][0])]
 
-  def get_batch_shape(self, inputs):
-    return inputs["x"].shape[:-len(self.data_shape)]
+    # Run the actual function
+    if self.invertible_ad == False:
+      outputs = self.call(inputs, rng, sample=sample, **kwargs)
+    else:
+      assert 0, "Not implemented"
 
-  #############################################################################
+    if sample == False:
+      # Keep track of the initial output shapes
+      get_tree_shapes("unbatched_output_shapes", outputs, batch_axes=batch_axes)
+    else:
+      get_tree_shapes("unbatched_input_shapes", outputs, batch_axes=batch_axes)
 
-  def check_init(self, outputs):
-    pass
-    # import pdb; pdb.set_trace()
+    if self.monitor_stats:
+      self.monitor_layer_stats(inputs, outputs)
 
-  #############################################################################
-
-  def process_outputs(self, outputs):
-    # Only set log_px if outputs has both a prior and log_det term
-    if "log_pz" not in outputs:
-      warnings.warn("Flow does not have a prior")
-    if "log_det" not in outputs:
-      warnings.warn("Flow does not have a transformation")
-
-    outputs["log_px"] = outputs.get("log_pz", 0.0) + outputs.get("log_det", 0.0)
     return outputs
 
-  #############################################################################
-
-  @property
-  def _apply_fun(self):
-    return self._flow.apply
-
-  def apply(self,
-            key: PRNGKey,
-            inputs: Mapping[str, jnp.ndarray],
-            **kwargs
-  ) -> Mapping[str, jnp.ndarray]:
-    outputs, self.state = self._flow.apply(self.params, self.state, key, inputs, **kwargs)
-    return self.process_outputs(outputs)
-
-  def stateful_apply(self,
-                     key: PRNGKey,
-                     inputs: Mapping[str, jnp.ndarray],
-                     params: Params,
-                     state: State,
-                     **kwargs
-  ) -> Mapping[str, jnp.ndarray]:
-    outputs, state = self._flow.apply(params, state, key, inputs, **kwargs)
-    return self.process_outputs(outputs), state
-
-  #############################################################################
-
-  def scan_body(self, carry, scan_inputs, **kwargs):
-    key, _inputs = scan_inputs
-    params, state = carry
-    outputs, state = self.stateful_apply(key, _inputs, params, state, **kwargs)
-    return (params, state), outputs
-
-  def scan_apply(self,
-                 key: PRNGKey,
-                 inputs: Mapping[str, jnp.ndarray],
-                 is_training: bool=True
-  ) -> Mapping[str, jnp.ndarray]:
-    """ Applies a lax.scan loop to the first batch axis
-    """
-    if len(inputs["x"].shape) == len(self.data_shape):
-      assert 0, "Expect a batched or doubly-batched input"
-
-    # Get the inputs for the scan loop
-    n_iters = inputs["x"].shape[0]
-    keys = random.split(key, n_iters)
-    scan_inputs = (keys, inputs)
-    scan_carry = (self.params, self.state)
-    if is_training:
-      (_, self.state), outputs = self.scan_apply_loop(scan_carry, scan_inputs)
-    else:
-      (_, self.state), outputs = self.scan_apply_test_loop(scan_carry, scan_inputs)
-    return self.process_outputs(outputs)
-
-  #############################################################################
-
-  def sample(self,
-             key: PRNGKey,
-             n_samples: int,
-             n_batches: Optional[int]=None,
-             labels: Optional=None,
-             **kwargs
-  ) -> Mapping[str, jnp.ndarray]:
-    if n_batches is None:
-      dummy_z = jnp.zeros((n_samples,) + self.latent_shape)
-      outputs = self.apply(key, {"x": dummy_z}, sample=True, is_training=False, **kwargs)
-    else:
-      dummy_z = jnp.zeros((n_batches, n_samples) + self.latent_shape)
-      outputs = self.scan_apply_test_loop(key, {"x": dummy_z}, sample=True, **kwargs)
-    return self.process_outputs(outputs)
-
-  def reconstruct(self,
-                  key: PRNGKey,
-                  inputs: Mapping[str, jnp.ndarray],
-                  scan_loop: bool=False,
-                  **kwargs
-  ) -> Mapping[str, jnp.ndarray]:
-    if scan_loop == False:
-      outputs = self.apply(key, inputs, sample=True, reconstruction=True, **kwargs)
-    else:
-      outputs = self.scan_apply(key, inputs, sample=True, reconstruction=True, **kwargs)
-    return self.process_outputs(outputs)
-
-  #############################################################################
-
-  def save(self, path: str=None):
-    save_items = {"params": self.params,
-                  "state": self.state}
-    util.save_pytree(save_items, path, overwrite=True)
-
-  def load(self, path: str=None):
-    loaded_items = util.load_pytree(path)
-    self.params = loaded_items["params"]
-    self.state = loaded_items["state"]
+  @abstractmethod
+  def call(self,
+           inputs: Mapping[str, jnp.ndarray],
+           rng: jnp.ndarray=None,
+           sample: Optional[bool]=False,
+           **kwargs
+    ) -> Mapping[str, jnp.ndarray]:
+    """ The expectation is that inputs will be a dicionary with
+        "x" holding data and "y" holding possible labels.  Other inputs
+        can be passed in too """
+    pass

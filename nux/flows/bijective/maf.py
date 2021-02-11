@@ -5,10 +5,9 @@ from jax import random, vmap, jit
 from functools import partial
 import haiku as hk
 from typing import Optional, Mapping, Sequence
-from nux.internal.layer import Layer
+from nux.internal.layer import InvertibleLayer
 import nux.util as util
 from jax.scipy.special import logsumexp
-# import nux.weight_initializers
 import nux.util.weight_initializers as init
 import nux.networks as net
 
@@ -16,7 +15,7 @@ __all__ = ["MAF"]
 
 ################################################################################################################
 
-class MAF(Layer):
+class MAF(InvertibleLayer):
 
   def __init__(self,
                hidden_layer_sizes: Sequence[int],
@@ -69,7 +68,8 @@ class MAF(Layer):
     if sample == False:
       x = inputs["x"]
 
-      mu, alpha = made(x, rng)
+      made_outs = made(x, rng)
+      mu, alpha = made_outs["mu"], made_outs["alpha"]
       z = (x - mu)*jnp.exp(-alpha)
       log_det = -alpha.sum(axis=-1)*jnp.ones(self.batch_shape)
       outputs = {"x": z, "log_det": log_det}
@@ -82,7 +82,8 @@ class MAF(Layer):
         # We need to build output a dimension at a time
         def carry_body(carry, inputs):
           x, idx = carry, inputs
-          mu, alpha = made(x, rng)
+          made_outs = made(x, rng)
+          mu, alpha = made_outs["mu"], made_outs["alpha"]
           w = mu + z*jnp.exp(alpha)
           x = jax.ops.index_update(x, idx, w[idx])
           return x, alpha[idx]

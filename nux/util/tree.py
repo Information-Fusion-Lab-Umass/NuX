@@ -24,3 +24,6 @@ def tree_shapes(pytree):
 
 def tree_ndims(pytree):
   return jax.tree_util.tree_map(lambda x:x.ndim, pytree)
+
+def tree_equal(x, y):
+  return jax.tree_util.tree_all(jax.tree_multimap(lambda x, y: x == y, x, y))

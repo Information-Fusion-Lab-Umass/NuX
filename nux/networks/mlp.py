@@ -1,6 +1,7 @@
 import jax.numpy as jnp
 from jax import jit, random
 from functools import partial
+from nux.internal.layer import Layer
 import jax
 import haiku as hk
 from typing import Optional, Mapping, Callable, Sequence, Any
@@ -29,19 +30,19 @@ def data_dependent_param_init(x: jnp.ndarray,
                                           use_bias=use_bias,
                                           **kwargs)
 
-  elif parameter_norm == "weight_norm" and x.shape[0] > 1:
+  elif parameter_norm == "weight_norm":
+    if x.shape[0] > 1:
+      return init.weight_with_weight_norm(x=x,
+                                          out_dim=out_dim,
+                                          name_suffix=name_suffix,
+                                          w_init=w_init,
+                                          b_init=b_init,
+                                          is_training=is_training,
+                                          use_bias=use_bias,
+                                          **kwargs)
 
-    return init.weight_with_weight_norm(x=x,
-                                        out_dim=out_dim,
-                                        name_suffix=name_suffix,
-                                        w_init=w_init,
-                                        b_init=b_init,
-                                        is_training=is_training,
-                                        use_bias=use_bias,
-                                        **kwargs)
-
-  # elif parameter_norm is not None:
-  #   assert 0, "Invalid weight choice.  Expected 'spectral_norm' or 'weight_norm'"
+  elif parameter_norm is not None:
+    assert 0, "Invalid weight choice.  Expected 'spectral_norm' or 'weight_norm'"
 
   in_dim, dtype = x.shape[-1], x.dtype
 
@@ -55,7 +56,7 @@ def data_dependent_param_init(x: jnp.ndarray,
 
 ################################################################################################################
 
-class MLP(hk.Module):
+class MLP(Layer):
 
   def __init__(self,
                out_dim: Sequence[int],
@@ -116,19 +117,30 @@ class MLP(hk.Module):
           return instance_norm(x)
         return norm_apply
       self.norm = norm
-
     else:
       self.norm = None
     self.w_init = hk.initializers.VarianceScaling(1.0, "fan_avg", "truncated_normal") if w_init is None else w_init
     self.b_init = jnp.zeros if b_init is None else b_init
 
-  def __call__(self, x, rng, aux=None, is_training=True, update_params=True, **kwargs):
-    # This function assumes that the input is batched!
-    batch_size, in_dim = x.shape
+  def call(self,
+           inputs,
+           rng,
+           is_training=True,
+           update_params=True,
+           **kwargs):
+    x = inputs["x"]
+    aux = inputs.get("aux", None)
 
+    assert len(self.unbatched_input_shapes["x"]) == 1
+
+    # This function assumes that the input is batched!
     rngs = random.split(rng, len(self.layer_sizes))
 
     for i, (rng, out_dim) in enumerate(zip(rngs, self.layer_sizes)):
+      # Pass a singly batched input to the parameter functions.
+      # Don't use autobatching here because we might end up reducing
+      x, reshape = self.make_singly_batched(x)
+
       if self.zero_init and i == len(self.layer_sizes) - 1:
         w, b = data_dependent_param_init(x,
                                          out_dim,
@@ -151,10 +163,13 @@ class MLP(hk.Module):
                                          max_singular_value=self.max_singular_value,
                                          max_power_iters=self.max_power_iters,
                                          parameter_norm=self.parameter_norm)
-      z = jnp.dot(x, w.T) + b
+      x = reshape(x)
+
+      z = jnp.einsum("...ij,...j->...i", w, x) + b
 
       if self.norm is not None:
-        x = self.norm(f"norm_{i}")(x, is_training=is_training)
+        norm = self.auto_batch(self.norm(f"norm_{i}"), expected_depth=1)
+        x = norm(x, is_training=is_training)
 
       if i < len(self.layer_sizes) - 1:
         z = self.nonlinearity(z)
@@ -170,4 +185,5 @@ class MLP(hk.Module):
           rate = self.dropout_rate if is_training else 0.0
           x = hk.dropout(rng, rate, x)
 
-    return x
+    outputs = {"x": x}
+    return outputs

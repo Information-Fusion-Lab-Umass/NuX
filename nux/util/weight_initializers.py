@@ -11,7 +11,8 @@ import types
 
 ################################################################################################################
 
-def apply_sn(mvp,
+def apply_sn(*,
+             mvp,
              mvpT,
              w_shape,
              b_shape,
@@ -23,34 +24,79 @@ def apply_sn(mvp,
              is_training,
              use_bias,
              max_singular_value,
-             max_power_iters):
+             max_power_iters,
+             use_proximal_gradient=False,
+             monitor_progress=False,
+             monitor_iters=20,
+             return_sigma=False,
+             **kwargs):
 
   w_exists = util.check_if_parameter_exists(f"w_{name_suffix}")
 
   w = hk.get_parameter(f"w_{name_suffix}", w_shape, dtype, init=w_init)
   u = hk.get_state(f"u_{name_suffix}", out_shape, dtype, init=hk.initializers.RandomNormal())
-  zeta = hk.get_state(f"zeta_{name_suffix}", out_shape, dtype, init=hk.initializers.RandomNormal())
+  if use_proximal_gradient == False:
+    zeta = hk.get_state(f"zeta_{name_suffix}", out_shape, dtype, init=hk.initializers.RandomNormal())
+    state = (u, zeta)
+  else:
+    state = (u,)
 
-  estimate_max_singular_value = jax.jit(sn.max_singular_value, static_argnums=(0, 1))
+  if use_proximal_gradient == False:
+    estimate_max_singular_value = jax.jit(sn.max_singular_value, static_argnums=(0, 1))
+  else:
+    estimate_max_singular_value = jax.jit(sn.max_singular_value_no_grad, static_argnums=(0, 1))
 
   if w_exists == False:
     max_power_iters = 1000
 
-  for i in range(max_power_iters):
-    sigma, u, zeta = estimate_max_singular_value(mvp, mvpT, w, u, zeta)
+  if monitor_progress:
+    estimates = []
 
-  u, zeta = jax.lax.stop_gradient((u, zeta))
-  factor = jnp.where(max_singular_value < sigma, max_singular_value/sigma, 1.0)
-  w = w*factor
+  for i in range(max_power_iters):
+    sigma, *state = estimate_max_singular_value(mvp, mvpT, w, *state)
+    if monitor_progress:
+      estimates.append(sigma)
+
+  if monitor_progress:
+    sigma_for_test = sigma
+    state_for_test = state
+    for i in range(monitor_iters - max_power_iters):
+      sigma_for_test, *state_for_test = estimate_max_singular_value(mvp, mvpT, w, *state_for_test)
+      estimates.append(sigma_for_test)
+
+    estimates = jnp.array(estimates)
+
+    sigma_for_test = jax.lax.stop_gradient(sigma_for_test)
+    state_for_test = jax.lax.stop_gradient(state_for_test)
+
+  state = jax.lax.stop_gradient(state)
 
   if is_training == True or w_exists == False:
+    u = state[0]
     hk.set_state(f"u_{name_suffix}", u)
-    hk.set_state(f"zeta_{name_suffix}", zeta)
+    if use_proximal_gradient == False:
+      zeta = state[1]
+      hk.set_state(f"zeta_{name_suffix}", zeta)
+
+  if return_sigma == False:
+    factor = jnp.where(max_singular_value < sigma, max_singular_value/sigma, 1.0)
+    w = w*factor
+    w_ret = w
+  else:
+    w_ret = (w, sigma)
 
   if use_bias:
     b = hk.get_parameter(f"b_{name_suffix}", b_shape, dtype, init=b_init)
-    return w, b
-  return w
+    ret = (w_ret, b)
+  else:
+    ret = w_ret
+
+  if monitor_progress:
+    ret = (ret, estimates)
+
+  return ret
+
+################################################################################################################
 
 def weight_with_good_spectral_norm(x: jnp.ndarray,
                                    out_dim: int,
@@ -78,19 +124,19 @@ def weight_with_good_spectral_norm(x: jnp.ndarray,
   def mvpT(A, x):
     return A.T@x
 
-  return apply_sn(mvp,
-                  mvpT,
-                  w_shape,
-                  b_shape,
-                  out_shape,
-                  dtype,
-                  w_init,
-                  b_init,
-                  name_suffix,
-                  is_training,
-                  use_bias,
-                  max_singular_value,
-                  max_power_iters)
+  return apply_sn(mvp=mvp,
+                  mvpT=mvpT,
+                  w_shape=w_shape,
+                  b_shape=b_shape,
+                  out_shape=out_shape,
+                  dtype=dtype,
+                  w_init=w_init,
+                  b_init=b_init,
+                  name_suffix=name_suffix,
+                  is_training=is_training,
+                  use_bias=use_bias,
+                  max_singular_value=max_singular_value,
+                  max_power_iters=max_power_iters)
 
 def conv_weight_with_good_spectral_norm(x: jnp.ndarray,
                                         kernel_shape: Sequence[int],
@@ -103,10 +149,12 @@ def conv_weight_with_good_spectral_norm(x: jnp.ndarray,
                                         update_params: bool=True,
                                         max_singular_value: float=0.95,
                                         max_power_iters: int=1,
-                                        **conv_kwargs):
+                                        stride: Sequence[int]=(1, 1),
+                                        padding: str="SAME",
+                                        **kwargs):
   batch_size, H, W, C = x.shape
   dtype = x.dtype
-  stride, padding = conv_kwargs["stride"], conv_kwargs["padding"]
+  # stride, padding = kwargs["stride"], kwargs["padding"]
 
   w_shape   = kernel_shape + (C, out_channel)
   b_shape   = (out_channel,)
@@ -127,19 +175,20 @@ def conv_weight_with_good_spectral_norm(x: jnp.ndarray,
                                   dimension_numbers=("NHWC", "HWIO", "NHWC"),
                                   transpose_kernel=True)[0]
 
-  return apply_sn(mvp,
-                  mvpT,
-                  w_shape,
-                  b_shape,
-                  out_shape,
-                  dtype,
-                  w_init,
-                  b_init,
-                  name_suffix,
-                  is_training,
-                  use_bias,
-                  max_singular_value,
-                  max_power_iters)
+  return apply_sn(mvp=mvp,
+                  mvpT=mvpT,
+                  w_shape=w_shape,
+                  b_shape=b_shape,
+                  out_shape=out_shape,
+                  dtype=dtype,
+                  w_init=w_init,
+                  b_init=b_init,
+                  name_suffix=name_suffix,
+                  is_training=is_training,
+                  use_bias=use_bias,
+                  max_singular_value=max_singular_value,
+                  max_power_iters=max_power_iters,
+                  **kwargs)
 
 def i2c_conv_weight_with_good_spectral_norm(x: jnp.ndarray,
                                             kernel_shape: Sequence[int],
@@ -184,19 +233,19 @@ def i2c_conv_weight_with_good_spectral_norm(x: jnp.ndarray,
     assert out.ndim == 3
     return out
 
-  return apply_sn(mvp,
-                  mvpT,
-                  w_shape,
-                  b_shape,
-                  out_shape,
-                  dtype,
-                  w_init,
-                  b_init,
-                  name_suffix,
-                  is_training,
-                  use_bias,
-                  max_singular_value,
-                  max_power_iters)
+  return apply_sn(mvp=mvp,
+                  mvpT=mvpT,
+                  w_shape=w_shape,
+                  b_shape=b_shape,
+                  out_shape=out_shape,
+                  dtype=dtype,
+                  w_init=w_init,
+                  b_init=b_init,
+                  name_suffix=name_suffix,
+                  is_training=is_training,
+                  use_bias=use_bias,
+                  max_singular_value=max_singular_value,
+                  max_power_iters=max_power_iters)
 
 ################################################################################################################
 

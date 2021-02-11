@@ -6,7 +6,7 @@ from jax import random, jit, vmap
 import haiku as hk
 from typing import Optional, Mapping, Type, Callable, Iterable, Any, Sequence, Union, Tuple
 import nux.util as util
-from nux.internal.layer import Layer
+from nux.internal.layer import Layer, InvertibleLayer
 import nux
 from nux.internal.functional import make_functional_modules
 from haiku._src import data_structures
@@ -29,6 +29,7 @@ __all__ = ["repeat",
            "sequential",
            "factored",
            "multi_scale",
+           "as_flat",
            "reverse_flow",
            "track"]
 
@@ -56,7 +57,7 @@ def _batch_repeated_layers(params, param_hashes, sample=False):
 
   return batched_params
 
-class repeat(Layer):
+class repeat(InvertibleLayer):
 
   def __init__(self,
                layer_create_fun: Iterable[Callable],
@@ -89,15 +90,18 @@ class repeat(Layer):
       sorted_params = sorted(filtered_params.items(), key=lambda x: x[0])
       sorted_state  = sorted(filtered_state.items(), key=lambda x: x[0])
 
-      param_names, _ = zip(*sorted_params)
+      param_names, param_vals = zip(*sorted_params)
+      param_shapes = util.tree_shapes(param_vals)
       if len(sorted_state) == 0:
         state_names = ()
+        state_shapes = ()
       else:
-        state_names, _ = zip(*sorted_state)
+        state_names, state_vals = zip(*sorted_state)
+        state_shapes = util.tree_shapes(state_vals)
 
       finalize(params, (state, constants, rng_seq))
 
-    return param_names, state_names
+    return (param_names, state_names), (param_shapes, state_shapes)
 
   @hk.transparent
   def call_no_scan(self,
@@ -109,7 +113,7 @@ class repeat(Layer):
 
     # Want to make sure that we're passing all inputs/outputs to the next layer
     final_outputs = inputs.copy()
-    log_det = 0.0
+    log_det = jnp.array(0.0)
 
     # Split the random key
     rngs = random.split(rng, self.n_repeats) if rng is not None else [None]*self.n_repeats
@@ -141,7 +145,11 @@ class repeat(Layer):
 
       # Match the new layers parameters with the original layer's parameters
       if init_names:
-        param_names, state_names = self.get_parameter_and_state_names(layer)
+        names, shapes = self.get_parameter_and_state_names(layer)
+        param_names, state_names = names
+        param_shapes, state_shapes = shapes
+        param_names_and_shapes = dict(zip(param_names, param_shapes))
+        state_names_and_shapes = dict(zip(state_names, state_shapes))
 
         # Find the new names
         new_param_names = set(param_names).difference(used_param_names)
@@ -150,17 +158,22 @@ class repeat(Layer):
         if i == 0:
           layer_param_names = {k:[k] for k in new_param_names}
           layer_state_names = {k:[k] for k in new_state_names}
-
         else:
           # Match the new names to the existing ones
-          param_matching = util.match_strings(layer_param_names.keys(), new_param_names)
-          state_matching = util.match_strings(layer_state_names.keys(), new_state_names)
+          # param_matching = util.match_strings(layer_param_names.keys(), new_param_names)
+          # state_matching = util.match_strings(layer_state_names.keys(), new_state_names)
+          param_matching = util.match_strings_using_shapes(layer_param_names.keys(), new_param_names, param_names_and_shapes)
+          state_matching = util.match_strings_using_shapes(layer_state_names.keys(), new_state_names, state_names_and_shapes)
 
           # Update the layer lists
           for k, v in param_matching.items():
+            expected_shape, new_shape = param_names_and_shapes[k], param_names_and_shapes[v]
+            assert util.tree_equal(expected_shape, new_shape)
             layer_param_names[k].append(v)
 
           for k, v in state_matching.items():
+            expected_shape, new_shape = state_names_and_shapes[k], state_names_and_shapes[v]
+            assert util.tree_equal(expected_shape, new_shape)
             layer_state_names[k].append(v)
 
         # Update the set of names that have been used
@@ -191,7 +204,6 @@ class repeat(Layer):
 
     # Want to make sure that we're passing all inputs/outputs to the next layer
     final_outputs = inputs.copy()
-    log_det = 0.0
 
     # Need to get the funcitonal apply fun
     with make_functional_modules([self.layer_create_fun()]) as ([apply_fun], \
@@ -236,8 +248,11 @@ class repeat(Layer):
       # Run the scan function
       rngs = random.split(rng, self.n_repeats) if rng is not None else [None]*self.n_repeats
       x, (batched_outputs, batched_updated_state) = jax.lax.scan(scan_body, inputs["x"], (scan_params, scan_state, rngs))
-      log_det = batched_outputs["log_det"].sum(axis=0)
-      del batched_outputs["log_det"]
+      if "log_det" in batched_outputs:
+        log_det = batched_outputs["log_det"].sum(axis=0)
+        del batched_outputs["log_det"]
+      else:
+        log_det = None
 
       # Convert the output of the scan into the same state data structure that was passed in.
       hash_map = {hash(k): k for k in state.keys()}
@@ -261,14 +276,17 @@ class repeat(Layer):
       bundled_state = (updated_state, constants, rng_seq)
       finalize(params, bundled_state)
 
-    outputs = {"x": x, "log_det": log_det}
+    outputs = {"x": x}
+    if log_det is not None:
+      outputs["log_det"] = log_det
+
     outputs.update(batched_outputs)
 
     return outputs
 
 ################################################################################################################
 
-class sequential(Layer):
+class sequential(InvertibleLayer):
 
   def __init__(self,
                *layers: Iterable[Callable],
@@ -323,7 +341,7 @@ class sequential(Layer):
 
 ################################################################################################################
 
-class factored(Layer):
+class factored(InvertibleLayer):
 
   def __init__(self,
                *layers: Iterable[Callable],
@@ -404,10 +422,11 @@ class factored(Layer):
 
 ################################################################################################################
 
-class multi_scale(Layer):
+class multi_scale(InvertibleLayer):
 
   def __init__(self,
                flow,
+               condition: bool=False,
                name: str="multi_scale",
   ):
     """ Use a flow in a multiscale architecture as described in RealNVP https://arxiv.org/pdf/1605.08803.pdf
@@ -418,6 +437,7 @@ class multi_scale(Layer):
     """
     super().__init__(name=name)
     self.flow = flow
+    self.condition = condition
 
   def call(self,
            inputs: Mapping[str, jnp.ndarray],
@@ -433,6 +453,8 @@ class multi_scale(Layer):
     # Run a flow on only one half
     factored_inputs = inputs.copy()
     factored_inputs["x"] = xb
+    if self.condition:
+      factored_inputs["condition"] = xa
     outputs = self.flow(factored_inputs, rng, sample=sample, **kwargs)
 
     z = jnp.concatenate([xa, outputs["x"]], axis=-1)
@@ -442,7 +464,42 @@ class multi_scale(Layer):
 
 ################################################################################################################
 
-class reverse_flow(Layer):
+class as_flat(InvertibleLayer):
+
+  def __init__(self,
+               flow,
+               name: str="as_flat",
+  ):
+    """ Reshape the input to 1d
+    Args:
+      flow: The flow to use
+      name: Optional name for this module.
+    """
+    super().__init__(name=name)
+    self.flow = flow
+
+  def call(self,
+           inputs: Mapping[str, jnp.ndarray],
+           rng: jnp.ndarray=None,
+           sample: Optional[bool]=False,
+           **kwargs
+  ) -> Mapping[str, jnp.ndarray]:
+    x = inputs["x"]
+    x_shape = x.shape
+    x_flat = x.reshape(self.batch_shape + (-1,))
+
+    # Run a flow on only one half
+    flat_inputs = inputs.copy()
+    flat_inputs["x"] = x_flat
+    outputs = self.flow(flat_inputs, rng, sample=sample, **kwargs)
+
+    z = outputs["x"].reshape(x_shape)
+    outputs["x"] = z
+    return outputs
+
+################################################################################################################
+
+class reverse_flow(InvertibleLayer):
 
   def __init__(self,
                flow,
@@ -471,7 +528,7 @@ class reverse_flow(Layer):
 
 ################################################################################################################
 
-class track(Layer):
+class track(InvertibleLayer):
 
   def __init__(self, flow, name: str, reducer: Callable=None, **kwargs):
     self.name = name

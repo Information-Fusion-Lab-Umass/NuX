@@ -5,14 +5,14 @@ from jax import random, vmap
 from functools import partial
 import haiku as hk
 from typing import Optional, Mapping, Callable, Sequence
-from nux.internal.layer import Layer
+from nux.internal.layer import InvertibleLayer
 import nux.util as util
 import nux
 import nux.networks as net
 
 __all__ = ["ContinuouslyIndexed"]
 
-class ContinuouslyIndexed(Layer):
+class ContinuouslyIndexed(InvertibleLayer):
 
   def __init__(self,
                flow: Optional[Callable]=None,

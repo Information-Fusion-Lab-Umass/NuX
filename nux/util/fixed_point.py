@@ -10,7 +10,8 @@ import haiku as hk
 
 __all__ = ["fixed_point",
            "fixed_point_scan",
-           "fixed_point_while"]
+           "fixed_point_while",
+           "fixed_point_fun"]
 
 def fixed_point_scan(f, x_init, max_iters, relaxed=False):
 
@@ -112,3 +113,39 @@ def fixed_point_rev(f, ctx, dLdx):
 #   return dLdu, None, None, (None,)*len(nondiff_args)
 
 fixed_point.defvjp(fixed_point_fwd, fixed_point_rev)
+
+################################################################################################################
+
+@partial(jax.custom_vjp, nondiff_argnums=(0, 1, 2))
+def fixed_point_fun(phi, F, n_iters, x, zeta, theta):
+  # y = phi(x,theta) where x is the fixed point of F(x,theta).
+  for i in range(n_iters):
+    x, vjp = jax.vjp(lambda x: F(x, theta), x)
+    y, xbar = jax.value_and_grad(phi)(x, theta)
+    dx, = vjp(zeta)
+    zeta = jax.tree_multimap(jnp.add, xbar, dx)
+  return y, x, zeta
+
+def fixed_point_fun_fwd(phi, F, n_iters, x, zeta, theta):
+  for i in range(n_iters):
+    x, vjp = jax.vjp(F, x, theta)
+    y, (xbar, thetabar) = jax.value_and_grad(phi, argnums=(0, 1))(x, theta)
+
+    xhat, thetahat = vjp(zeta)
+    zeta, thetabar = jax.tree_multimap(jnp.add, (xbar, thetabar), (xhat, thetahat))
+
+  dydx = jax.tree_multimap(jnp.add, xbar, zeta)
+  dydx = jax.tree_multimap(jnp.subtract, dydx, xhat)
+
+  ctx = (xbar, thetabar, dydx)
+  return (y, x, zeta), ctx
+
+def fixed_point_fun_bwd(phi, F, n_iters, ctx, g):
+  dy, dx, dzeta = g
+  xbar, thetabar, dydx = ctx
+
+  dtheta = jax.tree_multimap(jnp.multiply, dy, thetabar)
+  dx = jax.tree_map(lambda x: dy*x, dydx)
+  return dx, None, dtheta
+
+fixed_point_fun.defvjp(fixed_point_fun_fwd, fixed_point_fun_bwd)

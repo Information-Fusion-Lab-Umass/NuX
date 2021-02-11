@@ -4,7 +4,7 @@ import jax.numpy as jnp
 from functools import partial
 import nux.util as util
 from typing import Optional, Mapping, Callable, Sequence
-from nux.internal.layer import Layer
+from nux.internal.layer import InvertibleLayer
 import haiku as hk
 from haiku._src.typing import PRNGKey
 from jax.scipy.special import gammaln, logsumexp
@@ -37,7 +37,7 @@ def logZ(x, A, log_diag_cov):
 
 ################################################################################################################
 
-class RectangularMVP(Layer):
+class RectangularMVP(InvertibleLayer):
 
   def __init__(self,
                output_dim: int,
@@ -127,7 +127,6 @@ class RectangularMVP(Layer):
     network_in = t_proj.reshape(self.batch_shape + self.input_shape) if self.image_in else s
     outputs = self.p_gamma_given_s({"x": network_in}, rng=rng, no_noise=no_noise)
     gamma, mu, log_diag_cov = outputs["x"], outputs["mu"], outputs["log_diag_cov"]
-    log_diag_cov = jnp.tanh(log_diag_cov)
 
     # If we're going from image -> vector, we need to flatten the image
     if self.image_in:

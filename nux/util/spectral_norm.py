@@ -8,7 +8,8 @@ import haiku as hk
 
 __all__ = ["spectral_norm_apply",
            "spectral_norm_conv_apply",
-           "check_spectral_norm"]
+           "check_spectral_norm",
+           "induced_norm_conv"]
 
 ################################################################################################################
 
@@ -169,6 +170,180 @@ def max_singular_value_jvp(mvp, mvpT, primals, tangents):
 
   return (sigma, utp1, ztp1), (tangent_out, jnp.zeros_like(utp1), jnp.zeros_like(ztp1))
 
+################################################################################################################
+
+def max_singular_value_general(*,
+                               mvp,
+                               mvpT,
+                               W,
+                               u,
+                               zeta,
+                               n_iters):
+
+  def g(mvp, A, x):
+    y_hat = mvp(A, x)
+    y_norm = jax.lax.rsqrt(jnp.sum(y_hat**2))
+    y = y_hat*y_norm
+    return y
+
+  def ϕ(u, W):
+    v = g(mvpT, W, u)
+    return jnp.vdot(u, W@v)
+
+  def F(u, W):
+    v = g(mvpT, W, u)
+    u = g(mvp, W, v)
+    return u
+
+  return util.fixed_point_fun(ϕ, F, n_iters, u, zeta, W)
+
+def max_singular_value2(W,
+                       u,
+                       zeta,
+                       n_iters):
+  mvp = lambda A, x: A@x
+  mvpT = lambda A, x: A.T@x
+  sigma, u, zeta = max_singular_value_general(mvp=mvp,
+                                              mvpT=mvpT,
+                                              W=W,
+                                              u=u,
+                                              zeta=zeta,
+                                              n_iters=n_iters)
+  u, zeta = jax.lax.stop_gradient((u, zeta))
+  return sigma, u, zeta
+
+def max_singular_value_conv2(W,
+                            u,
+                            zeta,
+                            n_iters,
+                            stride,
+                            padding):
+
+  def mvp(A, x):
+    return jax.lax.conv_general_dilated(x[None],
+                                        A,
+                                        window_strides=stride,
+                                        padding=padding,
+                                        dimension_numbers=("NHWC", "HWIO", "NHWC"))[0]
+
+  def mvpT(A, x):
+    return jax.lax.conv_transpose(x[None],
+                                  A,
+                                  strides=stride,
+                                  padding=padding,
+                                  dimension_numbers=("NHWC", "HWIO", "NHWC"),
+                                  transpose_kernel=True)[0]
+
+  sigma, u, zeta = max_singular_value_general(mvp=mvp,
+                                              mvpT=mvpT,
+                                              W=W,
+                                              u=u,
+                                              zeta=zeta,
+                                              n_iters=n_iters)
+  u, zeta = jax.lax.stop_gradient((u, zeta))
+  return sigma, u, zeta
+
+################################################################################################################
+
+def induced_norm_general(*,
+                         mvp,
+                         mvpT,
+                         u,
+                         zeta,
+                         W,
+                         p,
+                         q,
+                         n_iters):
+  theta = (W, p, q)
+
+  def norm(x, p):
+    # x is expected to be positive, so don't need absolute value
+    return (x**p).sum()**(1/p)
+
+  def g(mvp, A, x, s, t):
+    y_hat = mvp(A, x)
+    y_phase = jnp.sign(y_hat)
+    y_mag_hat = jnp.abs(y_hat)**s
+
+    # Divide out the largest value before computing the norm.
+    # This constant will cancel out when we normalize
+    max_val = jax.lax.stop_gradient(y_mag_hat.max())
+    y_mag_hat /= max_val
+
+    y_mag = y_mag_hat/norm(y_mag_hat, t)
+    return y_phase*y_mag
+
+  def ϕ(u, theta):
+    W, p, q = theta
+    s = 1/(p-1)
+    t = p
+    v = g(mvpT, W, u, s, t)
+    return jnp.vdot(u, mvp(W, v))
+
+  def F(u, theta):
+    W, p, q = theta
+    v = g(mvpT, W, u, 1/(p - 1), p)
+    u = g(mvp, W, v, q - 1, q/(q - 1))
+    return u
+
+  return util.fixed_point_fun(ϕ, F, n_iters, u, zeta, theta)
+
+def induced_norm(W,
+                 p,
+                 q,
+                 u,
+                 zeta,
+                 n_iters):
+  mvp = lambda A, x: A@x
+  mvpT = lambda A, x: A.T@x
+  sigma, u, zeta = induced_norm_general(mvp=mvp,
+                                        mvpT=mvpT,
+                                        W=W,
+                                        p=p,
+                                        q=q,
+                                        u=u,
+                                        zeta=zeta,
+                                        n_iters=n_iters)
+  u, zeta = jax.lax.stop_gradient((u, zeta))
+  return sigma, u, zeta
+
+def induced_norm_conv(W,
+                      p,
+                      q,
+                      u,
+                      zeta,
+                      n_iters,
+                      stride,
+                      padding):
+
+  def mvp(A, x):
+    return jax.lax.conv_general_dilated(x[None],
+                                        A,
+                                        window_strides=stride,
+                                        padding=padding,
+                                        dimension_numbers=("NHWC", "HWIO", "NHWC"))[0]
+
+  def mvpT(A, x):
+    return jax.lax.conv_transpose(x[None],
+                                  A,
+                                  strides=stride,
+                                  padding=padding,
+                                  dimension_numbers=("NHWC", "HWIO", "NHWC"),
+                                  transpose_kernel=True)[0]
+
+  sigma, u, zeta = induced_norm_general(mvp=mvp,
+                                        mvpT=mvpT,
+                                        W=W,
+                                        p=p,
+                                        q=q,
+                                        u=u,
+                                        zeta=zeta,
+                                        n_iters=n_iters)
+  u, zeta = jax.lax.stop_gradient((u, zeta))
+  return sigma, u, zeta
+
+################################################################################################################
+
 if __name__ == "__main__":
   from debug import *
 
@@ -187,7 +362,9 @@ if __name__ == "__main__":
     return A.T@x
 
   def comp(W, u, z):
-    sigma, u, z = max_singular_value(mvp, mvpT, W, u, z)
+    # sigma, u, z = max_singular_value(mvp, mvpT, W, u, z)
+    sigma, u, z = max_singular_value2(W, u, z, 100)
+    # sigma, u, z = induced_norm(W, 2.0, 2.0, u, z, 100)
     W_hat = W/sigma
     (u, z) = jax.lax.stop_gradient((u, z))
     return loss(W_hat), (u, z)
@@ -197,8 +374,9 @@ if __name__ == "__main__":
   W = random.normal(key, (dim1, dim2))
   u, z = random.normal(key, (2, dim1))
 
-  for i in range(100):
-    sigma, u, z = max_singular_value(mvp, mvpT, W, u, z)
+  # for i in range(10):
+  #   sigma, u, z = max_singular_value2(mvp, mvpT, W, u, z)
+    # sigma, u, z = max_singular_value(mvp, mvpT, W, u, z)
 
   dW_true = jax.grad(truth)(W)
   dW_comp, (u, z) = jax.grad(comp, has_aux=True)(W, u, z)

@@ -5,7 +5,7 @@ from jax import random, vmap
 from functools import partial
 import haiku as hk
 from typing import Optional, Mapping, Callable, Sequence
-from nux.internal.layer import Layer
+from nux.internal.layer import InvertibleLayer
 import nux.util as util
 import nux.networks as net
 from abc import ABC, abstractmethod
@@ -14,7 +14,7 @@ import warnings
 __all__ = ["Elementwise",
            "condition_by_coupling"]
 
-class Elementwise(Layer, ABC):
+class Elementwise(InvertibleLayer, ABC):
 
   def __init__(self,
                *,
@@ -93,28 +93,25 @@ class Elementwise(Layer, ABC):
     log_det = ew_log_det.sum(sum_axes)
     return z, log_det
 
-  def resize_condition(self, x_shape, condition):
+  def apply_conditioner_network(self, key, x, condition, **kwargs):
+    if self.use_condition:
+      if self.condition_method == "nin":
+        if len(self.unbatched_input_shapes["x"]) == 1:
+          warnings.warn("Using 'nin' conditioning method on 1d inputs is currently not supported.")
+        network_in = {"x": x, "aux": condition}
 
-    # Ensure that condition is the same size as xb so that they can be concatenated
-    H, W = x.shape[-3:-1]
-    Hc, Wc = condition.shape[-3:-1]
+      elif self.condition_method == "concat":
+        x_in = jnp.concatenate([x, condition], axis=self.axis) if condition is not None else x
+        network_in = {"x": x_in}
 
-    if Hc > H and Wc > W:
-      condition = self.auto_batch(partial(hk.max_pool, strides=2, window_shape=2, padding="VALID"), expected_depth=1)(condition)
-      Hc, Wc = condition.shape[-3:-1]
-
-    assert Hc == H and Wc == W
-    return condition
-
-  def apply_conditioner_network(self, key, x, condition):
-    if self.use_condition and self.condition_method == "nin":
-      if len(self.unbatched_input_shapes["x"]) == 1:
-        warnings.warn("Using 'nin' conditioning method on 1d inputs is currently not supported.")
-      network_out = self.auto_batch(self.network, expected_depth=1, in_axes=(0, None, 0))(x, key, condition)
+      else:
+        assert 0, "Invalid condition method"
     else:
-      network_in = jnp.concatenate([x, condition], axis=self.axis) if condition is not None else x
-      network_out = self.auto_batch(self.network, expected_depth=1, in_axes=(0, None))(network_in, key)
-    return network_out
+      network_in = {"x": x}
+
+    network_out = self.network(network_in, key, **kwargs)
+    x_out = network_out["x"]
+    return x_out
 
   def standard_call(self,
                     inputs: Mapping[str, jnp.ndarray],
@@ -144,11 +141,11 @@ class Elementwise(Layer, ABC):
 
     if sample == False:
       # z = f(x; condition, theta)
-      network_out = self.apply_conditioner_network(k2, condition, None) if condition is not None else None
+      network_out = self.apply_conditioner_network(k2, condition, None, **kwargs) if condition is not None else None
       z, log_det = self._transform(x, params=network_out, sample=False, rng=k3, **extra_kwargs)
     else:
       # xb = f^{-1}(zb; theta).  (x and z are swapped so that the code is a bit cleaner)
-      network_out = self.apply_conditioner_network(k2, condition, None) if condition is not None else None
+      network_out = self.apply_conditioner_network(k2, condition, None, **kwargs) if condition is not None else None
       z, log_det = self._transform(x, params=network_out, sample=True, rng=k3, **extra_kwargs)
 
     outputs = {"x": z, "log_det": log_det}
@@ -199,7 +196,7 @@ class Elementwise(Layer, ABC):
         zb, log_detb = xb, 0.0
 
       # za = f(xa; NN(xb))
-      network_out = self.apply_conditioner_network(k2, xb, condition)
+      network_out = self.apply_conditioner_network(k2, xb, condition, **kwargs)
       za, log_deta = self._transform(xa, params=network_out, sample=False, rng=k3, **extra_kwargs)
     else:
       # xb = f^{-1}(zb; theta).  (x and z are swapped so that the code is a bit cleaner)
@@ -209,7 +206,7 @@ class Elementwise(Layer, ABC):
         zb, log_detb = xb, 0.0
 
       # xa = f^{-1}(za; NN(xb)).
-      network_out = self.apply_conditioner_network(k2, zb, condition)
+      network_out = self.apply_conditioner_network(k2, zb, condition, **kwargs)
       za, log_deta = self._transform(xa, params=network_out, sample=True, rng=k3, **extra_kwargs)
 
     # Recombine
@@ -275,7 +272,7 @@ class Elementwise(Layer, ABC):
         z_nmask, log_det_b = x_nmask, 0.0
 
       # za = f(xa; NN(xb))
-      network_out = self.apply_conditioner_network(k2, x_nmask, condition)
+      network_out = self.apply_conditioner_network(k2, x_nmask, condition, **kwargs)
       z_mask, log_det_a = self._transform(x, params=network_out, sample=False, mask=mask, rng=k3)
     else:
       # xb = f^{-1}(zb; theta).  (x and z are swapped so that the code is a bit cleaner)
@@ -285,7 +282,7 @@ class Elementwise(Layer, ABC):
         z_nmask, log_det_b = x_nmask, 0.0
 
       # xa = f^{-1}(za; NN(xb)).
-      network_out = self.apply_conditioner_network(k2, z_nmask, condition)
+      network_out = self.apply_conditioner_network(k2, z_nmask, condition, **kwargs)
       x_in = z_nmask + x_mask
       z_mask, log_det_a = self._transform(x_in, params=network_out, sample=True, mask=mask, rng=k3)
 
@@ -310,7 +307,7 @@ class Elementwise(Layer, ABC):
 
 ################################################################################################################
 
-class condition_by_coupling(Layer):
+class condition_by_coupling(InvertibleLayer):
 
   def __init__(self,
                flow,

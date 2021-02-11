@@ -5,7 +5,7 @@ from jax import random, vmap
 from functools import partial
 import haiku as hk
 from typing import Optional, Mapping
-from nux.internal.layer import Layer
+from nux.internal.layer import InvertibleLayer
 import nux.util as util
 
 __all__ = ["LeakyReLU",
@@ -15,7 +15,7 @@ __all__ = ["LeakyReLU",
            "Logit",
            "SoftplusInverse"]
 
-class LeakyReLUInv(Layer):
+class LeakyReLUInv(InvertibleLayer):
 
   def __init__(self,
                alpha: float=0.01,
@@ -50,7 +50,7 @@ class LeakyReLUInv(Layer):
     outputs = {"x": z, "log_det": -log_det}
     return outputs
 
-class LeakyReLU(Layer):
+class LeakyReLU(InvertibleLayer):
 
   def __init__(self,
                alpha: float=0.01,
@@ -85,7 +85,7 @@ class LeakyReLU(Layer):
     outputs = {"x": z, "log_det": log_det}
     return outputs
 
-class SneakyReLU(Layer):
+class SneakyReLU(InvertibleLayer):
 
   """ Adapted from https://github.com/didriknielsen/survae_flows/blob/master/survae/transforms/bijections/elementwise_nonlinear.py
       Originally from https://invertibleworkshop.github.io/INNF_2019/accepted_papers/pdfs/INNF_2019_paper_26.pdf """
@@ -136,7 +136,7 @@ class SneakyReLU(Layer):
 
 ################################################################################################################
 
-class Sigmoid(Layer):
+class Sigmoid(InvertibleLayer):
 
   def __init__(self,
                scale: Optional[float]=None,
@@ -185,7 +185,7 @@ class Sigmoid(Layer):
     outputs = {"x": z, "log_det": log_det}
     return outputs
 
-class Logit(Layer):
+class Logit(InvertibleLayer):
 
   def __init__(self,
                scale: Optional[float]=0.05,
@@ -245,7 +245,7 @@ class Logit(Layer):
 
 ################################################################################################################
 
-class SoftplusInverse(Layer):
+class SoftplusInverse(InvertibleLayer):
 
   """ Adapted from https://github.com/didriknielsen/survae_flows/blob/master/survae/transforms/bijections/elementwise_nonlinear.py """
 

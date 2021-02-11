@@ -2,12 +2,13 @@ import jax.numpy as jnp
 from jax import jit, random
 from functools import partial
 import jax
+from nux.internal.layer import Layer
 import haiku as hk
 from typing import Optional, Mapping, Callable, Sequence, Any
 
 __all__ = ["SqueezeExcitation"]
 
-class SqueezeExcitation(hk.Module):
+class SqueezeExcitation(Layer):
   """
   https://arxiv.org/pdf/1709.01507.pdf
   """
@@ -19,7 +20,13 @@ class SqueezeExcitation(hk.Module):
     self.reduce_ratio = reduce_ratio
     self.w_init = hk.initializers.VarianceScaling(1.0, "fan_avg", "truncated_normal") if w_init is None else w_init
 
-  def __call__(self, x, **kwargs):
+  def call(self,
+           inputs,
+           rng=None,
+           is_training=True,
+           update_params=True,
+           **kwargs):
+    x = inputs["x"]
     H, W, C = x.shape[-3:]
     c = C//self.reduce_ratio
 
@@ -34,4 +41,4 @@ class SqueezeExcitation(hk.Module):
     z = jax.nn.sigmoid(z)
 
     # Scale the input
-    return x*z[...,None,None,:]
+    return {"x": x*z[...,None,None,:]}

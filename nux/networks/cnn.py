@@ -3,6 +3,7 @@ from jax import jit, random
 from functools import partial
 import jax
 import haiku as hk
+from nux.internal.layer import Layer
 import nux.util as util
 from typing import Optional, Mapping, Callable, Sequence, Any
 import nux.util.weight_initializers as init
@@ -53,18 +54,15 @@ def data_dependent_param_init(x: jnp.ndarray,
                                                     update_params=update_params,
                                                     **conv_kwargs)
   elif parameter_norm == "weight_norm":
-    if x.shape[0] > 1:
-      return init.conv_weight_with_weight_norm(x,
-                                               kernel_shape,
-                                               out_channel,
-                                               name_suffix,
-                                               w_init,
-                                               b_init,
-                                               use_bias,
-                                               is_training,
-                                               **conv_kwargs)
-    else:
-      warnings.warn("Not using weight normalization!")
+    return init.conv_weight_with_weight_norm(x,
+                                             kernel_shape,
+                                             out_channel,
+                                             name_suffix,
+                                             w_init,
+                                             b_init,
+                                             use_bias,
+                                             is_training,
+                                             **conv_kwargs)
 
   w = hk.get_parameter(f"w_{name_suffix}", w_shape, x.dtype, init=w_init)
   if use_bias:
@@ -76,7 +74,7 @@ def data_dependent_param_init(x: jnp.ndarray,
 
 ################################################################################################################
 
-class Conv(hk.Module):
+class Conv(Layer):
 
   def __init__(self,
                out_channel: int,
@@ -130,35 +128,49 @@ class Conv(hk.Module):
                 max_singular_value=self.max_singular_value,
                 max_power_iters=self.max_power_iters)
 
-  def __call__(self, x, is_training=True, **kwargs):
-    # This function assumes that the input is batched!
-    batch_size, H, W, C = x.shape
+  def call(self,
+           inputs,
+           rng=None,
+           is_training=True,
+           update_params=True,
+           **kwargs):
+    x_shape = self.unbatched_input_shapes["x"]
+    assert len(x_shape) == 3
+    x = inputs["x"]
+
+    # Pass a singly batched input to the parameter functions.
+    # Don't use autobatching here because we might end up reducing
+    x, reshape = self.make_singly_batched(x)
 
     params = data_dependent_param_init(x,
-                                       self.kernel_shape,
-                                       self.out_channel,
+                                       kernel_shape=self.kernel_shape,
+                                       out_channel=self.out_channel,
                                        name_suffix="",
                                        w_init=self.w_init,
                                        b_init=self.b_init,
                                        parameter_norm=self.parameter_norm,
                                        use_bias=self.use_bias,
                                        is_training=is_training,
+                                       update_params=update_params,
                                        **self.conv_kwargs)
+    x = reshape(x)
+
     if self.use_bias:
       w, b = params
     else:
       w = params
 
-    out = util.apply_conv(x, w, **self.conv_kwargs)
+    conv_fun = self.auto_batch(util.apply_conv, expected_depth=1, in_axes=(0, None))
+    out = conv_fun(x, w, **self.conv_kwargs)
 
     if self.use_bias:
       out += b
 
-    return out
+    return {"x": out}
 
 ################################################################################################################
 
-class RepeatedConv(hk.Module):
+class RepeatedConv(Layer):
 
   def __init__(self,
                channel_sizes: Sequence[int],
@@ -252,9 +264,14 @@ class RepeatedConv(hk.Module):
                 max_singular_value=self.max_singular_value,
                 max_power_iters=self.max_power_iters)
 
-  def __call__(self, x, rng, aux=None, is_training=True, **kwargs):
-    # This function assumes that the input is batched!
-    batch_size, H, W, C = x.shape
+  def call(self,
+           inputs,
+           rng,
+           is_training=True,
+           update_params=True,
+           **kwargs):
+    x = inputs["x"]
+    aux = inputs.get("aux", None)
 
     if rng.ndim > 1:
       # In case we did the split in ResNet or CNN
@@ -267,19 +284,29 @@ class RepeatedConv(hk.Module):
     for i, (rng, out_channel, kernel_shape) in enumerate(zip(rngs, self.channel_sizes, self.kernel_shapes)):
 
       if i == len(self.channel_sizes) - 1 and self.gate == True:
-        ab = Conv(2*out_channel, kernel_shape, name=f"conv_{i}", **self.conv_kwargs)(x, is_training=is_training)
+        ab = Conv(2*out_channel,
+                  kernel_shape,
+                  name=f"conv_{i}",
+                  **self.conv_kwargs)({"x": x}, is_training=is_training)["x"]
         a, b = jnp.split(ab, 2, axis=-1)
         x = a*jax.nn.sigmoid(b)
       else:
-        x = Conv(out_channel, kernel_shape, name=f"conv_{i}", **self.conv_kwargs)(x, is_training=is_training)
+        x = Conv(out_channel,
+                 kernel_shape,
+                 name=f"conv_{i}",
+                 **self.conv_kwargs)({"x": x}, is_training=is_training)["x"]
 
       # Network-in-network
       if aux is not None:
         aux = self.nonlinearity(aux)
-        x += Conv(out_channel, kernel_shape, name=f"conv_{i}_aux", **self.conv_kwargs)(aux, is_training=is_training)
+        x += Conv(out_channel,
+                  kernel_shape,
+                  name=f"conv_{i}_aux",
+                  **self.conv_kwargs)({"x": aux}, is_training=is_training)["x"]
 
       if self.norm is not None:
-        x = self.norm(f"norm_{i}")(x, is_training=is_training)
+        norm = self.auto_batch(self.norm(f"norm_{i}"), expected_depth=1)
+        x = norm(x, is_training=is_training)
 
       if self.activate_last or i < len(self.channel_sizes) - 1:
         x = self.nonlinearity(x)
@@ -288,7 +315,7 @@ class RepeatedConv(hk.Module):
           rate = self.dropout_rate if is_training else 0.0
           x = hk.dropout(rng, rate, x)
 
-    return x
+    return {"x": x}
 
 ################################################################################################################
 
@@ -358,7 +385,7 @@ class ReverseBottleneckConv(RepeatedConv):
 
 ################################################################################################################
 
-class CNN(hk.Module):
+class CNN(Layer):
 
   def __init__(self,
                n_blocks: int,
@@ -417,15 +444,24 @@ class CNN(hk.Module):
     else:
       assert 0, "Invalid block type"
 
-  def __call__(self, x, rng, aux=None, is_training=True, **kwargs):
+  def call(self,
+           inputs,
+           rng,
+           is_training=True,
+           update_params=True,
+           **kwargs):
+    x = inputs["x"]
+    aux = inputs.get("aux", None)
+
     rngs = random.split(rng, 3*self.n_blocks).reshape((self.n_blocks, 3, -1))
 
     for i, rng_for_convs in enumerate(rngs):
-      x = self.conv_block(out_channel=self.working_channel,
-                          **self.conv_block_kwargs)(x, rng_for_convs, aux=aux, is_training=is_training)
+      cnn = self.conv_block(out_channel=self.working_channel,
+                            **self.conv_block_kwargs)
+      x = cnn({"x": x, "aux": aux}, rng=rng_for_convs, is_training=is_training)["x"]
 
       if self.squeeze_excite:
-        x = nux.SqueezeExcitation(reduce_ratio=4)(x)
+        x = nux.SqueezeExcitation(reduce_ratio=4)(x)["x"]
 
     # Add an extra convolution to change the out channels
     if self.gate_final:
@@ -438,7 +474,7 @@ class CNN(hk.Module):
                   zero_init=self.zero_init,
                   max_singular_value=self.max_singular_value,
                   max_power_iters=self.max_power_iters)
-      ab = conv(x, is_training=is_training)
+      ab = conv({"x": x}, is_training=is_training)["x"]
       a, b = jnp.split(ab, 2, axis=-1)
       x = a*jax.nn.sigmoid(b)
     else:
@@ -451,6 +487,6 @@ class CNN(hk.Module):
                   zero_init=self.zero_init,
                   max_singular_value=self.max_singular_value,
                   max_power_iters=self.max_power_iters)
-      x = conv(x, is_training=is_training)
+      x = conv({"x": x}, is_training=is_training)["x"]
 
-    return x
+    return {"x": x}

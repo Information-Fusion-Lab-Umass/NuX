@@ -5,7 +5,7 @@ from jax import random, vmap
 from functools import partial
 import haiku as hk
 from typing import Optional, Mapping, Sequence
-from nux.internal.layer import Layer
+from nux.internal.layer import InvertibleLayer
 import nux.util as util
 
 __all__ = ["Squeeze",
@@ -14,7 +14,7 @@ __all__ = ["Squeeze",
            "Reshape",
            "Reverse"]
 
-class Squeeze(Layer):
+class Squeeze(InvertibleLayer):
 
   def __init__(self,
                filter_shape: Sequence[int]=(2, 2),
@@ -51,7 +51,7 @@ class Squeeze(Layer):
 
     return outputs
 
-class UnSqueeze(Layer):
+class UnSqueeze(InvertibleLayer):
 
   def __init__(self,
                filter_shape: Sequence[int]=(2, 2),
@@ -86,7 +86,7 @@ class UnSqueeze(Layer):
 
     return outputs
 
-class Flatten(Layer):
+class Flatten(InvertibleLayer):
 
   def __init__(self,
                name: str="flatten",
@@ -119,7 +119,7 @@ class Flatten(Layer):
     outputs = {"x": z, "log_det": jnp.zeros(self.batch_shape)}
     return outputs
 
-class Reshape(Layer):
+class Reshape(InvertibleLayer):
 
   def __init__(self,
                output_shape: Sequence[int],
@@ -157,7 +157,7 @@ class Reshape(Layer):
     outputs = {"x": z, "log_det": jnp.zeros(self.batch_shape)}
     return outputs
 
-class Reverse(Layer):
+class Reverse(InvertibleLayer):
 
   def __init__(self,
                name: str="reverse",

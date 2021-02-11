@@ -5,7 +5,7 @@ from jax import random, vmap
 from functools import partial
 import haiku as hk
 from typing import Optional, Mapping, Tuple, Sequence, Union, Any, Callable
-from nux.internal.layer import Layer
+from nux.internal.layer import InvertibleLayer
 import nux.util as util
 import nux.util.weight_initializers as init
 
@@ -21,7 +21,7 @@ __all__ = ["Bias",
 
 ################################################################################################################
 
-class Bias(Layer):
+class Bias(InvertibleLayer):
 
   def __init__(self,
                axis: int=-1,
@@ -49,7 +49,7 @@ class Bias(Layer):
       z = x - b
     return {"x": z, "log_det": jnp.zeros(self.batch_shape)}
 
-class Identity(Layer):
+class Identity(InvertibleLayer):
 
   def __init__(self,
                name: str="identity"
@@ -70,7 +70,7 @@ class Identity(Layer):
 
 ################################################################################################################
 
-class ShiftScale(Layer):
+class ShiftScale(InvertibleLayer):
 
   def __init__(self,
                axis=-1,
@@ -114,7 +114,7 @@ class ShiftScale(Layer):
 
 ################################################################################################################
 
-class Scale(Layer):
+class Scale(InvertibleLayer):
 
   def __init__(self,
                scale: float,
@@ -147,7 +147,7 @@ class Scale(Layer):
 
     return outputs
 
-class ElementwiseScale(Layer):
+class ElementwiseScale(InvertibleLayer):
 
   def __init__(self,
                scale: jnp.ndarray=None,
@@ -189,7 +189,7 @@ class ElementwiseScale(Layer):
 
 ################################################################################################################
 
-class AffineDense(Layer):
+class AffineDense(InvertibleLayer):
 
   def __init__(self,
                weight_norm: bool=True,
@@ -259,7 +259,7 @@ tri_solve = jax.scipy.linalg.solve_triangular
 L_solve = partial(tri_solve, lower=True, unit_diagonal=True)
 U_solve = partial(tri_solve, lower=False, unit_diagonal=True)
 
-class AffineLDU(Layer):
+class AffineLDU(InvertibleLayer):
 
   def __init__(self,
                safe_diag: bool=True,
@@ -330,7 +330,7 @@ class AffineLDU(Layer):
 
 ################################################################################################################
 
-class AffineSVD(Layer):
+class AffineSVD(InvertibleLayer):
 
   def __init__(self,
                n_householders: int,
@@ -389,7 +389,7 @@ class AffineSVD(Layer):
 
 ################################################################################################################
 
-class OneByOneConv(Layer):
+class OneByOneConv(InvertibleLayer):
 
   def __init__(self,
                weight_norm: bool=True,

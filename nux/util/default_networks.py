@@ -3,10 +3,10 @@ from jax import jit, random
 from functools import partial
 import jax
 import haiku as hk
-import nux.networks as net
 from typing import Optional, Mapping, Callable, Sequence, Any
 
 def get_default_network(out_shape, network_kwargs=None, resnet=True, lipschitz=False):
+  import nux.networks as net
 
   out_dim = out_shape[-1]
 

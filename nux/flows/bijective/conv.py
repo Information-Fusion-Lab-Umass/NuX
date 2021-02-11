@@ -5,7 +5,7 @@ from jax import random, vmap, jit
 from functools import partial
 import haiku as hk
 from typing import Optional, Mapping, Sequence
-from nux.internal.layer import Layer
+from nux.internal.layer import InvertibleLayer
 import nux.util as util
 
 __all__ = ["CircularConv"]
@@ -23,7 +23,7 @@ def complex_slogdet(x):
     return 0.25*jnp.linalg.slogdet(D@D.T)[1]
 slogdet_height_width_vmap = jit(vmap(vmap(complex_slogdet)))
 
-class CircularConv(Layer):
+class CircularConv(InvertibleLayer):
 
   def __init__(self,
                filter_shape: Sequence[int],

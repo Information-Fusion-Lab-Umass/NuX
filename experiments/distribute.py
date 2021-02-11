@@ -31,7 +31,8 @@ def get_base_command_line_args(as_dict=False):
   parser.add_argument("--train_key_seed", default=0, type=int)
   parser.add_argument("--eval_key_seed", default=0, type=int)
   parser.add_argument("--quantize_bits", default=8, type=int)
-
+  parser.add_argument("--label_keep_percent", default=1.0, type=float)
+  parser.add_argument("--random_label_percent", default=0.0, type=float)
   if as_dict:
     args = parser.parse_args()
     return vars(args)
@@ -51,7 +52,12 @@ def generate_python_command(module_path, action, settings):
 
 ################################################################################################################
 
-def distribute_experiment(python_command, gpu="2080ti-short", name=None, test=False):
+def distribute_experiment(python_command, gpu="2080ti-short", name=None, test=False, cluster=True):
+
+  if cluster == False:
+    os.system(python_command)
+    return
+
   shell_script = f"#!/bin/sh\n{python_command}"
 
   # So that we don't have any collisions
