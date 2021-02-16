@@ -3,6 +3,10 @@ import jax
 from jax import random
 from functools import partial
 import nux.util as util
+from pathlib import Path
+import os
+import tensorflow_datasets as tfds
+from experiments.datasetdownload import download_file_from_google_drive
 
 def get_tf_dataset(quantize_bits,
                    batch_size,
@@ -192,6 +196,29 @@ def get_celeba_dataset(quantize_bits,
                         label_keep_percent=label_keep_percent,
                         random_label_percent=random_label_percent)
 
+def get_celebahq_dataset(quantize_bits,
+                       batch_size=64,
+                       n_batches=1000,
+                       split="train",
+                       label_keep_percent=1.0,
+                       random_label_percent=0.0):
+  dirtemp = os.path.expanduser('~/tensorflow_datasets/downloads/manual/data1024x1024.tar')
+  Path(os.path.expanduser('~/tensorflow_datasets/downloads/manual/')).mkdir(parents=True, exist_ok=True)
+
+  if(not os.path.exists(dirtemp)):
+    print('Celeb_ahq not detected, proceeding with download')
+    download_file_from_google_drive('1aNQw43R0EV4v9EJDFBFX7ZYEZuPpfo-v', dirtemp)
+    print('download finished')
+
+  return get_tf_dataset(quantize_bits,
+                        batch_size,
+                        dataset_name="celeb_a_hq",
+                        n_batches=n_batches,
+                        split=split,
+                        crop=False,
+                        label_keep_percent=label_keep_percent,
+                        random_label_percent=random_label_percent)
+
 def get_imagenet_dataset(quantize_bits,
                          batch_size=64,
                          n_batches=1000,
@@ -210,8 +237,7 @@ def get_imagenet_dataset(quantize_bits,
 
 ################################################################################################################
 
-def get_regular_dataset(*,
-                        data,
+def get_regular_dataset(data,
                         labels=None,
                         batch_size=32,
                         n_batches=None,
@@ -227,17 +253,16 @@ def get_regular_dataset(*,
 
   key = random.PRNGKey(0)
 
-  if labels is not None:
-    # Make some of the data points have random labels
-    if random_label_percent > 0.0:
-      k1, k2 = random.split(key, 2)
-      n_random_labels = int(labels.shape[0]*random_label_percent)
-      random_indices = random.randint(k1, minval=0, maxval=labels.shape[0], shape=(n_random_labels,))
-      random_labels = random.randint(k2, minval=0, maxval=n_classes, shape=(n_random_labels,))
-      labels = jax.ops.index_update(labels, random_indices, random_labels)
+  # Make some of the data points have random labels
+  if random_label_percent > 0.0:
+    k1, k2 = random.split(key, 2)
+    n_random_labels = int(labels.shape[0]*random_label_percent)
+    random_indices = random.randint(k1, minval=0, maxval=labels.shape[0], shape=(n_random_labels,))
+    random_labels = random.randint(k2, minval=0, maxval=n_classes, shape=(n_random_labels,))
+    labels = jax.ops.index_update(labels, random_indices, random_labels)
 
-    # Mask some of the labels
-    labels_to_keep = random.bernoulli(key, label_keep_percent, shape=labels.shape)
+  # Mask some of the labels
+  labels_to_keep = random.bernoulli(key, label_keep_percent, shape=labels.shape)
 
   def get_train_ds(key=None):
     batch_shape = (batch_size,) if n_batches is None else (n_batches, batch_size)
@@ -316,11 +341,11 @@ def get_swiss_roll_dataset(batch_size=32,
   key = random.PRNGKey(0)
   data = random.permutation(key, data)
 
-  return get_regular_dataset(data=data,
-                             batch_size=batch_size,
-                             n_batches=n_batches,
-                             split=split,
-                             train_ratio=train_ratio,
+  return get_regular_dataset(data,
+                             batch_size,
+                             n_batches,
+                             split,
+                             train_ratio,
                              label_keep_percent=label_keep_percent)
 
 def get_moons_dataset(batch_size=32,
@@ -333,7 +358,7 @@ def get_moons_dataset(batch_size=32,
   data, labels = make_moons(n_samples=20000, noise=0.07, random_state=0)
   data, labels = jnp.array(data), jnp.array(labels)
 
-  return get_regular_dataset(data=data,
+  return get_regular_dataset(data,
                              labels=labels,
                              batch_size=batch_size,
                              n_batches=n_batches,
@@ -382,7 +407,7 @@ def get_circles_dataset(batch_size=32,
   key = random.PRNGKey(0)
   data, labels = generate_nested_circles(key, n_samples=20000)
 
-  return get_regular_dataset(data=data,
+  return get_regular_dataset(data,
                              labels=labels,
                              batch_size=batch_size,
                              n_batches=n_batches,
@@ -459,7 +484,7 @@ def get_swirl_clusters_dataset(batch_size=32,
   key = random.PRNGKey(0)
   data, labels = gen_all_clusters(key, n_samples=20000)
 
-  return get_regular_dataset(data=data,
+  return get_regular_dataset(data,
                              labels=labels,
                              batch_size=batch_size,
                              n_batches=n_batches,
@@ -565,6 +590,21 @@ def get_dataset(dataset_name,
                                               split="test",
                                               label_keep_percent=label_keep_percent,
                                               random_label_percent=random_label_percent)
+  elif dataset_name == "celeb_ahq":
+    train_ds = get_celebahq_dataset(quantize_bits,
+                                  train_batch_size,
+                                  n_batches=train_n_batches,
+                                  split="train",
+                                  label_keep_percent=label_keep_percent,
+                                  random_label_percent=random_label_percent)
+
+    get_test_ds = lambda : get_celebahq_dataset(quantize_bits,
+                                              test_batch_size,
+                                              n_batches=test_n_batches,
+                                              split="test",
+                                              label_keep_percent=label_keep_percent,
+                                              random_label_percent=random_label_percent)
+
   elif dataset_name == "imagenet":
     train_ds = get_imagenet_dataset(quantize_bits,
                                     train_batch_size,
