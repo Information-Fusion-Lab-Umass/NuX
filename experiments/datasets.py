@@ -37,6 +37,8 @@ def get_tf_dataset(quantize_bits,
     n_classes = 1000
   elif "svhn" in dataset_name:
     n_classes = 10
+  elif "mnist" in dataset_name:
+    n_classes = 10
   else:
     n_classes = None
 
