@@ -1,0 +1,8 @@
+optax==0.0.2
+chex==0.0.4
+dm-haiku @ git+https://github.com/deepmind/dm-haiku@ddb1cce49de55822a909a387e0923c051ed1c5db
+fuzzywuzzy==0.18.0
+python-Levenshtein==0.12.2
+matplotlib==3.3.4
+tensorflow==2.4.1
+tensorflow-datasets==4.2.0
