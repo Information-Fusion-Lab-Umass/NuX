@@ -35,7 +35,7 @@ __all__ = ["repeat",
 
 ################################################################################################################
 
-def _batch_repeated_layers(params, param_hashes, sample=False):
+def _batch_repeated_layers(params, param_hashes):
   # Generate a mapping from hash to parameter name
   param_hash_map = {hash(k): k for k in params.keys()}
 
@@ -50,10 +50,7 @@ def _batch_repeated_layers(params, param_hashes, sample=False):
       batched_params[base_layer_name].append(params[layer_name])
 
     # Batch the parameters
-    if sample == False:
-      batched_params[base_layer_name] = jax.tree_multimap(lambda *xs: jnp.stack([*xs]), *batched_params[base_layer_name])
-    else:
-      batched_params[base_layer_name] = jax.tree_multimap(lambda *xs: jnp.stack([*(xs[::-1])]), *batched_params[base_layer_name])
+    batched_params[base_layer_name] = jax.tree_multimap(lambda *xs: jnp.stack([*xs]), *batched_params[base_layer_name])
 
   return batched_params
 
@@ -197,6 +194,7 @@ class repeat(InvertibleLayer):
            rng: jnp.ndarray=None,
            sample: Optional[bool]=False,
            no_scan: bool=False,
+           accumulate: Iterable[str]=["log_det", "aux_loss"],
            **kwargs
   ) -> Mapping[str, jnp.ndarray]:
     if Layer._is_initializing:
@@ -214,9 +212,14 @@ class repeat(InvertibleLayer):
       param_hashes, state_hashes = get_constant("param_state_name_hashes", None)
 
       # Batch together the parameters and state across the repeated layers
-      scan_params = _batch_repeated_layers(params, param_hashes, sample=sample)
+      scan_params = _batch_repeated_layers(params, param_hashes)
       scan_params = data_structures.to_immutable_dict(scan_params)
-      scan_state = _batch_repeated_layers(state, state_hashes, sample=sample)
+      scan_state = _batch_repeated_layers(state, state_hashes)
+
+      # Reverse the order if we are sampling
+      if sample == True:
+        scan_params = jax.tree_map(lambda x: x[::-1], scan_params)
+        scan_state = jax.tree_map(lambda x: x[::-1], scan_state)
 
       # Pass other inputs we might have through the network
       shared_inputs = inputs.copy()
@@ -248,11 +251,17 @@ class repeat(InvertibleLayer):
       # Run the scan function
       rngs = random.split(rng, self.n_repeats) if rng is not None else [None]*self.n_repeats
       x, (batched_outputs, batched_updated_state) = jax.lax.scan(scan_body, inputs["x"], (scan_params, scan_state, rngs))
-      if "log_det" in batched_outputs:
-        log_det = batched_outputs["log_det"].sum(axis=0)
-        del batched_outputs["log_det"]
-      else:
-        log_det = None
+
+      # Reverse the updated state if we are sampling
+      if sample == True:
+        batched_updated_state = jax.tree_map(lambda x: x[::-1], batched_updated_state)
+
+      # Search through the outputs to find things we want to accumulate
+      accumulated_outputs = {}
+      for name in accumulate:
+        if name in batched_outputs:
+          accumulated_outputs[name] = batched_outputs[name].sum(axis=0)
+          del batched_outputs[name]
 
       # Convert the output of the scan into the same state data structure that was passed in.
       hash_map = {hash(k): k for k in state.keys()}
@@ -270,6 +279,7 @@ class repeat(InvertibleLayer):
         # Update the state dictionary
         updated_state.update(dict(zip(layer_names, split_states)))
 
+      # Just in case
       updated_state = jax.lax.stop_gradient(updated_state)
 
       # Only state might be different
@@ -277,10 +287,7 @@ class repeat(InvertibleLayer):
       finalize(params, bundled_state)
 
     outputs = {"x": x}
-    if log_det is not None:
-      outputs["log_det"] = log_det
-
-    outputs.update(batched_outputs)
+    outputs.update(accumulated_outputs)
 
     return outputs
 

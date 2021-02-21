@@ -75,7 +75,7 @@ class Padding(InvertibleLayer):
   def default_flow(self):
 
     def block():
-      return nux.sequential(nux.NeuralSpline(K=8,
+      return nux.sequential(nux.RationalQuadraticSpline(K=8,
                                              network_kwargs=self.network_kwargs,
                                              create_network=self.create_network,
                                              use_condition=True,
@@ -206,7 +206,7 @@ class PaddingChannel(InvertibleLayer):
   def default_flow(self):
 
     def block():
-      return nux.sequential(nux.NeuralSpline(K=8,
+      return nux.sequential(nux.RationalQuadraticSpline(K=8,
                                              network_kwargs=self.network_kwargs,
                                              create_network=self.create_network,
                                              use_condition=True,
@@ -337,7 +337,7 @@ class PaddingMultiscaleAndChannel(InvertibleLayer):
   def default_flow(self):
 
     def block():
-      return nux.sequential(nux.NeuralSpline(K=8,
+      return nux.sequential(nux.RationalQuadraticSpline(K=8,
                                              network_kwargs=self.network_kwargs,
                                              create_network=self.create_network,
                                              use_condition=True,

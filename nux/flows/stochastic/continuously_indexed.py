@@ -59,7 +59,8 @@ class ContinuouslyIndexed(InvertibleLayer):
 
     # Keep this simple, but a bit more complicated than p(u|z).
     self._qugx = nux.sequential(nux.reverse_flow(nux.LogisticMixtureLogit(n_components=8,
-                                                                           with_affine_coupling=False)),
+                                                                          with_affine_coupling=False,
+                                                                          coupling=False)),
                                 nux.ParametrizedGaussianPrior(network_kwargs=self.network_kwargs,
                                                               create_network=self.create_network))
     return self._qugx

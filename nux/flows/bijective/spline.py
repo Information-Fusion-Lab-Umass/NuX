@@ -10,8 +10,7 @@ import nux.util as util
 from nux.flows.bijective.coupling_base import Elementwise
 import nux.networks as net
 
-__all__ = ["RQSpline",
-           "NeuralSpline"]
+__all__ = ["RationalQuadraticSpline"]
 
 def get_knot_params(theta: jnp.ndarray,
                     K: int,
@@ -132,57 +131,7 @@ def spline(theta: jnp.ndarray,
 
 ################################################################################################################
 
-class RQSpline(InvertibleLayer):
-
-  def __init__(self,
-               K: int=4,
-               bounds: Sequence[float]=((-10.0, 10.0), (-10.0, 10.0)),
-               axis: Optional[int]=-1,
-               name: str="rq_spline",
-               **kwargs
-  ):
-    """ Neural spline flow https://arxiv.org/pdf/1906.04032.pdf
-    Args:
-      K                : Number of bins to use
-      bounds           : The interval to apply the spline to
-      name             : Optional name for this module.
-    """
-    super().__init__(name=name)
-    self.K              = K
-    self.bounds         = bounds
-    self.forward_spline = partial(spline, K=K, sample=False, bounds=bounds)
-    self.inverse_spline = partial(spline, K=K, sample=True, bounds=bounds)
-
-  def call(self,
-           inputs: Mapping[str, jnp.ndarray],
-           rng: jnp.ndarray=None,
-           sample: Optional[bool]=False,
-           **kwargs
-  ) -> Mapping[str, jnp.ndarray]:
-    x = inputs["x"]
-    x_flat = x.reshape(self.batch_shape + (-1,))
-    param_dim = (3*self.K - 1)
-
-    x_shape = x_flat.shape[len(self.batch_shape):]
-    theta = hk.get_parameter("theta", shape=(x_flat.shape[-1],) + (param_dim,), dtype=x_flat.dtype, init=hk.initializers.RandomNormal())
-    in_axes = (None, 0)
-
-    if sample == False:
-      z, elementwise_log_det = self.auto_batch(self.forward_spline, in_axes=in_axes)(theta, x_flat)
-    else:
-      z, elementwise_log_det = self.auto_batch(self.inverse_spline, in_axes=in_axes)(theta, x_flat)
-
-    z = z.reshape(x.shape)
-    elementwise_log_det = elementwise_log_det.reshape(x.shape)
-
-    sum_axes = util.last_axes(x.shape[len(self.batch_shape):])
-    log_det = elementwise_log_det.sum(axis=sum_axes)
-
-    return {"x": z, "log_det": log_det}
-
-################################################################################################################
-
-class NeuralSpline(Elementwise):
+class RationalQuadraticSpline(Elementwise):
 
   def __init__(self,
                K: int=4,

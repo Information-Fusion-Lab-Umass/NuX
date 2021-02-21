@@ -6,6 +6,8 @@ from functools import partial
 import os
 import tqdm
 from experiments.datasets import get_dataset
+import pathlib
+import matplotlib.pyplot as plt
 
 def initialize_trainer(flow,
                        clip=15.0,
@@ -33,8 +35,9 @@ def initialize_trainer(flow,
   else:
     trainer = trainer_fun(flow)
 
-  if retrain == False and os.path.exists(save_path):
-    trainer.load(save_path)
+  model_save_path = os.path.join(save_path, "model.pickle")
+  if retrain == False and os.path.exists(model_save_path):
+    trainer.load(model_save_path)
 
   return trainer
 
@@ -45,6 +48,7 @@ def train_model(create_model,
                 classification=False,
                 image=False,
                 trainer_fun=None):
+  assert args.save_path.endswith(".pickle") == False
 
   init_key  = random.PRNGKey(args.init_key_seed)
   train_key = random.PRNGKey(args.train_key_seed)
@@ -66,6 +70,9 @@ def train_model(create_model,
   flow = nux.Flow(create_model, init_key, inputs, batch_axes=(0,))
 
   print("n_params", flow.n_params)
+
+  # Make sure that the save_path folder exists
+  pathlib.Path(args.save_path).mkdir(parents=True, exist_ok=True)
 
   trainer = initialize_trainer(flow,
                                clip=args.clip,
@@ -127,6 +134,18 @@ def train(train_key,
 
       del test_ds
 
+    # Pull some samples
+    fig, axes = plt.subplots(4, 4); axes = axes.ravel()
+    samples = trainer.flow.sample(eval_key, n_samples=16, generate_image=True)
+    for k, ax in enumerate(axes):
+      ax.imshow(samples["image"][k].squeeze())
+
+    plot_save_path = os.path.join(save_path, f"sample_{trainer.n_train_steps}.png")
+    plt.savefig(plot_save_path)
+
+    plt.close()
+
     # Save the model
     if save_path is not None:
-      trainer.save(save_path)
+      model_save_path = os.path.join(save_path, f"model.pickle")
+      trainer.save(model_save_path)

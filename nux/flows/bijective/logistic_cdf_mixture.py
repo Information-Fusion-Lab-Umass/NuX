@@ -14,8 +14,7 @@ import nux
 from nux.flows.bijective.coupling_base import Elementwise
 from abc import ABC, abstractmethod
 
-__all__ = ["LogisticMixtureLogit",
-           "CouplingLogisticMixtureLogit"]
+__all__ = ["LogisticMixtureLogit"]
 
 ################################################################################################################
 
@@ -353,8 +352,5 @@ class _LogisticMixtureLogitMixin():
 
 ################################################################################################################
 
-class LogisticMixtureLogit(_LogisticMixtureLogitMixin, MixtureCDF):
-  pass
-
-class CouplingLogisticMixtureLogit(_LogisticMixtureLogitMixin, CouplingMixtureCDF):
+class LogisticMixtureLogit(_LogisticMixtureLogitMixin, CouplingMixtureCDF):
   pass

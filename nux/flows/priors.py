@@ -215,7 +215,7 @@ class AffineGaussianPriorDiagCov(InvertibleLayer):
 
       # Sample x
       mu_x = jnp.dot(z, A.T) + b
-      if manifold_sample == False:
+      if manifold_sample == True:
         noise = random.normal(k2, mu_x.shape)
       else:
         noise = jnp.zeros_like(mu_x)

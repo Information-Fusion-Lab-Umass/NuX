@@ -6,12 +6,14 @@ from functools import partial
 from experiments.train import initialize_trainer
 from experiments.datasets import get_dataset
 import matplotlib.pyplot as plt
+import nux.util as util
 
 ################################################################################################################
 
 def evaluate_2d_model(create_model,
                       args,
                       classification=False):
+  assert args.save_path.endswith(".pickle") == False
 
   init_key  = random.PRNGKey(args.init_key_seed)
   train_key = random.PRNGKey(args.train_key_seed)
@@ -112,6 +114,7 @@ def evaluate_2d_model(create_model,
 def evaluate_image_model(create_model,
                          args,
                          classification=False):
+  assert args.save_path.endswith(".pickle") == False
 
   init_key  = random.PRNGKey(args.init_key_seed)
   train_key = random.PRNGKey(args.train_key_seed)
@@ -148,20 +151,29 @@ def evaluate_image_model(create_model,
 
   # Generate reconstructions
   outputs = flow.apply(init_key, inputs, is_training=False)
+  outputs["x"] += random.normal(init_key, outputs["x"].shape)
   reconstr = flow.reconstruct(init_key, outputs, generate_image=True)
 
   # Plot the reconstructions
-  fig, axes = plt.subplots(4, 4); axes = axes.ravel()
+  fig, axes = plt.subplots(4, 12); axes = axes.ravel()
   for i, ax in enumerate(axes[:8]):
     ax.imshow(reconstr["image"][i].squeeze())
 
+  # Generate some interpolations
+  interp = jax.vmap(partial(util.spherical_interpolation, N=4))(outputs["x"][:4], outputs["x"][4:8])
+  interp = interp.reshape((-1,) + flow.latent_shape)
+  interpolations = flow.reconstruct(init_key, {"x": interp}, generate_image=True)
+  for i, ax in enumerate(axes[8:16]):
+    ax.imshow(interpolations["image"][i].squeeze())
+
   # Generate samples
-  samples = flow.sample(eval_key, n_samples=8, generate_image=True)
-  for i, ax in enumerate(axes[8:]):
+  samples = flow.sample(eval_key, n_samples=axes.size - 16, generate_image=True)
+  for i, ax in enumerate(axes[16:]):
     ax.imshow(samples["image"][i].squeeze())
 
   plt.show()
 
+  import pdb; pdb.set_trace()
 
   test_losses = sorted(trainer.test_losses.items(), key=lambda x:x[0])
   test_losses = jnp.array(test_losses)

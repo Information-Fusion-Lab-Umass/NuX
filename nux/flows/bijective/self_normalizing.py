@@ -5,42 +5,34 @@ from jax import random, vmap
 from functools import partial
 import haiku as hk
 from typing import Optional, Mapping, Tuple, Sequence, Union, Any, Callable
-from nux.internal.layer import Layer
+from nux.internal.layer import InvertibleLayer
 import nux.util as util
 import nux.util.weight_initializers as init
 
 ################################################################################################################
 
-def _forwardW(x, W):
-  lambd = 1.0
-  z = W@x
-  log_det = jnp.linalg.slogdet(W)[1]
-  return z, log_det
-
-def _forwardR(x, R):
-  lambd = 1.0
-  z = jnp.linalg.inv(R)@x
-  log_det = -jnp.linalg.slogdet(R)[1]
-  return z, log_det
-
 @jax.custom_vjp
 def forward(x, W, R, k):
-  z = W@x
+  z = jnp.dot(x, W.T)
   log_det = jnp.linalg.slogdet(W)[1]
+  if x.ndim > 1:
+    log_det *= jnp.ones(x.shape[:-1])
   return z, log_det
 
 def forward_fwd(x, W, R, k):
-  z = W@x
+  z = jnp.dot(x, W.T)
   log_det = 0.0#jnp.linalg.slogdet(W)[1]
-  reconstr_error = R@z - x
+  reconstr_error = jnp.dot(z, R.T) - x
+  if x.ndim > 1:
+    log_det *= jnp.ones(x.shape[:-1])
   return (z, log_det), (z, x, reconstr_error, W, R, k)
 
 def forward_bwd(ctx, g):
   dz, dlog_det = g
   z, x, reconstr_error, W, R, k = ctx
 
-  dW = jnp.outer(dz, x) + R.T + 2*k*R.T@jnp.outer(reconstr_error, x)
-  dR = -jnp.outer(W.T@z, dz) - W.T + 2*k*jnp.outer(reconstr_error, z)
+  dW = jnp.outer(dz, x) + dlog_det.sum()*R.T + 2*k*R.T@jnp.outer(reconstr_error, x)
+  dR = -jnp.outer(W.T@z, dz) - dlog_det.sum()*W.T + 2*k*jnp.outer(reconstr_error, z)
   dx = W.T@dz
 
   return dx, dW, dR, None
@@ -54,7 +46,7 @@ def inverse(z, W, R, lambd=1.0):
 
 ################################################################################################################
 
-class SNDense(Layer):
+class SNDense(InvertibleLayer):
 
   def __init__(self,
                name: str="self_normalizing_affine_dense",
@@ -65,11 +57,6 @@ class SNDense(Layer):
       name:  Optional name for this module.
     """
     super().__init__(name=name, **kwargs)
-    assert (weight_norm and spectral_norm) == False
-    self.spectral_norm = spectral_norm
-    self.weight_norm = weight_norm
-    self.max_singular_value = max_singular_value
-    self.max_power_iters = max_power_iters
 
   def call(self,
            inputs: Mapping[str, jnp.ndarray],
@@ -87,9 +74,9 @@ class SNDense(Layer):
     R = hk.get_parameter("R", shape=(x_dim, x_dim), dtype=dtype, init=W_init)
 
     if sample == False:
-      z, log_det = self.auto_batch(forward, in_axes=(0, None, None))(x, W, R)
+      z, log_det = self.auto_batch(forward, in_axes=(0, None, None, None))(x, W, R, 100)
     else:
-      z, log_det = self.auto_batch(inverse, in_axes=(0, None, None))(x, W, R)
+      z, log_det = self.auto_batch(inverse, in_axes=(0, None, None, None))(x, W, R, 100)
 
     outputs["x"] = z
     outputs["log_det"] = log_det

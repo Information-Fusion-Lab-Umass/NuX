@@ -81,11 +81,11 @@ class VariationalDequantization(InvertibleLayer):
   def default_flow(self):
     return nux.sequential(nux.Logit(scale=None),
                           nux.OneByOneConv(),
-                          nux.reverse_flow(nux.CouplingLogisticMixtureLogit(n_components=8,
+                          nux.reverse_flow(nux.LogisticMixtureLogit(n_components=8,
                                                                              network_kwargs=self.network_kwargs,
                                                                              use_condition=True)),
                           nux.OneByOneConv(),
-                          nux.reverse_flow(nux.CouplingLogisticMixtureLogit(n_components=8,
+                          nux.reverse_flow(nux.LogisticMixtureLogit(n_components=8,
                                                                              network_kwargs=self.network_kwargs,
                                                                              use_condition=True)),
                           nux.UnitGaussianPrior())
