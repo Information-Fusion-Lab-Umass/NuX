@@ -1,15 +1,12 @@
 import setuptools
 
-with open("README.md", "r") as fh:
-    long_description = fh.read()
-
 setuptools.setup(
-    name="nux", # Replace with your own username
-    version="1.0.2",
+    name="nux",
+    version="1.0.3",
     author="Information Fusion Lab",
-    author_email="rzabounidis@cs.umass.edu",
+    author_email="edmondcunnin@cs.umass.edu",
     description="Normalizing Flows using Jax",
-    long_description=long_description,
+    long_description=open("README.md", "r").read(),
     long_description_content_type="text/markdown",
     url="https://github.com/Information-Fusion-Lab-Umass/NuX",
     packages=setuptools.find_packages(),
@@ -18,8 +15,6 @@ setuptools.setup(
         "License :: OSI Approved :: MIT License",
         "Operating System :: OS Independent",
     ],
-    python_requires='>=3.6',
-    install_requires=[
-        'numpy >=1.12', 'jax','jaxlib'
-    ]
+    python_requires=">=3.6",
+    install_requires=open("requirements.txt").read().splitlines(),
 )
