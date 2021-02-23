@@ -8,7 +8,8 @@ from typing import Optional, Mapping, Type, Callable, Iterable, Any, Sequence, U
 import collections
 import contextlib
 
-__all__ = ["get_constant"]
+__all__ = ["get_constant",
+           "get_tree_shapes"]
 
 """ This file is largely adapted from haiku._src.base """
 
@@ -181,7 +182,10 @@ def new_custom_context(*,
 
 ################################################################################################################
 
-def get_constant(name: str, value: Any, init=None, do_not_set=False):
+def get_constant(name: str,
+                 value: Any=None,
+                 init=None,
+                 do_not_set=False):
   constants = current_frame().constants[current_bundle_name()]
   saved_value = constants.get(name, None)
   if saved_value is None:
@@ -198,3 +202,21 @@ def get_constant(name: str, value: Any, init=None, do_not_set=False):
     value = saved_value
 
   return value
+
+################################################################################################################
+
+def get_tree_shapes(name: str,
+                    pytree: Any=None,
+                    batch_axes: Optional[Sequence[int]] = (),
+                    do_not_set: Optional[bool] = False,
+) -> Any:
+
+  def get_unbatched_shape(x):
+    x_shape = [s for i, s in enumerate(x.shape) if i not in batch_axes]
+    x_shape = tuple(x_shape)
+    return x_shape
+
+  def apply_get_shapes(x):
+    return jax.tree_map(get_unbatched_shape, x)
+
+  return get_constant(name, pytree, init=apply_get_shapes, do_not_set=do_not_set)

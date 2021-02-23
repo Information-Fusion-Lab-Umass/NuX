@@ -5,28 +5,10 @@ from jax import random, jit, vmap
 import haiku as hk
 from abc import ABC, abstractmethod
 from typing import Optional, Mapping, Type, Callable, Iterable, Any, Sequence, Union, Tuple, MutableMapping, NamedTuple, Set, TypeVar
-from nux.internal.base import get_constant
 from haiku._src.typing import PRNGKey, Params, State
+from nux.internal.base import get_tree_shapes
 
 __all__ = ["Layer"]
-
-################################################################################################################
-
-def get_tree_shapes(name: str,
-                    pytree: Any,
-                    batch_axes: Optional[Sequence[int]] = (),
-                    do_not_set: Optional[bool] = False,
-) -> Any:
-
-  def get_unbatched_shape(x):
-    x_shape = [s for i, s in enumerate(x.shape) if i not in batch_axes]
-    x_shape = tuple(x_shape)
-    return x_shape
-
-  def apply_get_shapes(x):
-    return jax.tree_map(get_unbatched_shape, x)
-
-  return get_constant(name, pytree, init=apply_get_shapes, do_not_set=do_not_set)
 
 ################################################################################################################
 

@@ -42,10 +42,10 @@ def make_functional_modules(modules):
 
   def wrap_module(module):
 
-    def wrapped(params, bundled_state, x, rng, **kwargs):
+    def wrapped(params, bundled_state, *args, **kwargs):
       frame_data = to_frame_data(params, bundled_state)
       with temporary_frame_data(frame_data):
-        out = module(x, rng, **kwargs)
+        out = module(*args, **kwargs)
         return out, get_bundled_state()
 
     return wrapped
@@ -56,7 +56,7 @@ def make_functional_modules(modules):
 
   def finalize(params, bundled_state, state_only=True):
     nonlocal did_finalize, original_treedef
-    assert jax.tree_structure(bundled_state) == original_treedef
+    # assert jax.tree_structure(bundled_state) == original_treedef
     update_modified_frame_data_from_args(params, bundled_state, state_only=state_only)
     did_finalize = True
 
