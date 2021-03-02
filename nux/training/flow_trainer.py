@@ -59,6 +59,7 @@ class Trainer(ABC):
     self.scan_train_loop = jit(partial(jax.lax.scan, partial(self.scan_grad_step, _loss_has_aux=self.loss_has_aux)))
 
     self.train_losses = jnp.array([])
+    self.aux = None
     self.test_losses = {}
 
     self.train_key = None
@@ -193,6 +194,10 @@ class Trainer(ABC):
       return train_loss
     else:
       all_aux = jnp.array(all_aux)
+      if self.aux is None:
+        self.aux = all_aux
+      else:
+        self.aux = jax.tree_multimap(lambda x, y: jnp.hstack([x, y]), self.aux, all_aux)
       return train_loss, all_aux
 
   def grad_step_scan_loop(self,
@@ -220,6 +225,10 @@ class Trainer(ABC):
     if self.loss_has_aux == False:
       return train_losses
     else:
+      if self.aux is None:
+        self.aux = all_aux
+      else:
+        self.aux = jax.tree_multimap(lambda x, y: jnp.hstack([x, y]), self.aux, all_aux)
       return train_losses, all_aux
 
   #############################################################################

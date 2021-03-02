@@ -47,7 +47,10 @@ def generate_python_command(module_path, action, settings):
     args.append(f"--{key}={val}")
 
   arg_str = " ".join(args)
-  python_command = f"python -m {module_path} --{action} {arg_str}"
+  if action == "retrain":
+    python_command = f"python -m {module_path} --train --retrain {arg_str}"
+  else:
+    python_command = f"python -m {module_path} --{action} {arg_str}"
   return python_command
 
 ################################################################################################################

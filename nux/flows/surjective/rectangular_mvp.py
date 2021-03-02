@@ -43,7 +43,7 @@ class RectangularMVP(InvertibleLayer):
                output_dim: int,
                generative_only: bool=False,
                create_network: Optional[Callable]=None,
-               reverse_params: bool=True,
+               reverse_params: bool=False,
                network_kwargs: Optional=None,
                weight_norm: bool=False,
                spectral_norm: bool=False,

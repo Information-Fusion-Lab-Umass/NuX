@@ -178,47 +178,7 @@ class _MixtureCDFMixin(ABC):
 
 ################################################################################################################
 
-class MixtureCDF(_MixtureCDFMixin, InvertibleLayer):
-
-  def call(self,
-           inputs: Mapping[str, jnp.ndarray],
-           rng: jnp.ndarray=None,
-           sample: Optional[bool]=False,
-           **kwargs
-  ) -> Mapping[str, jnp.ndarray]:
-    x = inputs["x"]
-    outputs = {}
-
-    x_shape = self.get_unbatched_shapes(sample)["x"]
-    theta = hk.get_parameter("theta", shape=x_shape + (3*self.n_components + self.extra,), dtype=x.dtype, init=hk.initializers.RandomNormal(0.1))
-
-    # Split the parameters
-    if self.with_affine_coupling:
-      in_axes = (0, None, None, None, None, None)
-      out_axes = (None, None, None, None, None)
-    else:
-      in_axes = (0, None, None, None)
-      out_axes = (None, None, None)
-
-    params = self.split_theta(theta)
-    init_fun = self.auto_batch(self.safe_init, in_axes=in_axes, out_axes=out_axes, expected_depth=1)
-    params = init_fun(x, *params)
-
-    # Run the transform
-    if sample == False:
-      z, elementwise_log_det = self.auto_batch(self.mixture_forward, in_axes=in_axes, expected_depth=1)(x, *params)
-    else:
-      z, elementwise_log_det = self.auto_batch(self.mixture_inverse, in_axes=in_axes, expected_depth=1)(x, *params)
-
-    sum_axes = util.last_axes(self.unbatched_input_shapes["x"])
-    log_det = elementwise_log_det.sum(sum_axes)
-    outputs = {"x": z, "log_det": log_det}
-
-    return outputs
-
-################################################################################################################
-
-class CouplingMixtureCDF(_MixtureCDFMixin, Elementwise):
+class MixtureCDF(_MixtureCDFMixin, Elementwise):
 
   def __init__(self,
                n_components: int=4,
@@ -352,5 +312,5 @@ class _LogisticMixtureLogitMixin():
 
 ################################################################################################################
 
-class LogisticMixtureLogit(_LogisticMixtureLogitMixin, CouplingMixtureCDF):
+class LogisticMixtureLogit(_LogisticMixtureLogitMixin, MixtureCDF):
   pass

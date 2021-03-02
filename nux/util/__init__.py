@@ -15,3 +15,4 @@ from nux.util.batch_norm import *
 from nux.util.convolution import *
 from nux.util.levenshtein_matching import *
 from nux.util.interpolate import *
+from nux.util.grid import *

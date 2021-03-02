@@ -8,12 +8,14 @@ import os
 import tensorflow_datasets as tfds
 from experiments.datasetdownload import download_file_from_google_drive
 
-def get_tf_dataset(quantize_bits,
+def get_tf_dataset(*,
+                   quantize_bits,
                    batch_size,
-                   dataset_name="celeb_a",
+                   dataset_name,
                    n_batches=None,
                    split="train",
                    crop=False,
+                   classicication=False,
                    label_keep_percent=1.0,
                    random_label_percent=0.0):
 
@@ -61,7 +63,7 @@ def get_tf_dataset(quantize_bits,
 
   def to_expected_input(x):
     out = {"x": x["image"]}
-    if "label" in x:
+    if classicication == True and "label" in x:
       labels = x["label"]
       labels_one_hot = tf.one_hot(labels, n_classes)
       out["y"] = labels_one_hot
@@ -87,10 +89,12 @@ def get_tf_dataset(quantize_bits,
   ds = ds.map(random_flip)
   ds = ds.map(quantize)
   ds = ds.map(to_expected_input)
-  ds = ds.map(make_semi_supervised)
+
+  if classicication:
+    ds = ds.map(make_semi_supervised)
 
   if split == "train":
-    ds = ds.shuffle(15000).repeat()
+    ds = ds.shuffle(15000).repeat() # TODO: Make dynamic.  Fails for larger datasets.
 
   ds = ds.batch(batch_size)
   if(n_batches is not None):
@@ -102,108 +106,128 @@ def get_tf_dataset(quantize_bits,
 
 ################################################################################################################
 
-def get_mnist_dataset(quantize_bits,
+def get_mnist_dataset(quantize_bits=8,
                       batch_size=64,
                       n_batches=1000,
                       split="train",
+                      classicication=False,
                       label_keep_percent=1.0,
-                      random_label_percent=0.0):
+                      random_label_percent=0.0,
+                      **kwargs):
 
-  return get_tf_dataset(quantize_bits,
-                        batch_size,
+  return get_tf_dataset(quantize_bits=quantize_bits,
+                        batch_size=batch_size,
                         dataset_name="mnist",
                         n_batches=n_batches,
                         split=split,
                         crop=False,
+                        classicication=classicication,
                         label_keep_percent=label_keep_percent,
                         random_label_percent=random_label_percent)
 
-def get_fashion_mnist_dataset(quantize_bits,
+def get_fashion_mnist_dataset(quantize_bits=8,
                               batch_size=64,
                               n_batches=1000,
                               split="train",
+                              classicication=False,
                               label_keep_percent=1.0,
-                              random_label_percent=0.0):
+                              random_label_percent=0.0,
+                              **kwargs):
 
-  return get_tf_dataset(quantize_bits,
-                        batch_size,
+  return get_tf_dataset(quantize_bits=quantize_bits,
+                        batch_size=batch_size,
                         dataset_name="fashion_mnist",
                         n_batches=n_batches,
                         split=split,
                         crop=False,
+                        classicication=classicication,
                         label_keep_percent=label_keep_percent,
                         random_label_percent=random_label_percent)
 
-def get_cifar10_dataset(quantize_bits,
+def get_cifar10_dataset(quantize_bits=8,
                         batch_size=64,
                         n_batches=1000,
                         split="train",
+                        classicication=False,
                         label_keep_percent=1.0,
-                        random_label_percent=0.0):
+                        random_label_percent=0.0,
+                        **kwargs):
 
-  return get_tf_dataset(quantize_bits,
-                        batch_size,
+  return get_tf_dataset(quantize_bits=quantize_bits,
+                        batch_size=batch_size,
                         dataset_name="cifar10",
                         n_batches=n_batches,
                         split=split,
                         crop=False,
+                        classicication=classicication,
                         label_keep_percent=label_keep_percent,
                         random_label_percent=random_label_percent)
 
-def get_cifar100_dataset(quantize_bits,
+def get_cifar100_dataset(quantize_bits=8,
                          batch_size=64,
                          n_batches=1000,
                          split="train",
+                         classicication=False,
                          label_keep_percent=1.0,
-                         random_label_percent=0.0):
+                         random_label_percent=0.0,
+                         **kwargs):
 
-  return get_tf_dataset(quantize_bits,
-                        batch_size,
+  return get_tf_dataset(quantize_bits=quantize_bits,
+                        batch_size=batch_size,
                         dataset_name="cifar100",
                         n_batches=n_batches,
                         split=split,
                         crop=False,
+                        classicication=classicication,
                         label_keep_percent=label_keep_percent,
                         random_label_percent=random_label_percent)
 
-def get_svhn_dataset(quantize_bits,
+def get_svhn_dataset(quantize_bits=8,
                      batch_size=64,
                      n_batches=1000,
                      split="train",
+                     classicication=False,
                      label_keep_percent=1.0,
-                     random_label_percent=0.0):
+                     random_label_percent=0.0,
+                     **kwargs):
 
-  return get_tf_dataset(quantize_bits,
-                        batch_size,
+  return get_tf_dataset(quantize_bits=quantize_bits,
+                        batch_size=batch_size,
                         dataset_name="svhn_cropped",
                         n_batches=n_batches,
                         split=split,
                         crop=False,
+                        classicication=classicication,
                         label_keep_percent=label_keep_percent,
                         random_label_percent=random_label_percent)
 
-def get_celeba_dataset(quantize_bits,
+def get_celeba_dataset(quantize_bits=8,
                        batch_size=64,
                        n_batches=1000,
                        split="train",
+                       classicication=False,
                        label_keep_percent=1.0,
-                       random_label_percent=0.0):
+                       random_label_percent=0.0,
+                       **kwargs):
 
-  return get_tf_dataset(quantize_bits,
-                        batch_size,
+  return get_tf_dataset(quantize_bits=quantize_bits,
+                        batch_size=batch_size,
                         dataset_name="celeb_a",
                         n_batches=n_batches,
                         split=split,
                         crop=True,
+                        classicication=classicication,
                         label_keep_percent=label_keep_percent,
                         random_label_percent=random_label_percent)
 
-def get_celebahq_dataset(quantize_bits,
-                       batch_size=64,
-                       n_batches=1000,
-                       split="train",
-                       label_keep_percent=1.0,
-                       random_label_percent=0.0):
+def get_celebahq_dataset(quantize_bits=8,
+                         batch_size=64,
+                         n_batches=1000,
+                         split="train",
+                         classicication=False,
+                         label_keep_percent=1.0,
+                         random_label_percent=0.0,
+                         **kwargs):
   dirtemp = os.path.expanduser('~/tensorflow_datasets/downloads/manual/data1024x1024.tar')
   Path(os.path.expanduser('~/tensorflow_datasets/downloads/manual/')).mkdir(parents=True, exist_ok=True)
 
@@ -212,28 +236,35 @@ def get_celebahq_dataset(quantize_bits,
     download_file_from_google_drive('1aNQw43R0EV4v9EJDFBFX7ZYEZuPpfo-v', dirtemp)
     print('download finished')
 
-  return get_tf_dataset(quantize_bits,
-                        batch_size,
+  return get_tf_dataset(quantize_bits=quantize_bits,
+                        batch_size=batch_size,
                         dataset_name="celeb_a_hq",
                         n_batches=n_batches,
                         split=split,
                         crop=False,
+                        classicication=classicication,
                         label_keep_percent=label_keep_percent,
                         random_label_percent=random_label_percent)
 
-def get_imagenet_dataset(quantize_bits,
+def get_imagenet_dataset(quantize_bits=8,
                          batch_size=64,
                          n_batches=1000,
                          split="train",
+                         classicication=False,
                          label_keep_percent=1.0,
-                         random_label_percent=0.0):
+                         random_label_percent=0.0,
+                         **kwargs):
 
-  return get_tf_dataset(quantize_bits,
-                        batch_size,
+  if split == "test":
+    split = "validation"
+
+  return get_tf_dataset(quantize_bits=quantize_bits,
+                        batch_size=batch_size,
                         dataset_name="imagenet_resized/64x64",
                         n_batches=n_batches,
                         split=split,
                         crop=False,
+                        classicication=classicication,
                         label_keep_percent=label_keep_percent,
                         random_label_percent=random_label_percent)
 
@@ -245,18 +276,19 @@ def get_regular_dataset(data,
                         n_batches=None,
                         split="train",
                         train_ratio=0.7,
+                        classification=False,
                         label_keep_percent=1.0,
                         random_label_percent=0.0):
 
   n_train = int(data.shape[0]*train_ratio)
-  if labels is not None:
+  if classification and labels is not None:
     n_classes = len(set(labels.ravel()))
     range_classes = jnp.arange(n_classes)
 
   key = random.PRNGKey(0)
 
   # Make some of the data points have random labels
-  if random_label_percent > 0.0:
+  if classification and random_label_percent > 0.0:
     k1, k2 = random.split(key, 2)
     n_random_labels = int(labels.shape[0]*random_label_percent)
     random_indices = random.randint(k1, minval=0, maxval=labels.shape[0], shape=(n_random_labels,))
@@ -264,7 +296,8 @@ def get_regular_dataset(data,
     labels = jax.ops.index_update(labels, random_indices, random_labels)
 
   # Mask some of the labels
-  labels_to_keep = random.bernoulli(key, label_keep_percent, shape=labels.shape)
+  if classification:
+    labels_to_keep = random.bernoulli(key, label_keep_percent, shape=labels.shape)
 
   def get_train_ds(key=None):
     batch_shape = (batch_size,) if n_batches is None else (n_batches, batch_size)
@@ -278,7 +311,7 @@ def get_regular_dataset(data,
       data_batch = data[batch_idx]
       inputs = {"x": data_batch}
 
-      if labels is not None:
+      if classification and labels is not None:
         y = labels[batch_idx]
         y_one_hot = (y[...,None] == range_classes[...,:])*1.0
 
@@ -308,7 +341,7 @@ def get_regular_dataset(data,
         data_batch = rebatch(data_batch, batch_size, n_batches)
       inputs = {"x": data_batch}
 
-      if labels is not None:
+      if classification and labels is not None:
         y = labels[start_idx:end_idx]
         if n_batches is not None:
           y = rebatch(y, batch_size, n_batches)
@@ -335,27 +368,33 @@ def get_swiss_roll_dataset(batch_size=32,
                            n_batches=None,
                            split="train",
                            train_ratio=0.7,
+                           classification=False,
                            label_keep_percent=1.0,
-                           random_label_percent=0.0):
+                           random_label_percent=0.0,
+                           **kwargs):
   from sklearn.datasets import make_swiss_roll
   data = make_swiss_roll(n_samples=20000, noise=0.3, random_state=0)[0][:,[0,2]]
-  data = jnp.array(data)/10.0
+  data = jnp.array(data)#/10.0
   key = random.PRNGKey(0)
   data = random.permutation(key, data)
 
   return get_regular_dataset(data,
-                             batch_size,
-                             n_batches,
-                             split,
-                             train_ratio,
+                             labels=None,
+                             batch_size=batch_size,
+                             n_batches=n_batches,
+                             split=split,
+                             train_ratio=train_ratio,
+                             classification=False,
                              label_keep_percent=label_keep_percent)
 
 def get_moons_dataset(batch_size=32,
                       n_batches=None,
                       split="train",
                       train_ratio=0.7,
+                      classification=False,
                       label_keep_percent=1.0,
-                      random_label_percent=0.0):
+                      random_label_percent=0.0,
+                      **kwargs):
   from sklearn.datasets import make_moons
   data, labels = make_moons(n_samples=20000, noise=0.07, random_state=0)
   data, labels = jnp.array(data), jnp.array(labels)
@@ -366,6 +405,7 @@ def get_moons_dataset(batch_size=32,
                              n_batches=n_batches,
                              split=split,
                              train_ratio=train_ratio,
+                             classification=classification,
                              label_keep_percent=label_keep_percent,
                              random_label_percent=random_label_percent)
 
@@ -404,8 +444,10 @@ def get_circles_dataset(batch_size=32,
                         n_batches=None,
                         split="train",
                         train_ratio=0.7,
+                        classification=False,
                         label_keep_percent=1.0,
-                        random_label_percent=0.0):
+                        random_label_percent=0.0,
+                        **kwargs):
   key = random.PRNGKey(0)
   data, labels = generate_nested_circles(key, n_samples=20000)
 
@@ -415,8 +457,52 @@ def get_circles_dataset(batch_size=32,
                              n_batches=n_batches,
                              split=split,
                              train_ratio=train_ratio,
+                             classification=classification,
                              label_keep_percent=label_keep_percent,
                              random_label_percent=random_label_percent)
+
+################################################################################################################
+
+def generate_grid(key,
+                  n_samples,
+                  min_val,
+                  max_val,
+                  n_clusters_per_axis):
+  x, y = jnp.linspace(min_val, max_val, n_clusters_per_axis), jnp.linspace(min_val, max_val, n_clusters_per_axis)
+  X, Y = jnp.meshgrid(x, y)
+  xy = jnp.dstack([X, Y]).reshape((-1, 2))
+
+  # Repeat the data so that we can add noise to different copies
+  n_repeats = n_samples//(n_clusters_per_axis**2)
+  data = jnp.repeat(xy, repeats=n_repeats, axis=0)
+
+  # Add just enough noise so that we see each cluster without overlapping
+  std = (max_val - min_val)/n_clusters_per_axis*0.25
+
+  noise = random.normal(key, data.shape)*std
+  data += noise
+
+  data = random.permutation(key, data)
+  return data
+
+def get_grid_dataset(batch_size=32,
+                     n_batches=None,
+                     split="train",
+                     train_ratio=0.7,
+                     classification=False,
+                     label_keep_percent=1.0,
+                     random_label_percent=0.0,
+                     **kwargs):
+  key = random.PRNGKey(0)
+  data = generate_grid(key, n_samples=20000, min_val=-10, max_val=10, n_clusters_per_axis=4)
+  return get_regular_dataset(data,
+                             labels=None,
+                             batch_size=batch_size,
+                             n_batches=n_batches,
+                             split=split,
+                             train_ratio=train_ratio,
+                             classification=False,
+                             label_keep_percent=label_keep_percent)
 
 ################################################################################################################
 
@@ -481,8 +567,10 @@ def get_swirl_clusters_dataset(batch_size=32,
                                n_batches=None,
                                split="train",
                                train_ratio=0.7,
+                               classification=False,
                                label_keep_percent=1.0,
-                               random_label_percent=0.0):
+                               random_label_percent=0.0,
+                               **kwargs):
   key = random.PRNGKey(0)
   data, labels = gen_all_clusters(key, n_samples=20000)
 
@@ -492,10 +580,38 @@ def get_swirl_clusters_dataset(batch_size=32,
                              n_batches=n_batches,
                              split=split,
                              train_ratio=train_ratio,
+                             classification=classification,
                              label_keep_percent=label_keep_percent,
                              random_label_percent=random_label_percent)
 
 ################################################################################################################
+
+def make_train_test(dataset_fun,
+                    train_batch_size,
+                    train_n_batches,
+                    test_batch_size,
+                    test_n_batches,
+                    quantize_bits=8,
+                    classification=False,
+                    label_keep_percent=1.0,
+                    random_label_percent=0.0):
+  train_ds = dataset_fun(quantize_bits=quantize_bits,
+                         batch_size=train_batch_size,
+                         n_batches=train_n_batches,
+                         split="train",
+                         classification=classification,
+                         label_keep_percent=label_keep_percent,
+                         random_label_percent=random_label_percent)
+
+  get_test_ds = lambda : dataset_fun(quantize_bits=quantize_bits,
+                                     batch_size=test_batch_size,
+                                     n_batches=test_n_batches,
+                                     split="test",
+                                     classification=classification,
+                                     label_keep_percent=1.0,
+                                     random_label_percent=0.0)
+
+  return train_ds, get_test_ds
 
 def get_dataset(dataset_name,
                 train_batch_size,
@@ -507,174 +623,45 @@ def get_dataset(dataset_name,
                 label_keep_percent=1.0,
                 random_label_percent=0.0):
 
+  kwargs = dict(train_batch_size=train_batch_size,
+                train_n_batches=train_n_batches,
+                test_batch_size=test_batch_size,
+                test_n_batches=test_n_batches,
+                quantize_bits=quantize_bits,
+                classification=classification,
+                label_keep_percent=label_keep_percent,
+                random_label_percent=random_label_percent)
+
   if dataset_name == "mnist":
-    train_ds = get_mnist_dataset(quantize_bits,
-                                 train_batch_size,
-                                 n_batches=train_n_batches,
-                                 split="train",
-                                 label_keep_percent=label_keep_percent,
-                                 random_label_percent=random_label_percent)
-
-    get_test_ds = lambda : get_mnist_dataset(quantize_bits,
-                                             test_batch_size,
-                                             n_batches=test_n_batches,
-                                             split="test",
-                                             label_keep_percent=label_keep_percent,
-                                             random_label_percent=random_label_percent)
+    train_ds, get_test_ds = make_train_test(get_mnist_dataset, **kwargs)
   elif dataset_name == "fashion_mnist":
-    train_ds = get_fashion_mnist_dataset(quantize_bits,
-                                         train_batch_size,
-                                         n_batches=train_n_batches,
-                                         split="train",
-                                         label_keep_percent=label_keep_percent,
-                                         random_label_percent=random_label_percent)
-
-    get_test_ds = lambda : get_fashion_mnist_dataset(quantize_bits,
-                                                     test_batch_size,
-                                                     n_batches=test_n_batches,
-                                                     split="test",
-                                                     label_keep_percent=label_keep_percent,
-                                                     random_label_percent=random_label_percent)
+    train_ds, get_test_ds = make_train_test(get_fashion_mnist_dataset, **kwargs)
   elif dataset_name == "cifar10":
-    train_ds = get_cifar10_dataset(quantize_bits,
-                                   train_batch_size,
-                                   n_batches=train_n_batches,
-                                   split="train",
-                                   label_keep_percent=label_keep_percent,
-                                   random_label_percent=random_label_percent)
-
-    get_test_ds = lambda : get_cifar10_dataset(quantize_bits,
-                                               test_batch_size,
-                                               n_batches=test_n_batches,
-                                               split="test",
-                                               label_keep_percent=label_keep_percent,
-                                               random_label_percent=random_label_percent)
+    train_ds, get_test_ds = make_train_test(get_cifar10_dataset, **kwargs)
   elif dataset_name == "cifar100":
-    train_ds = get_cifar100_dataset(quantize_bits,
-                                    train_batch_size,
-                                    n_batches=train_n_batches,
-                                    split="train",
-                                    label_keep_percent=label_keep_percent,
-                                    random_label_percent=random_label_percent)
-
-    get_test_ds = lambda : get_cifar100_dataset(quantize_bits,
-                                                test_batch_size,
-                                                n_batches=test_n_batches,
-                                                split="test",
-                                                label_keep_percent=label_keep_percent,
-                                                random_label_percent=random_label_percent)
+    train_ds, get_test_ds = make_train_test(get_cifar100_dataset, **kwargs)
   elif dataset_name == "svhn":
-    train_ds = get_svhn_dataset(quantize_bits,
-                                train_batch_size,
-                                n_batches=train_n_batches,
-                                split="train",
-                                label_keep_percent=label_keep_percent,
-                                random_label_percent=random_label_percent)
-
-    get_test_ds = lambda : get_svhn_dataset(quantize_bits,
-                                            test_batch_size,
-                                            n_batches=test_n_batches,
-                                            split="test",
-                                            label_keep_percent=label_keep_percent,
-                                            random_label_percent=random_label_percent)
-
+    train_ds, get_test_ds = make_train_test(get_svhn_dataset, **kwargs)
   elif dataset_name == "celeb_a":
-    train_ds = get_celeba_dataset(quantize_bits,
-                                  train_batch_size,
-                                  n_batches=train_n_batches,
-                                  split="train",
-                                  label_keep_percent=label_keep_percent,
-                                  random_label_percent=random_label_percent)
-
-    get_test_ds = lambda : get_celeba_dataset(quantize_bits,
-                                              test_batch_size,
-                                              n_batches=test_n_batches,
-                                              split="test",
-                                              label_keep_percent=label_keep_percent,
-                                              random_label_percent=random_label_percent)
+    train_ds, get_test_ds = make_train_test(get_celeba_dataset, **kwargs)
   elif dataset_name == "celeb_ahq":
-    train_ds = get_celebahq_dataset(quantize_bits,
-                                  train_batch_size,
-                                  n_batches=train_n_batches,
-                                  split="train",
-                                  label_keep_percent=label_keep_percent,
-                                  random_label_percent=random_label_percent)
-
-    get_test_ds = lambda : get_celebahq_dataset(quantize_bits,
-                                              test_batch_size,
-                                              n_batches=test_n_batches,
-                                              split="test",
-                                              label_keep_percent=label_keep_percent,
-                                              random_label_percent=random_label_percent)
-
+    train_ds, get_test_ds = make_train_test(get_celebahq_dataset, **kwargs)
   elif dataset_name == "imagenet":
-    train_ds = get_imagenet_dataset(quantize_bits,
-                                    train_batch_size,
-                                    n_batches=train_n_batches,
-                                    split="train",
-                                    label_keep_percent=label_keep_percent,
-                                    random_label_percent=random_label_percent)
-
-    get_test_ds = lambda : get_imagenet_dataset(quantize_bits,
-                                                test_batch_size,
-                                                n_batches=test_n_batches,
-                                                split="validation",
-                                                label_keep_percent=label_keep_percent,
-                                                random_label_percent=random_label_percent)
-
+    train_ds, get_test_ds = make_train_test(get_imagenet_dataset, **kwargs)
   elif dataset_name == "swiss_roll":
     if classification:
       assert 0, "swiss_roll has no labels"
-    train_ds = get_swiss_roll_dataset(train_batch_size,
-                                      n_batches=train_n_batches,
-                                      split="train",
-                                      label_keep_percent=label_keep_percent,
-                                      random_label_percent=random_label_percent)
-
-    get_test_ds = lambda : get_swiss_roll_dataset(test_batch_size,
-                                                  n_batches=test_n_batches,
-                                                  split="test",
-                                                  label_keep_percent=label_keep_percent,
-                                                  random_label_percent=random_label_percent)
-
+    train_ds, get_test_ds = make_train_test(get_swiss_roll_dataset, **kwargs)
+  elif dataset_name == "grid":
+    if classification:
+      assert 0, "grid has no labels"
+    train_ds, get_test_ds = make_train_test(get_grid_dataset, **kwargs)
   elif dataset_name == "moons":
-    train_ds = get_moons_dataset(train_batch_size,
-                                 n_batches=train_n_batches,
-                                 split="train",
-                                 label_keep_percent=label_keep_percent,
-                                 random_label_percent=random_label_percent)
-
-    get_test_ds = lambda : get_moons_dataset(test_batch_size,
-                                             n_batches=test_n_batches,
-                                             split="test",
-                                             label_keep_percent=label_keep_percent,
-                                             random_label_percent=random_label_percent)
-
+    train_ds, get_test_ds = make_train_test(get_moons_dataset, **kwargs)
   elif dataset_name == "circles":
-    train_ds = get_circles_dataset(train_batch_size,
-                                   n_batches=train_n_batches,
-                                   split="train",
-                                   label_keep_percent=label_keep_percent,
-                                   random_label_percent=random_label_percent)
-
-    get_test_ds = lambda : get_circles_dataset(test_batch_size,
-                                               n_batches=test_n_batches,
-                                               split="test",
-                                               label_keep_percent=label_keep_percent,
-                                               random_label_percent=random_label_percent)
-
+    train_ds, get_test_ds = make_train_test(get_circles_dataset, **kwargs)
   elif dataset_name == "swirl_clusters":
-    train_ds = get_swirl_clusters_dataset(train_batch_size,
-                                          n_batches=train_n_batches,
-                                          split="train",
-                                          label_keep_percent=label_keep_percent,
-                                          random_label_percent=random_label_percent)
-
-    get_test_ds = lambda : get_swirl_clusters_dataset(test_batch_size,
-                                                      n_batches=test_n_batches,
-                                                      split="test",
-                                                      label_keep_percent=label_keep_percent,
-                                                      random_label_percent=random_label_percent)
+    train_ds, get_test_ds = make_train_test(get_swirl_clusters_dataset, **kwargs)
   else:
     assert 0, "Invalid dataset name"
 

@@ -127,7 +127,7 @@ class Padding(InvertibleLayer):
 
       flow_inputs = {"x": noise, "condition": f}
       outputs = flow(flow_inputs, k2, sample=False)
-      log_pepsgs = outputs["log_det"] + outputs["log_pz"]
+      log_pepsgs = outputs.get("log_det", 0.0) + outputs["log_pz"]
       log_det += log_pepsgs
 
     else:
@@ -140,7 +140,7 @@ class Padding(InvertibleLayer):
       noise = outputs["x"]
 
       z = jnp.concatenate([x, noise], axis=-1)
-      log_qepsgs = outputs["log_det"] + outputs["log_pz"]
+      log_qepsgs = outputs.get("log_det", 0.0) + outputs["log_pz"]
       log_det -= log_qepsgs
 
     return {"x": z, "log_det": log_det}

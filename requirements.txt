@@ -6,3 +6,5 @@ python-Levenshtein==0.12.2
 matplotlib==3.3.4
 tensorflow==2.4.1
 tensorflow-datasets==4.2.0
+sklearn==0.0
+tqdm==4.57.0

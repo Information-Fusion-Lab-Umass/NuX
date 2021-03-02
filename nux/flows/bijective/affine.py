@@ -262,6 +262,7 @@ class AffineLDU(InvertibleLayer):
 
   def __init__(self,
                safe_diag: bool=True,
+               use_bias: bool=True,
                name: str="affine_ldu"
   ):
     """ LDU parametrized matrix multiplication.  Costs O(D^2) to invert and O(D) for a regular pass.
@@ -270,6 +271,7 @@ class AffineLDU(InvertibleLayer):
     """
     super().__init__(name=name)
     self.safe_diag = safe_diag
+    self.use_bias = use_bias
 
   def call(self,
            inputs: Mapping[str, jnp.ndarray],
@@ -291,19 +293,20 @@ class AffineLDU(InvertibleLayer):
       d = util.proximal_relu(log_d) + 1e-5
       log_d = jnp.log(d)
 
-    def b_init(shape, dtype):
-      x = inputs["x"]
-      if x.ndim == 1:
-        return jnp.zeros(shape, dtype=dtype)
+    if self.use_bias:
+      def b_init(shape, dtype):
+        x = inputs["x"]
+        if x.ndim == 1:
+          return jnp.zeros(shape, dtype=dtype)
 
-      # Initialize to the batch mean
-      z = jnp.dot(x, (U*lower_mask.T).T) + x
-      z *= jnp.exp(log_d)
-      z = jnp.dot(z, (L*lower_mask).T) + z
-      b = -jnp.mean(z, axis=0)
-      return b
+        # Initialize to the batch mean
+        z = jnp.dot(x, (U*lower_mask.T).T) + x
+        z *= jnp.exp(log_d)
+        z = jnp.dot(z, (L*lower_mask).T) + z
+        b = -jnp.mean(z, axis=0)
+        return b
 
-    b = hk.get_parameter("b", shape=(dim,), dtype=dtype, init=b_init)
+      b = hk.get_parameter("b", shape=(dim,), dtype=dtype, init=b_init)
 
     # Its way faster to allocate a full matrix for L and U and then mask than it
     # is to allocate only the lower/upper parts and the reshape.
@@ -312,13 +315,18 @@ class AffineLDU(InvertibleLayer):
       z = jnp.dot(x, (U*lower_mask.T).T) + x
       z *= jnp.exp(log_d)
       z = jnp.dot(z, (L*lower_mask).T) + z
-      outputs["x"] = z + b
+      outputs["x"] = z
+      if self.use_bias:
+        outputs["x"] += b
     else:
       z = inputs["x"]
 
       @self.auto_batch
       def invert(z):
-        x = L_solve(L, z - b)
+        if self.use_bias:
+          x = L_solve(L, z - b)
+        else:
+          x = L_solve(L, z)
         x = x*jnp.exp(-log_d)
         return U_solve(U, x)
 

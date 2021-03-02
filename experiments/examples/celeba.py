@@ -15,7 +15,7 @@ import pathlib
 ################################################################################################################
 
 # To run this script, be at the same directory level as "nux" and use the command:
-# python -m experiments.example.celeba <your args>
+# python -m experiments.examples.celeba <your args>
 
 ################################################################################################################
 

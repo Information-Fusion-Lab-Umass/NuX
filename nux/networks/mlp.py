@@ -18,6 +18,7 @@ def data_dependent_param_init(x: jnp.ndarray,
                               is_training: bool=True,
                               parameter_norm: str=None,
                               use_bias: bool=True,
+                              update_params: bool=True,
                               **kwargs):
 
   if parameter_norm == "spectral_norm":
@@ -29,6 +30,16 @@ def data_dependent_param_init(x: jnp.ndarray,
                                           is_training=is_training,
                                           use_bias=use_bias,
                                           **kwargs)
+  elif parameter_norm == "differentiable_spectral_norm":
+    return init.weight_with_good_spectral_norm(x=x,
+                                               out_dim=out_dim,
+                                               name_suffix=name_suffix,
+                                               w_init=w_init,
+                                               b_init=b_init,
+                                               is_training=is_training,
+                                               update_params=update_params,
+                                               use_bias=use_bias,
+                                               **kwargs)
 
   elif parameter_norm == "weight_norm":
     if x.shape[0] > 1:
@@ -70,7 +81,7 @@ class MLP(Layer):
                zero_init: bool=False,
                skip_connection: bool=False,
                max_singular_value: float=0.99,
-               max_power_iters: int=5,
+               max_power_iters: int=1,
                name: str=None):
     super().__init__(name=name)
     self.out_dim         = out_dim

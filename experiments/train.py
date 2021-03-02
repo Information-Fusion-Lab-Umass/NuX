@@ -8,6 +8,7 @@ import tqdm
 from experiments.datasets import get_dataset
 import pathlib
 import matplotlib.pyplot as plt
+import jax.profiler
 
 def initialize_trainer(flow,
                        clip=15.0,
@@ -111,6 +112,13 @@ def train(train_key,
           eval_interval=None,
           classification=False,
           bits_per_dim=False):
+  profile = True
+
+  inputs = next(train_ds)
+  inputs_singly_batched = jax.tree_map(lambda x: x[0], inputs)
+  flow = trainer.flow
+  trainer.loss(trainer.params, flow.state, train_key, inputs_singly_batched)
+
 
   pbar = tqdm.tqdm(jnp.arange(int(max_iters)))
   for i in pbar:
@@ -121,6 +129,9 @@ def train(train_key,
     inputs = next(train_ds)
     res = trainer.grad_step_scan_loop(key, inputs, bits_per_dim=bits_per_dim)
     pbar.set_description(trainer.summarize_losses_and_aux(res))
+
+    if profile:
+      jax.profiler.save_device_memory_profile(f"memory{i}.prof")
 
     # Stop if things have diverged
     if jnp.isnan(trainer.train_losses[-1]):
