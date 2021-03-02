@@ -17,6 +17,7 @@ def initialize_trainer(flow,
                        save_path=None,
                        retrain=False,
                        classification=False,
+                       train_args=["log_pz", "log_det"],
                        trainer_fun=None):
 
   if trainer_fun is None:
@@ -25,12 +26,14 @@ def initialize_trainer(flow,
                                              clip=clip,
                                              lr=lr,
                                              warmup=warmup,
+                                             train_args=train_args,
                                              cosine_decay_steps=cosine_decay_steps)
     else:
       trainer = nux.JointClassificationTrainer(flow,
                                                clip=clip,
                                                lr=lr,
                                                warmup=warmup,
+                                               train_args=train_args,
                                                cosine_decay_steps=cosine_decay_steps)
   else:
     trainer = trainer_fun(flow)
@@ -82,6 +85,7 @@ def train_model(create_model,
                                save_path=args.save_path,
                                retrain=args.retrain,
                                classification=classification,
+                               train_args=args.train_args,
                                trainer_fun=trainer_fun)
 
   return train(train_key,

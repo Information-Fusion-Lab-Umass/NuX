@@ -48,6 +48,7 @@ def evaluate_2d_model(create_model,
                                cosine_decay_steps=args.cosine_decay_steps,
                                save_path=args.save_path,
                                retrain=args.retrain,
+                               train_args=args.train_args,
                                classification=classification)
 
   test_losses = sorted(trainer.test_losses.items(), key=lambda x:x[0])
@@ -147,6 +148,7 @@ def evaluate_image_model(create_model,
                                cosine_decay_steps=args.cosine_decay_steps,
                                save_path=args.save_path,
                                retrain=args.retrain,
+                               train_args=args.train_args,
                                classification=classification)
 
   # Generate reconstructions

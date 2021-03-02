@@ -263,13 +263,16 @@ class MaximumLikelihoodTrainer(Trainer):
                optimizer: GradientTransformation=None,
                train_args=["log_pz", "log_det"],
                **kwargs):
-    super().__init__(flow, optimizer=optimizer, loss_has_aux=False, **kwargs)
+    super().__init__(flow, optimizer=optimizer, loss_has_aux=False, train_args=train_args, **kwargs)
 
   def loss(self, params, state, key, inputs, **kwargs):
     outputs, updated_state = self.flow._apply_fun(params, state, key, inputs, accumulate=self.train_args, **kwargs)
-    log_px = outputs.get("log_pz", 0.0) + outputs.get("log_det", 0.0)
+    loss = 0.0
+    for name in self.train_args:
+      loss += outputs[name]
+
     aux = ()
-    return -log_px.mean(), (aux, updated_state)
+    return -loss.mean(), (aux, updated_state)
 
   def summarize_losses_and_aux(self, losses):
     return f"loss: {losses.mean():.2f}"
@@ -329,10 +332,16 @@ class JointClassificationTrainer(Trainer):
                optimizer: GradientTransformation=None,
                train_args=["log_pz", "log_det"],
                **kwargs):
-    super().__init__(flow, optimizer=optimizer, loss_has_aux=True, **kwargs)
+    super().__init__(flow, optimizer=optimizer, loss_has_aux=True, train_args=train_args, **kwargs)
 
   def loss(self, params, state, key, inputs, beta=1.0, **kwargs):
     outputs, updated_state = self.flow._apply_fun(params, state, key, inputs, accumulate=self.train_args, **kwargs)
+
+    assert 0
+    loss = 0.0
+    for name in self.train_args:
+      loss += outputs[name]
+
     log_pyax = outputs.get("log_pz", 0.0) + outputs.get("log_det", 0.0)
 
     # Compute the data log likelihood
