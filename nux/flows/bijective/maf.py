@@ -68,7 +68,7 @@ class MAF(InvertibleLayer):
     if sample == False:
       x = inputs["x"]
 
-      made_outs = made(x, rng)
+      made_outs = made(inputs, rng)
       mu, alpha = made_outs["mu"], made_outs["alpha"]
       z = (x - mu)*jnp.exp(-alpha)
       log_det = -alpha.sum(axis=-1)*jnp.ones(self.batch_shape)
@@ -82,7 +82,7 @@ class MAF(InvertibleLayer):
         # We need to build output a dimension at a time
         def carry_body(carry, inputs):
           x, idx = carry, inputs
-          made_outs = made(x, rng)
+          made_outs = made(inputs, rng)
           mu, alpha = made_outs["mu"], made_outs["alpha"]
           w = mu + z*jnp.exp(alpha)
           x = jax.ops.index_update(x, idx, w[idx])
