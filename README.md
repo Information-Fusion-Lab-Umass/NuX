@@ -47,3 +47,8 @@ keys = jax.random.split(key, 10)
 for key in keys:
   trainer.grad_step(key, train_inputs)
 ```
+
+## Get started
+The easiest way to use NuX is to clone this repo and install the prerequisites with the "pip install ." command.  JAX needs to be manually installed (see [this](https://github.com/google/jax#installation)) because GPU support is system dependent.  The NuX package available on pip is outdated and does not have much of the functionality of the current code.
+
+NuX is in active development, so expect the API to change over time.  Contributions are welcome!
