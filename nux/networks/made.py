@@ -54,6 +54,7 @@ class MADE(Layer):
     self.dim = dim
     self.hidden_layer_sizes = list(hidden_layer_sizes)
     self.input_sel = input_sel
+    self.w_init = hk.initializers.VarianceScaling(scale=1.0, mode="fan_avg", distribution="truncated_normal")
 
   def next_mask(self, prev_sel, size, rng):
 
@@ -90,7 +91,7 @@ class MADE(Layer):
     else:
       self.out_mask = prev_sel[:,None] <= input_sel
 
-  def get_params(i, x, output_size):
+  def get_params(self, i, x, output_size):
     w_init = hk.initializers.VarianceScaling(scale=1.0, mode="fan_avg", distribution="truncated_normal")
 
     # Pass a singly batched input to the parameter functions.
@@ -101,7 +102,7 @@ class MADE(Layer):
       w, b = init.weight_with_weight_norm(x=x,
                                           out_dim=output_size,
                                           name_suffix=str(i),
-                                          w_init=w_init,
+                                          w_init=self.w_init,
                                           b_init=jnp.zeros,
                                           is_training=True,
                                           use_bias=True)
@@ -109,12 +110,12 @@ class MADE(Layer):
       w, b = init.weight_with_spectral_norm(x=x,
                                             out_dim=output_size,
                                             name_suffix=str(i),
-                                            w_init=w_init,
+                                            w_init=self.w_init,
                                             b_init=jnp.zeros,
                                             is_training=True,
                                             use_bias=True)
     else:
-      w = hk.get_parameter(f"w_{i}", (output_size, x.shape[-1]), x.dtype, init=w_init)
+      w = hk.get_parameter(f"w_{i}", (output_size, x.shape[-1]), x.dtype, init=self.w_init)
       b = hk.get_parameter(f"b_{i}", (output_size,), init=jnp.zeros)
 
     # x = reshape(x)
@@ -162,7 +163,7 @@ class MADE(Layer):
 
       prev_sel = sel
 
-    w_mu = hk.get_parameter("w_mu", [self.dim, self.dim], x.dtype, init=w_init)
+    w_mu = hk.get_parameter("w_mu", [self.dim, self.dim], x.dtype, init=self.w_init)
     mu = jnp.dot(x, w_mu*self.out_mask)
 
     if self.triangular_jacobian:
@@ -170,7 +171,7 @@ class MADE(Layer):
       dmu = jnp.dot(dx, (w_mu*diag_mask))
       return mu, dmu
 
-    w_alpha = hk.get_parameter("w_alpha", [self.dim, self.dim], x.dtype, init=w_init)
+    w_alpha = hk.get_parameter("w_alpha", [self.dim, self.dim], x.dtype, init=self.w_init)
     alpha = jnp.dot(x, w_alpha*self.out_mask)
     alpha_bounded = jnp.tanh(alpha)
 
