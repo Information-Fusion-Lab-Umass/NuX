@@ -15,7 +15,7 @@ def get_tf_dataset(*,
                    n_batches=None,
                    split="train",
                    crop=False,
-                   classicication=False,
+                   classification=False,
                    label_keep_percent=1.0,
                    random_label_percent=0.0):
 
@@ -28,7 +28,7 @@ def get_tf_dataset(*,
   resource.setrlimit(resource.RLIMIT_NOFILE, (high, high))
 
   import tensorflow as tf
-  tf.config.set_visible_devices([], 'GPU')
+  tf.config.set_visible_devices([], "GPU")
   import tensorflow_datasets as tfds
 
   if dataset_name == "cifar10":
@@ -63,7 +63,7 @@ def get_tf_dataset(*,
 
   def to_expected_input(x):
     out = {"x": x["image"]}
-    if classicication == True and "label" in x:
+    if classification == True and "label" in x:
       labels = x["label"]
       labels_one_hot = tf.one_hot(labels, n_classes)
       out["y"] = labels_one_hot
@@ -90,7 +90,7 @@ def get_tf_dataset(*,
   ds = ds.map(quantize)
   ds = ds.map(to_expected_input)
 
-  if classicication:
+  if classification:
     ds = ds.map(make_semi_supervised)
 
   if split == "train":
@@ -110,7 +110,7 @@ def get_mnist_dataset(quantize_bits=8,
                       batch_size=64,
                       n_batches=1000,
                       split="train",
-                      classicication=False,
+                      classification=False,
                       label_keep_percent=1.0,
                       random_label_percent=0.0,
                       **kwargs):
@@ -121,7 +121,7 @@ def get_mnist_dataset(quantize_bits=8,
                         n_batches=n_batches,
                         split=split,
                         crop=False,
-                        classicication=classicication,
+                        classification=classification,
                         label_keep_percent=label_keep_percent,
                         random_label_percent=random_label_percent)
 
@@ -129,7 +129,7 @@ def get_fashion_mnist_dataset(quantize_bits=8,
                               batch_size=64,
                               n_batches=1000,
                               split="train",
-                              classicication=False,
+                              classification=False,
                               label_keep_percent=1.0,
                               random_label_percent=0.0,
                               **kwargs):
@@ -140,7 +140,7 @@ def get_fashion_mnist_dataset(quantize_bits=8,
                         n_batches=n_batches,
                         split=split,
                         crop=False,
-                        classicication=classicication,
+                        classification=classification,
                         label_keep_percent=label_keep_percent,
                         random_label_percent=random_label_percent)
 
@@ -148,7 +148,7 @@ def get_cifar10_dataset(quantize_bits=8,
                         batch_size=64,
                         n_batches=1000,
                         split="train",
-                        classicication=False,
+                        classification=False,
                         label_keep_percent=1.0,
                         random_label_percent=0.0,
                         **kwargs):
@@ -159,7 +159,7 @@ def get_cifar10_dataset(quantize_bits=8,
                         n_batches=n_batches,
                         split=split,
                         crop=False,
-                        classicication=classicication,
+                        classification=classification,
                         label_keep_percent=label_keep_percent,
                         random_label_percent=random_label_percent)
 
@@ -167,7 +167,7 @@ def get_cifar100_dataset(quantize_bits=8,
                          batch_size=64,
                          n_batches=1000,
                          split="train",
-                         classicication=False,
+                         classification=False,
                          label_keep_percent=1.0,
                          random_label_percent=0.0,
                          **kwargs):
@@ -178,7 +178,7 @@ def get_cifar100_dataset(quantize_bits=8,
                         n_batches=n_batches,
                         split=split,
                         crop=False,
-                        classicication=classicication,
+                        classification=classification,
                         label_keep_percent=label_keep_percent,
                         random_label_percent=random_label_percent)
 
@@ -186,7 +186,7 @@ def get_svhn_dataset(quantize_bits=8,
                      batch_size=64,
                      n_batches=1000,
                      split="train",
-                     classicication=False,
+                     classification=False,
                      label_keep_percent=1.0,
                      random_label_percent=0.0,
                      **kwargs):
@@ -197,7 +197,7 @@ def get_svhn_dataset(quantize_bits=8,
                         n_batches=n_batches,
                         split=split,
                         crop=False,
-                        classicication=classicication,
+                        classification=classification,
                         label_keep_percent=label_keep_percent,
                         random_label_percent=random_label_percent)
 
@@ -205,7 +205,7 @@ def get_celeba_dataset(quantize_bits=8,
                        batch_size=64,
                        n_batches=1000,
                        split="train",
-                       classicication=False,
+                       classification=False,
                        label_keep_percent=1.0,
                        random_label_percent=0.0,
                        **kwargs):
@@ -216,7 +216,7 @@ def get_celeba_dataset(quantize_bits=8,
                         n_batches=n_batches,
                         split=split,
                         crop=True,
-                        classicication=classicication,
+                        classification=classification,
                         label_keep_percent=label_keep_percent,
                         random_label_percent=random_label_percent)
 
@@ -224,17 +224,17 @@ def get_celebahq_dataset(quantize_bits=8,
                          batch_size=64,
                          n_batches=1000,
                          split="train",
-                         classicication=False,
+                         classification=False,
                          label_keep_percent=1.0,
                          random_label_percent=0.0,
                          **kwargs):
-  dirtemp = os.path.expanduser('~/tensorflow_datasets/downloads/manual/data1024x1024.tar')
-  Path(os.path.expanduser('~/tensorflow_datasets/downloads/manual/')).mkdir(parents=True, exist_ok=True)
+  dirtemp = os.path.expanduser("~/tensorflow_datasets/downloads/manual/data1024x1024.tar")
+  Path(os.path.expanduser("~/tensorflow_datasets/downloads/manual/")).mkdir(parents=True, exist_ok=True)
 
   if(not os.path.exists(dirtemp)):
-    print('Celeb_ahq not detected, proceeding with download')
-    download_file_from_google_drive('1aNQw43R0EV4v9EJDFBFX7ZYEZuPpfo-v', dirtemp)
-    print('download finished')
+    print("Celeb_ahq not detected, proceeding with download")
+    download_file_from_google_drive("1aNQw43R0EV4v9EJDFBFX7ZYEZuPpfo-v", dirtemp)
+    print("download finished")
 
   return get_tf_dataset(quantize_bits=quantize_bits,
                         batch_size=batch_size,
@@ -242,7 +242,7 @@ def get_celebahq_dataset(quantize_bits=8,
                         n_batches=n_batches,
                         split=split,
                         crop=False,
-                        classicication=classicication,
+                        classification=classification,
                         label_keep_percent=label_keep_percent,
                         random_label_percent=random_label_percent)
 
@@ -250,7 +250,7 @@ def get_imagenet_dataset(quantize_bits=8,
                          batch_size=64,
                          n_batches=1000,
                          split="train",
-                         classicication=False,
+                         classification=False,
                          label_keep_percent=1.0,
                          random_label_percent=0.0,
                          **kwargs):
@@ -264,7 +264,7 @@ def get_imagenet_dataset(quantize_bits=8,
                         n_batches=n_batches,
                         split=split,
                         crop=False,
-                        classicication=classicication,
+                        classification=classification,
                         label_keep_percent=label_keep_percent,
                         random_label_percent=random_label_percent)
 

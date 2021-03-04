@@ -12,7 +12,8 @@ import nux.util as util
 
 def evaluate_2d_model(create_model,
                       args,
-                      classification=False):
+                      classification=False,
+                      trainer_fun=None):
   assert args.save_path.endswith(".pickle") == False
 
   init_key  = random.PRNGKey(args.init_key_seed)
@@ -48,8 +49,8 @@ def evaluate_2d_model(create_model,
                                cosine_decay_steps=args.cosine_decay_steps,
                                save_path=args.save_path,
                                retrain=args.retrain,
-                               train_args=args.train_args,
-                               classification=classification)
+                               classification=classification,
+                               trainer_fun=trainer_fun)
 
   test_losses = sorted(trainer.test_losses.items(), key=lambda x:x[0])
   test_losses = jnp.array(test_losses)
@@ -108,13 +109,12 @@ def evaluate_2d_model(create_model,
     ax3.contourf(X, Y, Z.reshape(X.shape))
     plt.show()
 
-  assert 0
-
 ################################################################################################################
 
 def evaluate_image_model(create_model,
                          args,
-                         classification=False):
+                         classification=False,
+                         trainer_fun=None):
   assert args.save_path.endswith(".pickle") == False
 
   init_key  = random.PRNGKey(args.init_key_seed)
@@ -148,8 +148,8 @@ def evaluate_image_model(create_model,
                                cosine_decay_steps=args.cosine_decay_steps,
                                save_path=args.save_path,
                                retrain=args.retrain,
-                               train_args=args.train_args,
-                               classification=classification)
+                               classification=classification,
+                               trainer_fun=trainer_fun)
 
   # Generate reconstructions
   outputs = flow.apply(init_key, inputs, is_training=False)
@@ -174,7 +174,6 @@ def evaluate_image_model(create_model,
     ax.imshow(samples["image"][i].squeeze())
 
   plt.show()
-
   import pdb; pdb.set_trace()
 
   test_losses = sorted(trainer.test_losses.items(), key=lambda x:x[0])
@@ -184,4 +183,4 @@ def evaluate_image_model(create_model,
   res = trainer.evaluate_test(eval_key, test_ds, bits_per_dim=True)
   print("test", trainer.summarize_losses_and_aux(res))
 
-  import pdb; pdb.set_trace()
+  # TODO: Create a class for this

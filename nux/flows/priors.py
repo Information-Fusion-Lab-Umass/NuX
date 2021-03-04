@@ -306,6 +306,11 @@ class GMMPrior(InvertibleLayer):
     # Last axis will be across the mixture components
     log_pdfs = self.auto_batch(partial(diag_gaussian, means, log_diag_covs))(x)
 
+    # Make a class prediction
+    y_pred = jnp.argmax(log_pdfs, axis=-1)
+    y_pred_one_hot = y_pred[...,None] == jnp.arange(self.n_classes)[...,:]
+    y_pred_one_hot *= 1.0
+
     # Compute p(x,y) = p(x|y)p(y) if we have a label, p(x) otherwise.
     # If we have a label, zero out all but the label index then reduce.
     # Otherwise, reduce over all of the indices.
@@ -319,24 +324,35 @@ class GMMPrior(InvertibleLayer):
       log_pz = util.lse(log_pdfs, b=y_one_hot, axis=-1)
       # log_pz = logsumexp(log_pdfs, b=y_one_hot, axis=-1)
     else:
-      log_pz = logsumexp(log_pdfs, axis=-1)
+      # If we're doing classification, use the predicted label
+      if "y" in inputs:
+        log_pz = util.lse(log_pdfs, b=y_pred_one_hot, axis=-1)
+      else:
+        log_pz = logsumexp(log_pdfs, axis=-1)
 
     # Account for p(y)=1/N or 1/N when we take the mean
     log_pz -= jnp.log(self.n_classes)
 
+    # p(y|x) is a categorical distribution
     log_pygx = jax.nn.log_softmax(log_pdfs)
     if is_training:
+      log_pygx *= y_one_hot
+
       if "y_is_labeled" in inputs:
         # This time, zero out values that aren't labeled
-        log_pygx *= y_one_hot*y_is_labeled
+        log_pygx *= y_is_labeled
 
-      log_pygx = log_pygx.sum(axis=-1)
+    else:
+      if "y" in inputs:
+        log_pygx *= y_pred_one_hot
+
+    log_pygx = log_pygx.sum(axis=-1)
 
     # Reshape the output
     x = x.reshape(self.batch_shape + x_shape)
 
     outputs = {"x": x, "log_pz": log_pz, "log_pygx": log_pygx}
-    outputs["prediction"] = jnp.argmax(log_pdfs, axis=-1)
+    outputs["prediction"] = y_pred
     outputs["prediction_one_hot"] = outputs["prediction"][...,None] == jnp.arange(self.n_classes)[...,:]
     return outputs
 

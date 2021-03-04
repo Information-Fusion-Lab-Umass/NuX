@@ -18,7 +18,6 @@ def initialize_trainer(flow,
                        save_path=None,
                        retrain=False,
                        classification=False,
-                       train_args=["log_pz", "log_det"],
                        trainer_fun=None):
 
   if trainer_fun is None:
@@ -27,14 +26,12 @@ def initialize_trainer(flow,
                                              clip=clip,
                                              lr=lr,
                                              warmup=warmup,
-                                             train_args=train_args,
                                              cosine_decay_steps=cosine_decay_steps)
     else:
       trainer = nux.JointClassificationTrainer(flow,
                                                clip=clip,
                                                lr=lr,
                                                warmup=warmup,
-                                               train_args=train_args,
                                                cosine_decay_steps=cosine_decay_steps)
   else:
     trainer = trainer_fun(flow)
@@ -86,7 +83,6 @@ def train_model(create_model,
                                save_path=args.save_path,
                                retrain=args.retrain,
                                classification=classification,
-                               train_args=args.train_args,
                                trainer_fun=trainer_fun)
 
   return train(train_key,
@@ -127,8 +123,8 @@ def train(train_key,
 
     # Perform a bunch of gradient steps
     inputs = next(train_ds)
-    res = trainer.grad_step_scan_loop(key, inputs, bits_per_dim=bits_per_dim)
-    pbar.set_description(trainer.summarize_losses_and_aux(res))
+    out = trainer.grad_step_scan_loop(key, inputs)
+    pbar.set_description(trainer.summarize_train_out(out, use_bpd=bits_per_dim))
 
     if profile:
       jax.profiler.save_device_memory_profile(f"memory{i}.prof")
@@ -143,22 +139,21 @@ def train(train_key,
         trainer.n_train_steps//eval_interval >= len(trainer.test_losses)):
 
       test_ds = get_test_ds()
-
-      res = trainer.evaluate_test(eval_key, test_ds, bits_per_dim=bits_per_dim)
-      print("test", trainer.summarize_losses_and_aux(res))
-
+      out = trainer.evaluate_test_set(eval_key, test_ds)
+      print("test", trainer.summarize_test_out(out, use_bpd=bits_per_dim))
       del test_ds
 
-    # Pull some samples
-    fig, axes = plt.subplots(4, 4); axes = axes.ravel()
-    samples = trainer.flow.sample(eval_key, n_samples=16, generate_image=True)
-    for k, ax in enumerate(axes):
-      ax.imshow(samples["image"][k].squeeze())
+    if classification:
+      # Save some samples
+      fig, axes = plt.subplots(4, 4); axes = axes.ravel()
+      samples = trainer.flow.sample(eval_key, n_samples=16, generate_image=True)
+      for k, ax in enumerate(axes):
+        ax.imshow(samples["image"][k].squeeze())
 
-    plot_save_path = os.path.join(save_path, f"sample_{trainer.n_train_steps}.png")
-    plt.savefig(plot_save_path)
+      plot_save_path = os.path.join(save_path, f"sample_{trainer.n_train_steps}.png")
+      plt.savefig(plot_save_path)
 
-    plt.close()
+      plt.close()
 
     # Save the model
     if save_path is not None:

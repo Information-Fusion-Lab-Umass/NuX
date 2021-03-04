@@ -1,4 +1,5 @@
 import jax
+import jax.numpy as jnp
 from jax import random
 from nux.internal.base import get_tree_shapes
 
@@ -59,3 +60,8 @@ def set_state_tree(tree, name_prefix=""):
 
   for i, val in enumerate(leaves):
     hk.get_state(self.make_name(i, name_prefix), val)
+
+##########################################################################
+
+def tree_concat(x, y, axis=0):
+  return jax.tree_multimap(lambda a, b: jnp.concatenate([a, b], axis=axis), x, y)
