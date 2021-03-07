@@ -93,6 +93,7 @@ def train_model(create_model,
                max_iters=args.max_iters,
                save_path=args.save_path,
                eval_interval=args.eval_interval,
+               image=image,
                bits_per_dim=image,
                classification=classification)
 
@@ -107,6 +108,7 @@ def train(train_key,
           save_path=None,
           eval_interval=None,
           classification=False,
+          image=False,
           bits_per_dim=False):
   profile = True
 
@@ -114,7 +116,6 @@ def train(train_key,
   inputs_singly_batched = jax.tree_map(lambda x: x[0], inputs)
   flow = trainer.flow
   trainer.loss(trainer.params, flow.state, train_key, inputs_singly_batched)
-
 
   pbar = tqdm.tqdm(jnp.arange(int(max_iters)))
   for i in pbar:
@@ -143,7 +144,7 @@ def train(train_key,
       print("test", trainer.summarize_test_out(out, use_bpd=bits_per_dim))
       del test_ds
 
-    if classification:
+    if image:
       # Save some samples
       fig, axes = plt.subplots(4, 4); axes = axes.ravel()
       samples = trainer.flow.sample(eval_key, n_samples=16, generate_image=True)

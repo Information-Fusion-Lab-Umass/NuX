@@ -70,6 +70,15 @@ class repeat(InvertibleLayer):
     self.layer_create_fun = layer_create_fun
     self.n_repeats = n_repeats
 
+  @hk.transparent
+  def get_layer(self):
+    # Don't want to compile a new object every time we call this function.
+    # Also the hk.transparent is necessary for the names to be consistent!
+    if hasattr(self, "_layer"):
+      return self._layer
+    self._layer = self.layer_create_fun()
+    return self._layer
+
   def get_parameter_and_state_names(self, layer):
 
     # Store the names of the parameters for the scan loop
@@ -204,10 +213,10 @@ class repeat(InvertibleLayer):
     final_outputs = inputs.copy()
 
     # Need to get the funcitonal apply fun
-    with make_functional_modules([self.layer_create_fun()]) as ([apply_fun], \
-                                                                params, \
-                                                                (state, constants, rng_seq), \
-                                                                finalize):
+    with make_functional_modules([self.get_layer()]) as ([apply_fun], \
+                                                          params, \
+                                                          (state, constants, rng_seq), \
+                                                          finalize):
       # Retrieve the hashes of the names of the parameters and states for the layer call
       param_hashes, state_hashes = get_constant("param_state_name_hashes", None)
 
