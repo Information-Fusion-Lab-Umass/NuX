@@ -162,14 +162,15 @@ class FlowTrainer(ABC):
                         **kwargs):
 
     outs = []
+    i = 0
 
     try:
       while True:
         key, test_key = random.split(key, 2)
         inputs = next(input_iterator)
-        test_out = self.test_step_scan_loop(key, inputs, **kwargs)
-
+        test_out = self.test_step_scan_loop(key, inputs, update=False, **kwargs)
         outs.append(test_out)
+        i += 1
 
     except StopIteration:
       pass
@@ -184,6 +185,11 @@ class FlowTrainer(ABC):
     self.test_eval_times = jnp.hstack([self.test_eval_times, self.n_train_steps])
 
     outs = jax.tree_multimap(concat, *outs)
+
+    # Condense the outputs over the entire test set
+    out = jax.tree_map(jnp.mean, outs)
+    self.tester.update_outputs(out)
+
     return outs
 
 ################################################################################################################
@@ -201,33 +207,33 @@ class MaximumLikelihoodTrainer(FlowTrainer):
   def __init__(self,
                flow: Flow,
                optimizer: GradientTransformation=None,
+               image: bool=False,
                **kwargs):
     super().__init__(flow, optimizer=optimizer, **kwargs)
+    self.image = image
 
   @property
-  def train_args(self):
+  def accumulate_args(self):
     return ["log_pz", "log_det"]
 
   def loss(self, params, state, key, inputs, **kwargs):
-    outputs, updated_state = self.flow._apply_fun(params, state, key, inputs, accumulate=self.train_args, **kwargs)
-    loss = 0.0
-    for name in self.train_args:
-      loss += outputs[name]
+    outputs, updated_state = self.flow._apply_fun(params, state, key, inputs, accumulate=self.accumulate_args, **kwargs)
+    loss = outputs.get("log_pz", 0.0) + outputs.get("log_det", 0.0)
 
     aux = ()
     return -loss.mean(), (aux, updated_state)
 
-  def summarize_train_out(self, out, use_bpd=False):
+  def summarize_train_out(self, out):
     log_px = out.loss.mean()
-    if use_bpd:
+    if self.image:
       log_px = self.flow.to_bits_per_dim(log_px)
-    return f"loss: {out.loss.mean():.2f}"
+    return f"loss: {log_px:.2f}"
 
-  def summarize_test_out(self, out, use_bpd=False):
+  def summarize_test_out(self, out):
     log_px = out.loss.mean()
-    if use_bpd:
+    if self.image:
       log_px = self.flow.to_bits_per_dim(log_px)
-    return f"loss: {out.loss.mean():.2f}"
+    return f"loss: {log_px:.2f}"
 
 ################################################################################################################
 
@@ -236,15 +242,17 @@ class JointClassificationTrainer(FlowTrainer):
   def __init__(self,
                flow: Flow,
                optimizer: GradientTransformation=None,
+               image: bool=False,
                **kwargs):
     super().__init__(flow, optimizer=optimizer, **kwargs)
+    self.image = image
 
   @property
-  def train_args(self):
+  def accumulate_args(self):
     return ["log_pz", "log_det", "log_pygx"]
 
   def loss(self, params, state, key, inputs, **kwargs):
-    outputs, updated_state = self.flow._apply_fun(params, state, key, inputs, accumulate=self.train_args, **kwargs)
+    outputs, updated_state = self.flow._apply_fun(params, state, key, inputs, accumulate=self.accumulate_args, **kwargs)
 
     # TODO: Stop grouping p(x|y)p(y) into the prior and instead pass them out separately
     log_pyax = outputs.get("log_pz", 0.0) + outputs.get("log_det", 0.0)
@@ -259,16 +267,16 @@ class JointClassificationTrainer(FlowTrainer):
     aux = (acc, -log_px.mean())
     return -log_pyax.mean(), (aux, updated_state)
 
-  def summarize_train_out(self, out, use_bpd=False):
+  def summarize_train_out(self, out):
     loss = out.loss.mean()
     accuracy, nll = jax.tree_map(jnp.mean, out.aux)
-    if use_bpd:
+    if self.image:
       nll = self.flow.to_bits_per_dim(nll)
     return f"loss: {loss:.2f}, nll: {nll:.2f}, acc: {accuracy:.2f}"
 
-  def summarize_test_out(self, out, use_bpd=False):
+  def summarize_test_out(self, out):
     loss = out.loss.mean()
     accuracy, nll = jax.tree_map(jnp.mean, out.aux)
-    if use_bpd:
+    if self.image:
       nll = self.flow.to_bits_per_dim(nll)
     return f"loss: {loss:.2f}, nll: {nll:.2f}, acc: {accuracy:.2f}"

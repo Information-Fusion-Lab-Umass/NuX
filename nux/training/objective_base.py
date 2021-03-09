@@ -96,6 +96,7 @@ class Evaluate(ABC):
   def step_scan_loop(self,
                      key: PRNGKey,
                      inputs: Mapping[str, jnp.ndarray],
+                     update: bool=True,
                      **kwargs
   ) -> Output:
     # Get the inputs for the scan loop
@@ -105,5 +106,6 @@ class Evaluate(ABC):
 
     # Run the training steps
     self.complete_state, out = self.compiled_scan_loop(self.complete_state, scan_inputs)
-    self.update_outputs(out)
+    if update:
+      self.update_outputs(out)
     return out

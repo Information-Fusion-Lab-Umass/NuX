@@ -19,7 +19,7 @@ import pathlib
 
 # For example,
 # to retrain the model from scratch with default args, use
-# python -m experiments.examples.celeba --train --retrain
+# python -m experiments.examples.celeba --retrain
 
 # to retrain from a checkpoint, use
 # python -m experiments.examples.celeba --train
@@ -106,7 +106,7 @@ if __name__ == "__main__":
 
   create_model = partial(create_flow_model, args)
 
-  if args.train:
+  if args.train or args.retrain:
     exp.train_model(create_model, args, image=True, classification=False)
 
   elif args.evaluate:

@@ -26,7 +26,7 @@ def get_base_command_line_args(as_dict=False):
   parser.add_argument("--lr", default=1e-3, type=float)
   parser.add_argument("--warmup", default=1000, type=float)
   parser.add_argument("--cosine_decay_steps", default=-1, type=float)
-  parser.add_argument("--save_path", default="saved_models/temp.pickle")
+  parser.add_argument("--save_path", default="experiment_outputs")
   parser.add_argument("--init_key_seed", default=0, type=int)
   parser.add_argument("--train_key_seed", default=0, type=int)
   parser.add_argument("--eval_key_seed", default=0, type=int)
@@ -47,10 +47,7 @@ def generate_python_command(module_path, action, settings):
     args.append(f"--{key}={val}")
 
   arg_str = " ".join(args)
-  if action == "retrain":
-    python_command = f"python -m {module_path} --train --retrain {arg_str}"
-  else:
-    python_command = f"python -m {module_path} --{action} {arg_str}"
+  python_command = f"python -m {module_path} --{action} {arg_str}"
   return python_command
 
 ################################################################################################################

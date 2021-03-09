@@ -44,7 +44,7 @@ class Tester(Evaluate):
     if self.aux is None:
       self.aux = out.aux
     else:
-      self.aux = util.tree_concat(self.aux, out.aux, axis=0)
+      self.aux = util.tree_hstack(self.aux, out.aux)
 
   def save_items(self):
     save_items = {"params": self.params,

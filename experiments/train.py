@@ -18,6 +18,7 @@ def initialize_trainer(flow,
                        save_path=None,
                        retrain=False,
                        classification=False,
+                       image=False,
                        trainer_fun=None):
 
   if trainer_fun is None:
@@ -26,13 +27,15 @@ def initialize_trainer(flow,
                                              clip=clip,
                                              lr=lr,
                                              warmup=warmup,
-                                             cosine_decay_steps=cosine_decay_steps)
+                                             cosine_decay_steps=cosine_decay_steps,
+                                             image=image)
     else:
       trainer = nux.JointClassificationTrainer(flow,
                                                clip=clip,
                                                lr=lr,
                                                warmup=warmup,
-                                               cosine_decay_steps=cosine_decay_steps)
+                                               cosine_decay_steps=cosine_decay_steps,
+                                               image=image)
   else:
     trainer = trainer_fun(flow)
 
@@ -83,6 +86,7 @@ def train_model(create_model,
                                save_path=args.save_path,
                                retrain=args.retrain,
                                classification=classification,
+                               image=image,
                                trainer_fun=trainer_fun)
 
   return train(train_key,
@@ -94,7 +98,6 @@ def train_model(create_model,
                save_path=args.save_path,
                eval_interval=args.eval_interval,
                image=image,
-               bits_per_dim=image,
                classification=classification)
 
 ################################################################################################################
@@ -108,9 +111,8 @@ def train(train_key,
           save_path=None,
           eval_interval=None,
           classification=False,
-          image=False,
-          bits_per_dim=False):
-  profile = True
+          image=False):
+  profile = False
 
   inputs = next(train_ds)
   inputs_singly_batched = jax.tree_map(lambda x: x[0], inputs)
@@ -125,7 +127,7 @@ def train(train_key,
     # Perform a bunch of gradient steps
     inputs = next(train_ds)
     out = trainer.grad_step_scan_loop(key, inputs)
-    pbar.set_description(trainer.summarize_train_out(out, use_bpd=bits_per_dim))
+    pbar.set_description(trainer.summarize_train_out(out))
 
     if profile:
       jax.profiler.save_device_memory_profile(f"memory{i}.prof")
@@ -141,7 +143,7 @@ def train(train_key,
 
       test_ds = get_test_ds()
       out = trainer.evaluate_test_set(eval_key, test_ds)
-      print("test", trainer.summarize_test_out(out, use_bpd=bits_per_dim))
+      print("test", trainer.summarize_test_out(out))
       del test_ds
 
     if image:
@@ -151,9 +153,10 @@ def train(train_key,
       for k, ax in enumerate(axes):
         ax.imshow(samples["image"][k].squeeze())
 
-      plot_save_path = os.path.join(save_path, f"sample_{trainer.n_train_steps}.png")
+      plot_save_folder = os.path.join(save_path, "samples")
+      pathlib.Path(plot_save_folder).mkdir(parents=True, exist_ok=True)
+      plot_save_path = os.path.join(plot_save_folder, f"sample_{trainer.n_train_steps}.png")
       plt.savefig(plot_save_path)
-
       plt.close()
 
     # Save the model

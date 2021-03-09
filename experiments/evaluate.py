@@ -50,6 +50,7 @@ def evaluate_2d_model(create_model,
                                save_path=args.save_path,
                                retrain=args.retrain,
                                classification=classification,
+                               image=False,
                                trainer_fun=trainer_fun)
 
   test_losses = sorted(trainer.test_losses.items(), key=lambda x:x[0])
@@ -149,6 +150,7 @@ def evaluate_image_model(create_model,
                                save_path=args.save_path,
                                retrain=args.retrain,
                                classification=classification,
+                               image=True,
                                trainer_fun=trainer_fun)
 
   # Generate reconstructions

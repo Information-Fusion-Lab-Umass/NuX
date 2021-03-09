@@ -65,3 +65,6 @@ def set_state_tree(tree, name_prefix=""):
 
 def tree_concat(x, y, axis=0):
   return jax.tree_multimap(lambda a, b: jnp.concatenate([a, b], axis=axis), x, y)
+
+def tree_hstack(x, y):
+  return jax.tree_multimap(lambda a, b: jnp.hstack([a, b]), x, y)
