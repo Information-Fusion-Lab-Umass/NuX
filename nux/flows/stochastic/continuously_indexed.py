@@ -25,8 +25,7 @@ class ContinuouslyIndexed(InvertibleLayer):
     """ Continuously indexed flow https://arxiv.org/pdf/1909.13833v3.pdf
         Main idea is that extra noise can significantly help form complicated
         marginal distributions that don't have the topological problems of
-        bijective functions (think of how crazy the marginal of the final
-        state of a kalman filter can look even though thats entirely linear).
+        bijective functions
     Args:
       flow        : The flow to use for the transform
       name        : Optional name for this module.

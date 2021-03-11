@@ -2,6 +2,17 @@ import jax
 import jax.numpy as jnp
 from jax import random
 from nux.internal.base import get_tree_shapes
+import haiku as hk
+
+__all__ = ["key_tree_like",
+           "tree_multimap_multiout",
+           "tree_shapes",
+           "tree_ndims",
+           "tree_equal",
+           "get_state_tree",
+           "set_state_tree",
+           "tree_concat",
+           "tree_hstack"]
 
 def key_tree_like(key, pytree):
   # Figure out what the tree structure is
@@ -32,34 +43,19 @@ def tree_equal(x, y):
 
 ##########################################################################
 
-def get_state_tree(name, dtype, init_fun):
+# https://github.com/deepmind/dm-haiku/issues#issuecomment-611203193
+from typing import Any, NamedTuple
 
-  # Check to see if the tree exists.  We will know if we've stored
-  # the shapes of the leaves
-  if constant_exists(name):
-    # Retrieve the saved value
-    leaf_shapes = get_tree_shapes(name)
+class Box(NamedTuple):
+  value: Any
+  shape = property(fget=lambda _: ())
+  dtype = jnp.float32
 
-  else:
-    pytree = init_fun()
-    tree_leaves, treedef = jax.tree_flatten(template)
+def get_state_tree(name, init):
+  return hk.get_state(name, (), jnp.float32, init=lambda *_: Box(init())).value
 
-
-def get_state_tree(template, name_prefix=""):
-  tree_leaves, treedef = jax.tree_flatten(template)
-
-  leaves = []
-  for i, val in enumerate(tree_leaves):
-    state_leaf = hk.get_state(self.make_name(i, name_prefix), shape=val.shape, dtype=val.dtype, init=lambda s, d: val)
-    leaves.append(state_leaf)
-
-  return jax.tree_unflatten(treedef, leaves)
-
-def set_state_tree(tree, name_prefix=""):
-  leaves, _ = jax.tree_flatten(tree)
-
-  for i, val in enumerate(leaves):
-    hk.get_state(self.make_name(i, name_prefix), val)
+def set_state_tree(name, val):
+  return hk.set_state(name, Box(val))
 
 ##########################################################################
 
