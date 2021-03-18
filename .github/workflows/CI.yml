@@ -39,5 +39,5 @@ jobs:
       - name: "Run all tests"
         run: |
             cd nux/tests
-            for file in **/*test.py; do python $file; done
+            for file in *test.py; do python $file; done
         shell: bash
