@@ -22,7 +22,7 @@ train_inputs, test_inputs = {"x": x_train}, {"x": x_test}
 
 # Build a simple normalizing flow
 def create_flow():
-  return nux.sequential(nux.Coupling(), nux.AffineLDU(), nux.UnitGaussianPrior())
+  return nux.sequential(nux.RealNVP(), nux.AffineLDU(), nux.UnitGaussianPrior())
 
 # Perform data-dependent initialization
 flow = nux.Flow(create_flow, key, train_inputs, batch_axes=(0,))

@@ -31,6 +31,13 @@ def last_axes(shape):
 
 ################################################################################################################
 
+def batched_vdot(x, y, x_shape):
+  assert x.shape == y.shape
+  sum_axes = last_axes(x_shape)
+  return jnp.sum(x*y, axis=sum_axes)
+
+################################################################################################################
+
 def constrain_log_scale(log_x):
   # return jax.nn.log_sigmoid(log_x)
   return jnp.logaddexp(jax.nn.log_sigmoid(log_x), -7)
