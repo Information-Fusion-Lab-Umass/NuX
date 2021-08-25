@@ -1,394 +1,357 @@
 import jax
 import jax.numpy as jnp
 import nux.util as util
-from jax import random, vmap
+from jax import random
 from functools import partial
-import haiku as hk
 from typing import Optional, Mapping, Tuple, Sequence, Union, Any, Callable
-from nux.internal.layer import InvertibleLayer
 import nux.util as util
-import nux.util.weight_initializers as init
+import einops
+from nux.flows.base import Flow
 
-__all__ = ["Bias",
-           "Identity",
+__all__ = ["CenterAndScale",
+           "DiscreteBias",
+           "Bias",
+           "StaticScale",
            "Scale",
            "ShiftScale",
-           "ElementwiseScale",
-           "AffineDense",
-           "AffineLDU",
-           "AffineSVD"]
+           "StaticShiftScale",
+           "DenseMVP",
+           "PLUMVP"]
 
-################################################################################################################
+class CenterAndScale(Flow):
 
-class Bias(InvertibleLayer):
+  def __init__(self, s):
+    assert s < 1.0
+    self.s = s
+    self.b = (1.0 - s)/2
 
-  def __init__(self,
-               axis: int=-1,
-               name: str="bias"
-  ):
-    """ Adds a scalar to the input
-    Args:
-      axis: Which axis of the input to apply to
-      name: Optional name for this module.
-    """
-    super().__init__(name=name)
-    self.axis = axis
+  def get_params(self):
+    return {}
 
-  def call(self,
-           inputs: Mapping[str, jnp.ndarray],
-           rng: jnp.ndarray=None,
-           sample: Optional[bool]=False,
-           **kwargs
-  ) -> Mapping[str, jnp.ndarray]:
-    x = inputs["x"]
-    b = hk.get_parameter("b", shape=(x.shape[self.axis],), dtype=x.dtype, init=jnp.zeros)
-    if sample:
-      z = x + b
+  def __call__(self, x, params=None, inverse=False, **kwargs):
+    s = jnp.broadcast_to(self.s, x.shape)
+    log_s = jnp.log(s)
+
+    if inverse == False:
+      z = x*s + self.b
     else:
+      z = (x - self.b)/s
+
+    sum_axes = util.last_axes(x.shape[1:])
+    log_det = log_s.sum(axis=sum_axes)
+    return z, log_det
+
+class DiscreteBias(Flow):
+
+  def __init__(self):
+    self.b = None
+
+  def get_param_dim(self, dim):
+    return 1*dim
+
+  def get_params(self):
+    return {"b": self.b}
+
+  @property
+  def coupling_param_keys(self):
+    return ("b",)
+
+  def extract_coupling_params(self, theta):
+    return (theta,)
+
+  def __call__(self, x, params=None, inverse=False, **kwargs):
+    if params is None:
+      reduce_axes = list(range(0, x.ndim - 1))
+      self.b = jnp.mean(x, axis=(0,) + reduce_axes)
+    else:
+      self.b = params["b"]
+
+    b = util.st_round(self.b)
+
+    if inverse == False:
       z = x - b
-    return {"x": z, "log_det": jnp.zeros(self.batch_shape)}
+    else:
+      z = x + b
+    return z, jnp.zeros(x.shape[:1])
 
-class Identity(InvertibleLayer):
+class Bias(Flow):
 
-  def __init__(self,
-               name: str="identity"
-  ):
-    """ No-op
-    Args:
-      name: Optional name for this module.
-    """
-    super().__init__(name=name)
+  def __init__(self):
+    self.b = None
 
-  def call(self,
-           inputs: Mapping[str, jnp.ndarray],
-           rng: jnp.ndarray=None,
-           sample: Optional[bool]=False,
-           **kwargs
-  ) -> Mapping[str, jnp.ndarray]:
-    return {"x": inputs["x"], "log_det": jnp.zeros(self.batch_shape)}
+  def get_param_dim(self, dim):
+    return 1*dim
 
-################################################################################################################
+  def get_params(self):
+    return {"b": self.b}
 
-class ShiftScale(InvertibleLayer):
+  @property
+  def coupling_param_keys(self):
+    return ("b",)
 
-  def __init__(self,
-               axis=-1,
-               name: str="shift_scale"
-  ):
+  def extract_coupling_params(self, theta):
+    return (theta,)
+
+  def __call__(self, x, params=None, inverse=False, **kwargs):
+    if params is None:
+      reduce_axes = list(range(0, x.ndim - 1))
+      self.b = jnp.mean(x, axis=(0,) + reduce_axes)
+    else:
+      self.b = params["b"]
+
+    if inverse == False:
+      z = x - self.b
+    else:
+      z = x + self.b
+    return z, jnp.zeros(x.shape[:1])
+
+class StaticScale(Flow):
+
+  def __init__(self, s):
+    self.s = s
+
+  def get_params(self):
+    return {}
+
+  def __call__(self, x, params=None, inverse=False, **kwargs):
+    s = jnp.broadcast_to(self.s, x.shape)
+    log_s = jnp.log(s)
+
+    if inverse == False:
+      z = x/s
+    else:
+      z = x*s
+
+    sum_axes = util.last_axes(x.shape[1:])
+    log_det = -log_s.sum(axis=sum_axes)
+    return z, log_det
+
+class Scale(Flow):
+
+  def __init__(self):
+    self.s = None
+
+  def get_param_dim(self, dim):
+    return 1*dim
+
+  def get_params(self):
+    return {"s": self.s}
+
+  @property
+  def coupling_param_keys(self):
+    return ("s",)
+
+  def extract_coupling_params(self, theta):
+    return (theta,)
+
+  def __call__(self, x, params=None, inverse=False, **kwargs):
+    if params is None:
+      reduce_axes = list(range(0, x.ndim - 1))
+      std = jnp.std(x, axis=(0,) + reduce_axes)
+      self.s = std - 1/std
+    else:
+      self.s = params["s"]
+
+    s = util.square_plus(self.s, gamma=1.0) + 1e-4
+    s = jnp.broadcast_to(s, x.shape)
+    log_s = jnp.log(s)
+
+    if inverse == False:
+      z = x/s
+    else:
+      z = x*s
+
+    sum_axes = util.last_axes(x.shape[1:])
+    log_det = -log_s.sum(axis=sum_axes)
+    return z, log_det
+
+class ShiftScale(Flow):
+
+  def __init__(self, center_init=True):
     """ Elementwise shift + scale
-    Args:
-      axis: Axes to apply to
-      name: Optional name for this module.
     """
-    super().__init__(name=name)
-    self.axes = (axis,) if isinstance(axis, int) else axis
-    for ax in self.axes:
-      assert ax < 0, "For convenience, pass in negative indexed axes"
+    self.s = None
+    self.b = None
+    self.center_init = center_init
 
-  def call(self,
-           inputs: Mapping[str, jnp.ndarray],
-           rng: jnp.ndarray=None,
-           sample: Optional[bool]=False,
-           **kwargs
-  ) -> Mapping[str, jnp.ndarray]:
-    outputs = {}
-    x = inputs["x"]
-    x_shape = self.get_unbatched_shapes(sample)["x"]
+  def get_param_dim(self, dim):
+    return 2*dim
 
-    param_shape = tuple([x_shape[ax] for ax in self.axes])
-    b     = hk.get_parameter("b", shape=param_shape, dtype=x.dtype, init=jnp.zeros)
-    log_s = hk.get_parameter("log_s", shape=param_shape, dtype=x.dtype, init=jnp.zeros)
+  def get_params(self):
+    return {"s": self.s, "b": self.b}
 
-    s = util.proximal_relu(log_s) + 1e-5
+  @property
+  def coupling_param_keys(self):
+    return ("s", "b")
 
-    if sample == False:
-      outputs["x"] = (x - b)/s
+  def extract_coupling_params(self, theta):
+    return jnp.split(theta, 2, axis=-1)
+
+  def __call__(self, x, params=None, rng_key=None, inverse=False, **kwargs):
+    if params is None:
+      if self.center_init:
+        reduce_axes = list(range(0, x.ndim - 1))
+        mean, std = util.mean_and_std(x, axis=reduce_axes)
+        std += 1e-5
+        self.b = mean
+        self.s = std - 1/std
+      else:
+        self.b, self.s = random.normal(rng_key, (2, *x.shape[1:]))
     else:
-      outputs["x"] = s*x + b
+      self.b, self.s = params["b"], params["s"]
 
-    log_det = -jnp.log(s).sum()*jnp.ones(self.batch_shape)
-    outputs["log_det"] = log_det
+    s = util.square_plus(self.s, gamma=1.0) + 1e-4
+    s = jnp.broadcast_to(s, x.shape)
+    log_s = jnp.log(s)
 
-    return outputs
+    if inverse == False:
+      z = (x - self.b)/s
+    else:
+      z = x*s + self.b
+
+    sum_axes = util.last_axes(x.shape[1:])
+    log_det = -log_s.sum(axis=sum_axes)
+    return z, log_det
+
+class StaticShiftScale(Flow):
+
+  def __init__(self, s, b):
+    self.s = s
+    self.b = b
+
+  def get_params(self):
+    return {}
+
+  def __call__(self, x, params=None, inverse=False, **kwargs):
+    s = jnp.broadcast_to(self.s, x.shape)
+    log_s = jnp.log(s)
+
+    if inverse == False:
+      z = (x - self.b)/s
+    else:
+      z = x*s + self.b
+
+    sum_axes = util.last_axes(x.shape[1:])
+    log_det = -log_s.sum(axis=sum_axes)
+    return z, log_det
 
 ################################################################################################################
 
-class Scale(InvertibleLayer):
+class DenseMVP(Flow):
 
-  def __init__(self,
-               scale: float,
-               name: str="scale"
-  ):
-    """ Scale an input by a specified scalar
-    Args:
-      scale: Value to scale by
-      name : Optional name for this module.
+  def __init__(self):
+    """ Dense
     """
-    super().__init__(name=name)
-    self.scale = scale*1.0
+    pass
 
-  def call(self,
-           inputs: Mapping[str, jnp.ndarray],
-           rng: jnp.ndarray=None,
-           sample: Optional[bool]=False,
-           **kwargs
-  ) -> Mapping[str, jnp.ndarray]:
-    outputs = {}
+  def get_params(self):
+    return {"A": self.A}
 
-    if sample == False:
-      outputs["x"] = inputs["x"]/self.scale
+  def __call__(self, x, params=None, inverse=False, rng_key=None, **kwargs):
+    x_shape = x.shape[1:]
+    dim = x_shape[-1]
+
+    if params is None:
+      self.A = random.normal(rng_key, shape=(dim, dim))
     else:
-      outputs["x"] = inputs["x"]*self.scale
+      self.A = params["A"]
 
-    shape = self.get_unbatched_shapes(sample)["x"]
-    outputs["log_det"] = jnp.ones(self.batch_shape)
-    outputs["log_det"] *= -jnp.log(self.scale)*util.list_prod(shape)
-
-    return outputs
-
-class ElementwiseScale(InvertibleLayer):
-
-  def __init__(self,
-               scale: jnp.ndarray=None,
-               name: str="scale"
-  ):
-    """ Scale an input by a specified scalar
-    Args:
-      scale: Value to scale by
-      name : Optional name for this module.
-    """
-    super().__init__(name=name)
-    self.scale = scale
-
-  def call(self,
-           inputs: Mapping[str, jnp.ndarray],
-           rng: jnp.ndarray=None,
-           sample: Optional[bool]=False,
-           **kwargs
-  ) -> Mapping[str, jnp.ndarray]:
-    outputs = {}
-
-    x = inputs["x"]
-
-    if self.scale is None:
-      scale = hk.get_parameter("scale", shape=self.unbatched_input_shapes["x"], dtype=x.dtype, init=jnp.zeros)
+    if inverse == False:
+      z = jnp.einsum("ij,...j->...i", self.A, x)
     else:
-      scale = self.scale
-      assert self.scale.shape == self.unbatched_input_shapes["x"]
+      A_inv = jnp.linalg.inv(self.A)
+      z = jnp.einsum("ij,...j->...i", A_inv, x)
 
-    if sample == False:
-      outputs["x"] = inputs["x"]/scale
-    else:
-      outputs["x"] = inputs["x"]*scale
-
-    shape = self.get_unbatched_shapes(sample)["x"]
-    outputs["log_det"] = -jnp.log(scale).sum()
-
-    return outputs
-
-################################################################################################################
-
-class AffineDense(InvertibleLayer):
-
-  def __init__(self,
-               weight_norm: bool=True,
-               spectral_norm: bool=False,
-               max_singular_value: float=1.0,
-               max_power_iters: int=1,
-               name: str="affine_dense",
-               **kwargs
-  ):
-    """ Apply a dense matrix multiplication.  Costs O(D^3).
-    Args:
-      name:  Optional name for this module.
-    """
-    super().__init__(name=name, **kwargs)
-    assert (weight_norm and spectral_norm) == False
-    self.spectral_norm = spectral_norm
-    self.weight_norm = weight_norm
-    self.max_singular_value = max_singular_value
-    self.max_power_iters = max_power_iters
-
-  def call(self,
-           inputs: Mapping[str, jnp.ndarray],
-           rng: jnp.ndarray=None,
-           sample: Optional[bool]=False,
-           **kwargs
-  ) -> Mapping[str, jnp.ndarray]:
-    x = inputs["x"]
-    outputs = {}
-
-    x_dim, dtype = x.shape[-1], inputs["x"].dtype
-
-    if self.weight_norm:
-      W, b = init.weight_with_weight_norm(x,
-                                          out_dim=x_dim,
-                                          w_init=hk.initializers.RandomNormal(0.1),
-                                          b_init=jnp.zeros,
-                                          is_training=kwargs.get("is_training", True),
-                                          use_bias=True)
-    elif self.spectral_norm:
-      W, b = init.weight_with_good_spectral_norm(x,
-                                                 out_dim=x_dim,
-                                                 w_init=hk.initializers.RandomNormal(0.1),
-                                                 b_init=jnp.zeros,
-                                                 is_training=kwargs.get("is_training", True),
-                                                 update_params=kwargs.get("is_training", True),
-                                                 max_singular_value=self.max_singular_value,
-                                                 max_power_iters=self.max_power_iters,
-                                                 use_bias=True)
-    else:
-      W_init = hk.initializers.TruncatedNormal(1/jnp.sqrt(x_dim))
-      W = hk.get_parameter("W", shape=(x_dim, x_dim), dtype=dtype, init=W_init)
-      b = hk.get_parameter("b", shape=(x_dim,), dtype=dtype, init=jnp.zeros)
-
-    if sample == False:
-      outputs["x"] = jnp.dot(x, W.T) + b
-    else:
-      w_inv = jnp.linalg.inv(W)
-      outputs["x"] = jnp.dot(x - b, w_inv.T)
-
-    outputs["log_det"] = jnp.linalg.slogdet(W)[1]*jnp.ones(self.batch_shape)
-
-    return outputs
+    log_det = jnp.linalg.slogdet(self.A)[1]*util.list_prod(x.shape[1:-1])
+    log_det = log_det*jnp.ones(x.shape[:1])
+    return z, log_det
 
 ################################################################################################################
 
 tri_solve = jax.scipy.linalg.solve_triangular
 L_solve = partial(tri_solve, lower=True, unit_diagonal=True)
 U_solve = partial(tri_solve, lower=False, unit_diagonal=True)
+U_solve_with_diag = partial(tri_solve, lower=False, unit_diagonal=False)
 
-class AffineLDU(InvertibleLayer):
+class PLUMVP(Flow):
 
-  def __init__(self,
-               safe_diag: bool=True,
-               use_bias: bool=True,
-               name: str="affine_ldu"
-  ):
-    """ LDU parametrized matrix multiplication.  Costs O(D^2) to invert and O(D) for a regular pass.
-    Args:
-      name:  Optional name for this module.
+  def __init__(self):
+    """ Dense
     """
-    super().__init__(name=name)
-    self.safe_diag = safe_diag
-    self.use_bias = use_bias
+    pass
 
-  def call(self,
-           inputs: Mapping[str, jnp.ndarray],
-           rng: jnp.ndarray=None,
-           sample: Optional[bool]=False,
-           **kwargs
-  ) -> Mapping[str, jnp.ndarray]:
-    outputs = {}
+  def get_params(self):
+    return {"A": self.A}
 
-    dim, dtype = inputs["x"].shape[-1], inputs["x"].dtype
+  def __call__(self, x, params=None, inverse=False, rng_key=None, **kwargs):
+    x_shape = x.shape[1:]
+    dim = x_shape[-1]
 
-    L     = hk.get_parameter("L", shape=(dim, dim), dtype=dtype, init=hk.initializers.RandomNormal(0.01))
-    U     = hk.get_parameter("U", shape=(dim, dim), dtype=dtype, init=hk.initializers.RandomNormal(0.01))
-    log_d = hk.get_parameter("log_d", shape=(dim,), dtype=dtype, init=jnp.zeros)
-    lower_mask = jnp.ones((dim, dim), dtype=bool)
-    lower_mask = jax.ops.index_update(lower_mask, jnp.triu_indices(dim), False)
-
-    if self.safe_diag:
-      d = util.proximal_relu(log_d) + 1e-5
-      log_d = jnp.log(d)
-
-    if self.use_bias:
-      def b_init(shape, dtype):
-        x = inputs["x"]
-        if x.ndim == 1:
-          return jnp.zeros(shape, dtype=dtype)
-
-        # Initialize to the batch mean
-        z = jnp.dot(x, (U*lower_mask.T).T) + x
-        z *= jnp.exp(log_d)
-        z = jnp.dot(z, (L*lower_mask).T) + z
-        b = -jnp.mean(z, axis=0)
-        return b
-
-      b = hk.get_parameter("b", shape=(dim,), dtype=dtype, init=b_init)
-
-    # Its way faster to allocate a full matrix for L and U and then mask than it
-    # is to allocate only the lower/upper parts and the reshape.
-    if sample == False:
-      x = inputs["x"]
-      z = jnp.dot(x, (U*lower_mask.T).T) + x
-      z *= jnp.exp(log_d)
-      z = jnp.dot(z, (L*lower_mask).T) + z
-      outputs["x"] = z
-      if self.use_bias:
-        outputs["x"] += b
+    if params is None:
+      self.A = random.normal(rng_key, shape=(dim, dim))*0.01
+      self.A = self.A.at[jnp.arange(dim),jnp.arange(dim)].set(1.0)
     else:
-      z = inputs["x"]
+      self.A = params["A"]
 
-      @self.auto_batch
-      def invert(z):
-        if self.use_bias:
-          x = L_solve(L, z - b)
-        else:
-          x = L_solve(L, z)
-        x = x*jnp.exp(-log_d)
-        return U_solve(U, x)
+    mask = jnp.ones((dim, dim), dtype=bool)
+    upper_mask = jnp.triu(mask)
+    lower_mask = jnp.tril(mask, k=-1)
 
-      outputs["x"] = invert(z)
+    if inverse == False:
+      z = jnp.einsum("ij,...j->...i", self.A*upper_mask, x)
+      z = jnp.einsum("ij,...j->...i", self.A*lower_mask, z) + z
+    else:
+      L_solve_vmap = L_solve
+      U_solve_vmap = U_solve_with_diag
+      for _ in x.shape[:-1]:
+        L_solve_vmap = jax.vmap(L_solve_vmap, in_axes=(None, 0))
+        U_solve_vmap = jax.vmap(U_solve_vmap, in_axes=(None, 0))
+      z = L_solve_vmap(self.A*lower_mask, x)
+      z = U_solve_vmap(self.A*upper_mask, z)
 
-    outputs["log_det"] = jnp.sum(log_d, axis=-1)*jnp.ones(self.batch_shape)
-    return outputs
+    log_det = jnp.log(jnp.abs(jnp.diag(self.A))).sum()*util.list_prod(x.shape[1:-1])
+    log_det = log_det*jnp.ones(x.shape[:1])
+    return z, log_det
 
 ################################################################################################################
 
-class AffineSVD(InvertibleLayer):
+def regular_test():
+  from jax.flatten_util import ravel_pytree
 
-  def __init__(self,
-               n_householders: int,
-               name: str="affine_svd"
-  ):
-    """ SVD parametrized matrix multiplication.  Costs O(K*D) where K is the number of householders.
-    Args:
-      n_householders: Number of householders to parametrize U and VT.
-      name          : Optional name for this module.
-    """
-    super().__init__(name=name)
-    self.n_householders = n_householders
+  rng_key = random.PRNGKey(0)
+  x = random.normal(rng_key, shape=(2, 4))
+  x_orig = x
 
-  def call(self,
-           inputs: Mapping[str, jnp.ndarray],
-           rng: jnp.ndarray=None,
-           sample: Optional[bool]=False,
-           **kwargs
-  ) -> Mapping[str, jnp.ndarray]:
-    outputs = {}
+  flow = PLUMVP()
+  z, log_det = flow(x, rng_key=rng_key)
+  params = flow.get_params()
 
-    dim, dtype = inputs["x"].shape[-1], inputs["x"].dtype
-    init = hk.initializers.VarianceScaling(1.0, 'fan_avg', 'truncated_normal')
-    U     = hk.get_parameter("U", shape=(self.n_householders, dim), dtype=dtype, init=init)
-    VT    = hk.get_parameter("U", shape=(self.n_householders, dim), dtype=dtype, init=init)
-    log_s = hk.get_parameter("log_s", shape=(dim,), dtype=dtype, init=jnp.zeros)
 
-    b = hk.get_parameter("b", shape=(dim,), dtype=dtype, init=jnp.zeros)
+  reconstr, _ = flow(z, params=params, rng_key=rng_key, inverse=True)
 
-    if sample == False:
-      x = inputs["x"]
 
-      @self.auto_batch
-      def forward(x):
-        O = jnp.eye(x.size) - 2*VT.T@jnp.linalg.inv(VT@VT.T)@VT
-        l = x - 2*VT.T@jnp.linalg.inv(VT@VT.T)@VT@x
-        z = util.householder_prod(x, VT)
-        z = z*jnp.exp(log_s)
-        return util.householder_prod(z, U) + b
+  z2, log_det2 = flow(reconstr, params=params, rng_key=rng_key, inverse=False)
+  assert jnp.allclose(x, reconstr)
+  assert jnp.allclose(z, z2)
 
-      outputs["x"] = forward(x)
-    else:
-      z = inputs["x"]
+  def jac(x, blah=False):
+    flat_x, unflatten = ravel_pytree(x)
+    def flat_call(flat_x):
+      x = unflatten(flat_x)
+      z, _ = flow(x[None], params=params, rng_key=rng_key)
+      return z.ravel()
+    z = flat_call(flat_x)
+    if blah:
+      return z
+    return jax.jacobian(flat_call)(flat_x)
 
-      @self.auto_batch
-      def inverse(z):
-        x = util.householder_prod_transpose(z - b, U)
-        x = x*jnp.exp(-log_s)
-        return util.householder_prod_transpose(x, VT)
+  jac(x[0], blah=True)
+  # import pdb; pdb.set_trace()
+  J = jax.vmap(jac)(x)
+  true_log_det = jnp.linalg.slogdet(J)[1]
+  assert jnp.allclose(log_det, true_log_det)
 
-      outputs["x"] = inverse(z)
+if __name__ == "__main__":
+  from debug import *
 
-    outputs["log_det"] = log_s.sum()*jnp.ones(self.batch_shape)
-    return outputs
+  regular_test()

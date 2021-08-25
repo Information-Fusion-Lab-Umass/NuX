@@ -1,124 +1,169 @@
 import jax
 import jax.numpy as jnp
 import nux.util as util
-from jax import random, vmap
+from jax import random
 from functools import partial
-import haiku as hk
 from typing import Optional, Mapping, Callable
-from nux.internal.layer import InvertibleLayer
-import nux.util as util
-import nux
-from haiku._src.typing import PRNGKey
+from nux.flows.bijective.affine import StaticScale
+from nux.flows.bijective.nonlinearities import Sigmoid
 
 __all__ = ["UniformDequantization",
-           "VariationalDequantization"]
+           "VariationalDequantization",
+           "FusedDequantizationAndPadding"]
 
-class UniformDequantization(InvertibleLayer):
+class UniformDequantization():
 
-  def __init__(self,
-               n_samples: int=1,
-               name: str="uniform_dequantization"
-  ):
+  def __init__(self, n_samples: int=1):
     """ Uniform dequantization.  See section 3.1 here https://arxiv.org/pdf/1511.01844.pdf
     Args:
-      scale: This is usually the first layer of image pipelines, so for convenience also
-             scale by the max value a pixel can take.
       name : Optional name for this module.
     """
-    super().__init__(name=name)
     self.n_samples = n_samples
 
-  def call(self,
-           inputs: Mapping[str, jnp.ndarray],
-           rng: PRNGKey,
-           sample: Optional[bool]=False,
-           no_dequantization=False,
-           **kwargs
-  ) -> Mapping[str, jnp.ndarray]:
-    x = inputs["x"]
-    x_shape = self.get_unbatched_shapes(sample)["x"]
+  def get_params(self):
+    return {}
 
-    outputs = {}
+  def __call__(self, x, params=None, inverse=False, rng_key=None, **kwargs):
 
-    if sample == False:
-      if no_dequantization == False:
-        noise = random.uniform(rng, x.shape + (self.n_samples,))
-        noise = noise.mean(axis=-1) # Bates distribution
-        z = x + noise
-        outputs["dequantization_noise"] = noise
-      else:
-        z = x
+    if inverse == False:
+      noise = random.uniform(rng_key, x.shape + (self.n_samples,))
+      noise = noise.mean(axis=-1) # Bates distribution
+      z = x + noise
     else:
-      z = x
-      # z = jnp.floor(x)
+      z = jnp.floor(x).astype(jnp.int32)
 
-    log_det = -jnp.zeros(self.batch_shape)
-    outputs["x"] = z
-    outputs["log_det"] = log_det
-
-    return outputs
+    log_det = jnp.zeros(x.shape[:1])
+    return z, log_det
 
 ################################################################################################################
 
-class VariationalDequantization(InvertibleLayer):
-  def __init__(self,
-               flow: Optional[Callable]=None,
-               network_kwargs: Optional=None,
-               name: str="variational_dequantization"
-  ):
+class VariationalDequantization():
+  def __init__(self, flow: Optional[Callable]=None):
     """ Variational dequantization https://arxiv.org/pdf/1902.00275.pdf
     Args:
-      scale         : This is usually the first layer of image pipelines, so for convenience also
-                      scale by the max value a pixel can take.
       flow          : The flow to use for dequantization
-      network_kwargs: Dictionary with settings for the default network (see get_default_network in util.py)
       name          : Optional name for this module.
     """
-    super().__init__(name=name)
     self.flow           = flow
-    self.network_kwargs = network_kwargs
 
-  def default_flow(self):
-    return nux.sequential(nux.Logit(scale=None),
-                          nux.OneByOneConv(),
-                          nux.reverse_flow(nux.LogisticMixtureLogit(n_components=8,
-                                                                             network_kwargs=self.network_kwargs,
-                                                                             use_condition=True)),
-                          nux.OneByOneConv(),
-                          nux.reverse_flow(nux.LogisticMixtureLogit(n_components=8,
-                                                                             network_kwargs=self.network_kwargs,
-                                                                             use_condition=True)),
-                          nux.UnitGaussianPrior())
+  def get_params(self):
+    return {"log_qugx": self.flow.get_params()}
 
-  def call(self,
-           inputs: Mapping[str, jnp.ndarray],
-           rng: PRNGKey,
-           sample: Optional[bool]=False,
-           **kwargs
-  ) -> Mapping[str, jnp.ndarray]:
-    x = inputs["x"]
-    x_shape = self.get_unbatched_shapes(sample)["x"]
+  def __call__(self, x, params=None, inverse=False, rng_key=None, **kwargs):
+    if params is None:
+      self.q_params = None
+    else:
+      self.q_params = params["log_qugx"]
 
-    log_det = jnp.zeros(self.batch_shape)
-    flow = self.flow if self.flow is not None else self.default_flow()
-
-    if sample == False:
-      flow_inputs = {"x": jnp.zeros(x.shape), "condition": x}
-      outputs = flow(flow_inputs, rng, sample=True)
-
-      noise = outputs["x"]
+    if inverse == False:
+      noise, log_qugx = self.flow(jnp.zeros(x.shape), aux=x, params=self.q_params, rng_key=rng_key, inverse=True)
       z = x + noise
-
-      log_qugx = outputs["log_det"] + outputs["log_pz"]
-      log_det -= log_qugx
     else:
       z_continuous = x
       z = jnp.floor(z_continuous).astype(jnp.int32)
       noise = z_continuous - z
-      flow_inputs = {"x": noise, "condition": x}
-      outputs = flow(flow_inputs, rng, sample=False)
-      log_qugx = outputs["log_det"] + outputs["log_pz"]
-      log_det -= log_qugx
+      _, log_qugx = self.flow(noise, aux=x, params=self.q_params, rng_key=rng_key, inverse=False)
 
-    return {"x": z, "log_det": log_det}
+    return z, -log_qugx
 
+################################################################################################################
+
+class FusedDequantizationAndPadding():
+  """
+  Full preprocessing for an image.
+  Dequantization -> scale -> logit -> padding
+  """
+  def __init__(self,
+               quantize_bits: int,
+               output_channel: int,
+               flow: Callable,
+               feature_network: Callable):
+
+    self.quantize_bits   = quantize_bits
+    self.out_channel     = output_channel
+    self.flow            = flow
+    self.feature_network = feature_network
+    self.scale           = StaticScale(2**self.quantize_bits)
+    self.sigmoid         = Sigmoid()
+
+  def get_params(self):
+    return {"feature_network": self.feature_network.get_params(),
+            "qugx": self.flow.get_params(),
+            "scale": self.scale.get_params(),
+            "sigmoid": self.sigmoid.get_params()}
+
+  def __call__(self, x, params=None, aux=None, inverse=False, rng_key=None, **kwargs):
+    if params is None:
+      self.f_params = None
+      self.q_params = None
+      self.scale_params = None
+      self.sigmoid_params = None
+    else:
+      self.f_params = params["feature_network"]
+      self.q_params = params["qugx"]
+      self.scale_params = params["scale"]
+      self.sigmoid_params = params["sigmoid"]
+
+    k1, k2 = random.split(rng_key, 2)
+
+    assert len(x.shape[1:]) == 3, "Only supporting 3d inputs"
+
+    if inverse == False:
+      C = x.shape[-1]
+      assert self.out_channel > C
+      self.data_channel = C
+
+      # Extract features to condition on
+      f = self.feature_network(x, aux=None, params=self.f_params, rng_key=k1, **kwargs)
+
+      # Generate noise
+      flow_in = jnp.zeros(x.shape[:-1] + (self.out_channel,))
+      noise, log_qugs = self.flow(flow_in, aux=f, params=self.q_params, inverse=True, rng_key=k2, **kwargs)
+
+      # Squash part of the nosie to be between 0 and 1
+      dequant_noise, log_det1 = self.sigmoid(noise[...,:C], params=self.sigmoid_params, rng_key=rng_key, inverse=False)
+
+      # Add this noise for dequantization
+      x += dequant_noise
+
+      # Scale the dequantized image between 0 and 1
+      x, log_det2 = self.scale(x, params=self.scale_params, rng_key=rng_key, inverse=False)
+
+      # Unsquash the scaled dequantized image to the reals
+      x, log_det3 = self.sigmoid(x, params=self.sigmoid_params, rng_key=rng_key, inverse=True, scale=0.05)
+
+      # Concatenate the padding noise
+      z = jnp.concatenate([x, noise[...,C:]], axis=-1)
+
+    else:
+      C = self.data_channel
+
+      # Split the noise and the image
+      x, padding_noise = x[...,:C], x[...,C:]
+
+      # Squash the image from the reals to (0, 1)
+      # x, log_det3 = self.sigmoid(x, params=self.sigmoid_params, rng_key=rng_key, inverse=False, scale=0.05)
+      x, log_det3 = self.sigmoid(x, params=self.sigmoid_params, rng_key=rng_key, inverse=False)
+
+      # Scale the image from (0, 1) to the full range
+      x, log_det2 = self.scale(x, params=self.scale_params, rng_key=rng_key, inverse=True)
+
+      # Extract dequantization noise
+      z = jnp.floor(x)
+      dequant_noise = x - z
+
+      # Unsquash the dequantization noise so that we can evaluate it
+      noise, log_det1 = self.sigmoid(dequant_noise, params=self.sigmoid_params, rng_key=rng_key, inverse=True)
+
+      # Evaluate the likelihood of the dequantization noise
+      f = self.feature_network(z, aux=None, params=self.f_params, rng_key=k1, **kwargs)
+      full_noise = jnp.concatenate([noise, padding_noise], axis=-1)
+      _, log_qugs = self.flow(full_noise, aux=f, params=self.q_params, inverse=False, rng_key=k2, **kwargs)
+
+    # Compute the full likelihood contribution
+    log_det = -log_qugs
+    log_det += log_det1
+    log_det += log_det2
+    log_det -= log_det3
+
+    return z, log_det

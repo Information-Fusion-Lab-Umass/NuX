@@ -1,26 +1,18 @@
 import jax
 import jax.numpy as jnp
 import nux.util as util
-from jax import random, vmap
+from jax import random
 from functools import partial
-import haiku as hk
 from typing import Optional, Mapping, Callable, Sequence
-from nux.internal.layer import InvertibleLayer
-import nux.util as util
-import nux
-import nux.networks as net
 
 __all__ = ["ContinuouslyIndexed"]
 
-class ContinuouslyIndexed(InvertibleLayer):
+class ContinuouslyIndexed():
 
   def __init__(self,
                flow: Optional[Callable]=None,
                p_ugz: Callable=None,
                q_ugx: Callable=None,
-               create_network: Optional[Callable]=None,
-               network_kwargs: Optional=None,
-               name: str="continuously_indexed"
   ):
     """ Continuously indexed flow https://arxiv.org/pdf/1909.13833v3.pdf
         Main idea is that extra noise can significantly help form complicated
@@ -30,82 +22,38 @@ class ContinuouslyIndexed(InvertibleLayer):
       flow        : The flow to use for the transform
       name        : Optional name for this module.
     """
-    super().__init__(name=name)
     self.flow = flow
-    if p_ugz is not None:
-      self._pugz = p_ugz
+    self.p_ugz = p_ugz
+    self.q_ugx = q_ugx
 
-    if q_ugx is not None:
-      self._q_ugx = q_ugx
+  def get_params(self):
+    return {"p_ugz": self.p_ugz.get_params(),
+            "q_ugx": self.q_ugx.get_params(),
+            "flow": self.flow.get_params()}
 
-    self.network_kwargs = network_kwargs
-    self.create_network = create_network
-
-  @property
-  def p_ugz(self):
-    if hasattr(self, "_pugz"):
-      return self._pugz
-
-    # Keep this simple!
-    self._pugz = nux.ParametrizedGaussianPrior(network_kwargs=self.network_kwargs,
-                                               create_network=self.create_network)
-    return self._pugz
-
-  @property
-  def q_ugx(self):
-    if hasattr(self, "_qugx"):
-      return self._qugx
-
-    # Keep this simple, but a bit more complicated than p(u|z).
-    self._qugx = nux.sequential(nux.reverse_flow(nux.LogisticMixtureLogit(n_components=8,
-                                                                          with_affine_coupling=False,
-                                                                          coupling=False)),
-                                nux.ParametrizedGaussianPrior(network_kwargs=self.network_kwargs,
-                                                              create_network=self.create_network))
-    return self._qugx
-
-  def call(self,
-           inputs: Mapping[str, jnp.ndarray],
-           rng: jnp.ndarray=None,
-           sample: Optional[bool]=False,
-           **kwargs
-  ) -> Mapping[str, jnp.ndarray]:
-
+  def __call__(self, x, params=None, inverse=False, rng_key=None, **kwargs):
     k1, k2, k3 = random.split(rng, 3)
 
-    if sample == False:
-      x = inputs["x"]
+    if params is None:
+      self.q_params = None
+      self.p_params = None
+      self.flow_params = None
+    else:
+      self.q_params = params["p_ugz"]
+      self.p_params = params["q_ugx"]
+      self.flow_params = params["flow"]
 
-      q_inputs = {"x": jnp.zeros_like(x), "condition": x}
-      q_outputs = self.q_ugx(q_inputs, k1, sample=True)
-      u, log_qugx = q_outputs["x"], q_outputs["log_pz"] + q_outputs["log_det"]
+    if inverse == False:
 
-      f_inputs = {"x": x, "condition": u}
-      f_outputs = self.flow(f_inputs, k2, sample=False, **kwargs)
-      z, log_det = f_outputs["x"], f_outputs["log_det"]
-
-      p_inputs = {"x": u, "condition": z}
-      p_outputs = self.p_ugz(p_inputs, k3, sample=False, **kwargs)
-      log_pugx = p_outputs["log_pz"] + p_outputs.get("log_det", 0.0)
+      u, log_qugx = self.q_ugx(jnp.zeros_like(x), aux=x, params=self.q_params, inverse=True, rng_key=k1)
+      z, log_det = self.flow(x, aux=u, params=self.flow_params, inverse=False, rng_key=k2)
+      _, log_pygx = self.p_ugz(u, aux=z, params=self.p_params, inverse=False, rng_key=k3)
 
       log_det += log_pugx - log_qugx
 
-      outputs = {"x": z,
-                 "log_det": log_det}
-
     else:
+      u, log_pygx = self.p_ugz(jnp.zeros_like(x), aux=x, params=self.p_params, inverse=True, rng_key=k1)
+      f_inputs = {"x": x, "condition": u}
+      z, log_det = self.flow(x, aux=u, params=self.flow_params, inverse=True, rng_key=k2)
 
-      z = inputs["x"]
-
-      p_inputs = {"x": jnp.zeros_like(z), "condition": z}
-      p_outputs = self.p_ugz(p_inputs, k1, sample=True, **kwargs)
-      u = p_outputs["x"]
-
-      f_inputs = {"x": z, "condition": u}
-      f_outputs = self.flow(f_inputs, k2, sample=True, **kwargs)
-      x, log_det = f_outputs["x"], f_outputs["log_det"]
-
-      outputs = {"x": x,
-                 "log_det": log_det}
-
-    return outputs
+    return z, log_det

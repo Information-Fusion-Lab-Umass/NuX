@@ -3,15 +3,19 @@ from jax import random, jit
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 
-def two_dim_plot_limits(data):
+def two_dim_plot_limits(data, border=0.25, xborder=None, yborder=None):
   assert data.shape[-1] == 2, "Only works for 2d data"
   data = data.reshape((-1, 2))
   (xmin, ymin), (xmax, ymax) = data.min(axis=0), data.max(axis=0)
   xspread, yspread = xmax - xmin, ymax - ymin
-  xmin -= 0.25*xspread
-  xmax += 0.25*xspread
-  ymin -= 0.25*yspread
-  ymax += 0.25*yspread
+  if xborder is None:
+    xborder = border
+  if yborder is None:
+    yborder = border
+  xmin -= xborder*xspread
+  xmax += xborder*xspread
+  ymin -= yborder*yspread
+  ymax += yborder*yspread
   return xmin, xmax, ymin, ymax
 
 def contour_grid(xmin,

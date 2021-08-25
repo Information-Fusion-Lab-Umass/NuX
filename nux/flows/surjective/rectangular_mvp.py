@@ -4,24 +4,18 @@ import jax.numpy as jnp
 from functools import partial
 import nux.util as util
 from typing import Optional, Mapping, Callable, Sequence
-from nux.internal.layer import InvertibleLayer
-import haiku as hk
-from haiku._src.typing import PRNGKey
-from jax.scipy.special import gammaln, logsumexp
 import nux
-import nux.networks as net
-import nux.util.weight_initializers as init
-import nux.vae as vae
 
-__all__ = ["RectangularMVP"]
+__all__ = ["TallMVP"]
 
-@jit
-def logZ(x, A, log_diag_cov):
-  diag_cov = jnp.exp(log_diag_cov)
+def mvp(A, x):
+  return jnp.einsum("ij,...j->...i", A, x)
+
+def logZ(x, A, diag_cov):
 
   # N(x|0,Sigma)
   log_px = -0.5*jnp.sum(x**2/diag_cov)
-  log_px -= 0.5*jnp.sum(log_diag_cov)
+  log_px -= 0.5*jnp.sum(jnp.log(diag_cov))
   log_px -= 0.5*x.shape[-1]*jnp.log(2*jnp.pi)
 
   # N(h|0,J)|J|
@@ -37,247 +31,140 @@ def logZ(x, A, log_diag_cov):
 
 ################################################################################################################
 
-class RectangularMVP(InvertibleLayer):
+class TallMVP():
+  """ http://proceedings.mlr.press/v130/cunningham21a/cunningham21a.pdf """
 
   def __init__(self,
-               output_dim: int,
-               generative_only: bool=False,
-               create_network: Optional[Callable]=None,
-               reverse_params: bool=False,
-               network_kwargs: Optional=None,
-               weight_norm: bool=False,
-               spectral_norm: bool=False,
-               name: str="rectangular_mvp",
-               **kwargs):
-    if generative_only == False:
-      self._output_dim = output_dim
+               output_dim,
+               create_network):
+    self.s_dim = output_dim
+    self.create_network = create_network
+
+  def get_params(self):
+    return dict(network=self.network.get_params(),
+                A=self.A,
+                scale=self.scale_params,
+                orthogonal_noise=self.gamma_perp)
+
+  def __call__(self, x, params=None, inverse=False, rng_key=None, is_training=True, save_orthogonal_noise=False, **kwargs):
+
+    if inverse == False:
+      t = x # Follow convention from paper
+      self.t_dim = x.shape[-1]
     else:
-      self._input_dim = output_dim
+      s = x
+      assert s.shape[-1] == self.s_dim
 
-    self.generative_only = generative_only
-    self.reverse_params  = reverse_params
-    self.weight_norm     = weight_norm
-    self.spectral_norm   = spectral_norm
-    self.create_network  = create_network
-    self.network_kwargs  = network_kwargs
-    super().__init__(name=name, **kwargs)
+    self.network = self.create_network(2*self.t_dim)
 
-  @property
-  def input_shape(self):
-    return self.unbatched_input_shapes["x"]
-
-  @property
-  def output_shape(self):
-    return self.unbatched_output_shapes["x"]
-
-  @property
-  def image_in(self):
-    if self.generative_only:
-      return len(self.output_shape) == 3
-    return len(self.input_shape) == 3
-
-  @property
-  def input_dim(self):
-    if hasattr(self, "_input_dim"):
-      return self._input_dim
-    return util.list_prod(self.input_shape)
-
-  @property
-  def output_dim(self):
-    if hasattr(self, "_output_dim"):
-      return self._output_dim
-    return util.list_prod(self.output_shape)
-
-  @property
-  def kind(self):
-    return "tall" if self.input_dim > self.output_dim else "wide"
-
-  @property
-  def small_dim(self):
-    return self.output_dim if self.input_dim > self.output_dim else self.input_dim
-
-  @property
-  def big_dim(self):
-    return self.input_dim if self.input_dim > self.output_dim else self.output_dim
-
-  def pinv(self, t):
-    if self.reverse_params:
-      s = jnp.dot(t, self.B.T)
+    self.gamma_perp = None
+    if params is None:
+      k1, k2 = random.split(rng_key, 2)
+      self.scale_params = random.normal(k1, ())*0.01
+      self.network_params = None
+      self.A = random.normal(k2, shape=(self.t_dim, self.s_dim))
     else:
-      s = jnp.dot(t, self.A)
-      s = jnp.dot(s, self.ATA_inv.T)
-    return s
+      self.scale_params = params["scale"]
+      self.network_params = params["network"]
+      self.A = params["A"]
+      gamma_perp = params.get("orthogonal_noise", None)
 
-  def project(self, t=None, s=None):
-    if s is not None:
-      if self.reverse_params:
-        t_proj = jnp.dot(s, self.BBT_inv.T)
-        t_proj = jnp.dot(t_proj, self.B)
-      else:
-        t_proj = jnp.dot(s, self.A.T)
+    self.ATA = self.A.T@self.A
+    self.ATA_inv = jnp.linalg.inv(self.ATA)
 
-      return t_proj
-    else:
-      s = self.pinv(t)
-      return self.project(s=s)
+    if inverse == False:
+      # Pseudo-inverse of t
+      s = mvp(self.ATA_inv, mvp(self.A.T, t))
 
-    assert 0, "Must pass in either s or t"
+      # Projection of t
+      t_proj = mvp(self.A, s)
 
-  def orthogonal_distribution(self, s, t_proj, rng, no_noise):
-    network_in = t_proj.reshape(self.batch_shape + self.input_shape) if self.image_in else s
-    outputs = self.p_gamma_given_s({"x": network_in}, rng=rng, no_noise=no_noise)
-    gamma, mu, log_diag_cov = outputs["x"], outputs["mu"], outputs["log_diag_cov"]
-
-    # If we're going from image -> vector, we need to flatten the image
-    if self.image_in:
-      gamma        = gamma.reshape(self.batch_shape + (-1,))
-      mu           = mu.reshape(self.batch_shape + (-1,))
-      log_diag_cov = log_diag_cov.reshape(self.batch_shape + (-1,))
-
-    return gamma, mu, log_diag_cov
-
-  def likelihood_contribution(self, mu, gamma_perp, log_diag_cov, sample, big_to_small):
-    batched_logZ = self.auto_batch(logZ, in_axes=(0, None, 0))
-    if sample == True and big_to_small == False:
-      if self.reverse_params:
-        likelihood_contribution = -0.5*jnp.linalg.slogdet(self.BBT)[1]
-      else:
-        likelihood_contribution = 0.5*jnp.linalg.slogdet(self.ATA)[1]
-    else:
-      if self.reverse_params:
-        likelihood_contribution = batched_logZ(mu - gamma_perp, self.B.T, log_diag_cov) + jnp.linalg.slogdet(self.BBT)[1]
-      else:
-        likelihood_contribution = batched_logZ(mu - gamma_perp, self.A, log_diag_cov)
-
-    return likelihood_contribution
-
-  def call(self,
-           inputs: Mapping[str, jnp.ndarray],
-           rng: PRNGKey,
-           sample: Optional[bool]=False,
-           no_noise: Optional[bool]=False,
-           **kwargs
-  ) -> Mapping[str, jnp.ndarray]:
-
-    # p(gamma|s) = N(gamma|mu(s), Sigma(s))
-    if self.image_in:
-      out_shape = self.input_shape[:-1] + (2*self.input_shape[-1],)
-    else:
-      out_shape = (2*self.big_dim,)
-    self.p_gamma_given_s = vae.ParametrizedGaussian(out_shape=out_shape,
-                                                    create_network=self.create_network,
-                                                    network_kwargs=self.network_kwargs)
-
-    #######################
-    assert self.big_dim - self.small_dim > 0
-
-    # Initialize the tall or wide matrix.  We might want to choose to parametrize a tall
-    # matrix as the pseudo-inverse of a wide matrix or vice-versa.  B is wide and A is tall.
-    init_fun = hk.initializers.RandomNormal(stddev=0.05)
-    dtype = inputs["x"].dtype
-    if self.reverse_params:
-      x = inputs["x"].reshape(self.batch_shape + (-1,))
-
-      if self.spectral_norm:
-        self.B = init.weight_with_spectral_norm(x,
-                                                self.small_dim,
-                                                use_bias=False,
-                                                w_init=init_fun,
-                                                force_in_dim=self.big_dim,
-                                                is_training=kwargs.get("is_training", True),
-                                                update_params=kwargs.get("is_training", True))
-      else:
-        if self.weight_norm and self.kind == "tall":
-          self.B = init.weight_with_weight_norm(x, self.small_dim, use_bias=False, force_in_dim=self.big_dim)
-        else:
-          self.B = hk.get_parameter("B", shape=(self.small_dim, self.big_dim), dtype=dtype, init=init_fun)
-        self.B = util.whiten(self.B)
-    else:
-      if self.spectral_norm:
-        self.A = init.weight_with_spectral_norm(x,
-                                                self.big_dim,
-                                                use_bias=False,
-                                                w_init=init_fun,
-                                                force_in_dim=self.small_dim,
-                                                is_training=kwargs.get("is_training", True),
-                                                update_params=kwargs.get("is_training", True))
-      else:
-        self.A = hk.get_parameter("A", shape=(self.big_dim, self.small_dim), dtype=dtype, init=init_fun)
-        self.A = util.whiten(self.A)
-
-    # Compute the riemannian metric matrix for later use.
-    if self.reverse_params:
-      self.BBT     = self.B@self.B.T
-      self.BBT_inv = jnp.linalg.inv(self.BBT)
-    else:
-      self.ATA     = self.A.T@self.A
-      self.ATA_inv = jnp.linalg.inv(self.ATA)
-
-    #######################
-
-    # Figure out which direction we should go
-    if sample == False:
-      big_to_small = True if self.kind == "tall" else False
-    else:
-      big_to_small = False if self.kind == "tall" else True
-
-    #######################
-
-    # Compute the next value
-    if big_to_small:
-      t = inputs["x"]
-
-      # If we're going from image -> vector, we need to flatten the image
-      if self.image_in:
-        t = t.reshape(self.batch_shape + (-1,))
-
-      # Compute the pseudo inverse and projection
-      # s <- self.A^+t
-      s = self.pinv(t)
-      t_proj = self.project(s=s)
-
-      # Compute the perpendicular component of t for the log contribution
-      # gamma_perp <- t - AA^+t
+      # Orthogonal component
       gamma_perp = t - t_proj
+      if save_orthogonal_noise:
+        self.gamma_perp = gamma_perp
 
-      # Find mu(s), Sigma(s).  If we have an image as input, pass in the projected input image
-      # mu, Sigma <- NN(s, theta)
-      _, mu, log_diag_cov = self.orthogonal_distribution(s, t_proj, rng, no_noise=True)
-
-      # Compute the log contribution
-      # L <- logZ(mu - gamma_perp|self.A, Sigma)
-      likelihood_contribution = self.likelihood_contribution(mu, gamma_perp, log_diag_cov, sample=sample, big_to_small=big_to_small)
-
-      outputs = {"x": s, "log_det": likelihood_contribution}
+      # Create the features.  Pass in t instead of s to make the code simpler.
+      theta = self.network(t_proj, aux=None, params=self.network_params, rng_key=rng_key, is_training=is_training)
+      theta *= self.scale_params # Initialize to identity
+      mu, diag_cov = jnp.split(theta, 2, axis=-1)
+      diag_cov = util.square_plus(diag_cov, gamma=1.0) + 1e-4
 
     else:
-      s = inputs["x"]
+      k1, k2 = random.split(rng_key, 2)
 
-      # Compute the mean of t.  Primarily used if we have an image as input
-      t_mean = self.project(s=s)
+      # Projection
+      t_proj = jnp.einsum("ij,...j->...i", self.A, s)
 
-      # Find mu(s), Sigma(s).  If we have an image as input, pass in the projected input image
-      # mu, Sigma <- NN(s, theta)
-      # gamma ~ N(mu, Sigma)
-      gamma, mu, log_diag_cov = self.orthogonal_distribution(s, t_mean, rng, no_noise=no_noise)
+      # Create the features.  Pass in t instead of s to make the code simpler.
+      theta = self.network(t_proj, aux=None, params=self.network_params, rng_key=k1, is_training=is_training)
+      # theta *= self.scale_params # Initialize to identity
+      mu, diag_cov = jnp.split(theta, 2, axis=-1)
+      diag_cov = util.square_plus(diag_cov, gamma=1.0) + 1e-4
 
-      # Compute the orthogonal component of the noise
-      # gamma_perp <- gamma - AA^+ gamma
-      gamma_proj = self.project(t=gamma)
-      gamma_perp = gamma - gamma_proj
+      if gamma_perp is None:
+        # Sample orthogonal noise
+        gaussian_params = dict(mu=mu, s=jnp.sqrt(diag_cov))
+        gamma, _ = nux.GaussianPrior()(jnp.zeros_like(mu), params=gaussian_params, rng_key=k2, inverse=True, is_training=is_training)
 
-      # Add the orthogonal features
-      # t <- As + gamma_perp
-      t = t_mean + gamma_perp
+        # Orthogonalize the noise
+        gamma_perp = gamma - mvp(self.A, mvp(self.ATA_inv, mvp(self.A.T, gamma)))
 
-      # Compute the log contribution
-      # L <- logZ(mu - gamma_perp|self.A, Sigma)
-      likelihood_contribution = -self.likelihood_contribution(mu, gamma_perp, log_diag_cov, sample=sample, big_to_small=big_to_small)
+      # Compute t
+      t = t_proj + gamma_perp
 
-      # Reshape to an image if needed
-      if self.image_in:
-        t = t.reshape(self.batch_shape + self.input_shape)
+    # Log likelihood contribution
+    llc = jax.vmap(logZ, in_axes=(0, None, 0))(mu - gamma_perp, self.A, diag_cov)
 
-      outputs = {"x": t, "log_det": likelihood_contribution}
+    z = s if inverse == False else t
+    return z, llc
 
-    return outputs
+################################################################################################################
+
+if __name__ == "__main__":
+  from debug import *
+  import matplotlib.pyplot as plt
+
+  H, W, C = 8, 8, 8
+  rng_key = random.PRNGKey(0)
+  # x = random.normal(rng_key, (20, H, W, C))
+  x = random.normal(rng_key, (10000, 2))
+  # x = jnp.linspace(-2, 2, 100)[None]
+
+  create_network = lambda out_dim: nux.CouplingResNet1D(out_dim,
+                                                        working_dim=8,
+                                                        hidden_dim=16,
+                                                        nonlinearity=util.square_swish,
+                                                        dropout_prob=0.0,
+                                                        n_layers=3)
+
+  flow = nux.Sequential([nux.TallMVP(output_dim=1,
+                                     create_network=create_network),
+                         nux.UnitGaussianPrior()])
+
+  z, log_px1 = flow(x, rng_key=rng_key)
+  params = flow.get_params()
+
+  gamma_perp = flow.layers[0].gamma_perp
+  reconstr, log_px2 = flow(z, params=params, rng_key=rng_key, inverse=True, reconstruction=True, gamma_perp=gamma_perp)
+  # import pdb; pdb.set_trace()
+
+  # Evaluate the log likelihood of a lot of samples
+  samples, log_px = flow(jnp.zeros((10000, 1)), params=params, rng_key=rng_key, inverse=True)
+
+  # import pdb; pdb.set_trace()
+
+  # Get the exact log likelihood
+  import scipy.stats
+  from scipy.stats import gaussian_kde
+  kernel = gaussian_kde(samples.T)
+
+  px = kernel(samples.T)
+  true_log_px = jnp.log(px)
+  plt.hist(log_px - true_log_px, bins=50);plt.show()
+
+  mask = jnp.linalg.norm(samples, axis=-1) < 0.5
+
+  import pdb; pdb.set_trace()
+
+  # fig, (ax1, ax2) = plt.subplots(1, 2);ax1.plot(x.ravel(), z.ravel());ax2.scatter(x.ravel(), reconstr.ravel(), c=flow.gamma_perp.ravel());plt.show()

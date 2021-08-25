@@ -1,16 +1,12 @@
 import jax
 import jax.numpy as jnp
 from jax import random
-from nux.internal.base import get_tree_shapes
-import haiku as hk
 
 __all__ = ["key_tree_like",
            "tree_multimap_multiout",
            "tree_shapes",
            "tree_ndims",
            "tree_equal",
-           "get_state_tree",
-           "set_state_tree",
            "tree_concat",
            "tree_hstack"]
 
@@ -43,24 +39,12 @@ def tree_equal(x, y):
 
 ##########################################################################
 
-# https://github.com/deepmind/dm-haiku/issues#issuecomment-611203193
-from typing import Any, NamedTuple
-
-class Box(NamedTuple):
-  value: Any
-  shape = property(fget=lambda _: ())
-  dtype = jnp.float32
-
-def get_state_tree(name, init):
-  return hk.get_state(name, (), jnp.float32, init=lambda *_: Box(init())).value
-
-def set_state_tree(name, val):
-  return hk.set_state(name, Box(val))
-
-##########################################################################
-
 def tree_concat(x, y, axis=0):
+  if x is None:
+    return y
   return jax.tree_multimap(lambda a, b: jnp.concatenate([a, b], axis=axis), x, y)
 
 def tree_hstack(x, y):
+  if x is None:
+    return jax.tree_map(lambda x: x[None], y)
   return jax.tree_multimap(lambda a, b: jnp.hstack([a, b]), x, y)

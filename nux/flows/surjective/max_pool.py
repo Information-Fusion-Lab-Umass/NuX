@@ -1,12 +1,9 @@
 import jax
-from jax import random, jit, vmap, ops
+from jax import random
 import jax.numpy as jnp
 from functools import partial
 import nux.util as util
 from typing import Optional, Mapping, Callable, Sequence
-from nux.internal.layer import InvertibleLayer
-import haiku as hk
-from haiku._src.typing import PRNGKey
 import nux
 
 """ Adapted from the SurVAE repo: https://github.com/didriknielsen/survae_flows/blob/master/survae/transforms/surjections/maxpool2d.py """
@@ -57,7 +54,7 @@ def generate_grid_indices(shape, rng):
 
   # Shuffle the indices.  random.permutation doesn't accept an axis argument for some reason.
   rngs = random.split(rng, total_dim)
-  idx = vmap(random.permutation)(rngs, idx)
+  idx = jax.vmap(random.permutation)(rngs, idx)
 
   # Separate into the max and non-max indices
   max_idx = idx[...,0].reshape(shape)
@@ -93,87 +90,58 @@ def contruct_from_max_elts(max_elts, non_max_elts, max_idx, non_max_idx):
 
   # Construct the new array
   x_squeeze = jnp.zeros((H, W, C, 4))
-  x_squeeze = ops.index_update(x_squeeze, max_coord, max_elts.ravel())
-  x_squeeze = ops.index_update(x_squeeze, non_max_coord, non_max_elts.ravel())
+  x_squeeze = x_squeeze.at[max_coord].set(max_elts.ravel())
+  x_squeeze = x_squeeze.at[non_max_coord].set(non_max_elts.ravel())
 
   # Unsqueeze the image
   return util.pixel_unsqueeze(x_squeeze)
 
 ################################################################################################################
 
-class MaxPool(InvertibleLayer):
+class MaxPool():
 
-  def __init__(self,
-               decoder: Callable=None,
-               network_kwargs: Optional=None,
-               name: str="surjective_max_pool",
-  ):
+  def __init__(self, decoder: Callable=None):
     """ Max pool as described in https://arxiv.org/pdf/2007.02731.pdf
         This isn't the usual max pool where we pool with overlapping patches.
         Instead, this pools over non-overlapping patches of pixels.
     Args:
       decoder       : The flow to use to learn the non-max elements.
-      network_kwargs: Dictionary with settings for the default network (see get_default_network in util.py)
       name          : Optional name for this module.
     """
-    self.decoder        = decoder
-    self.network_kwargs = network_kwargs
-    super().__init__(name=name)
+    self.decoder = decoder
 
-  def default_decoder(self):
-    # Generate positive values only
-    return nux.sequential(nux.SoftplusInverse(),
-                          nux.OneByOneConv(),
-                          nux.LogisticMixtureLogit(n_components=4,
-                                                            network_kwargs=self.network_kwargs,
-                                                            reverse=False,
-                                                            use_condition=True),
-                          nux.OneByOneConv(),
-                          nux.LogisticMixtureLogit(n_components=4,
-                                                            network_kwargs=self.network_kwargs,
-                                                            reverse=False,
-                                                            use_condition=True),
-                          nux.UnitGaussianPrior())
+  def get_params(self):
+    return {"decoder": self.decoder.get_params()}
 
-  def call(self,
-           inputs: Mapping[str, jnp.ndarray],
-           rng: PRNGKey,
-           sample: Optional[bool]=False,
-           **kwargs) -> Mapping[str, jnp.ndarray]:
+  def __call__(self, x, params=None, inverse=False, rng_key=None, **kwargs):
+    if params is None:
+      self.d_params = None
+    else:
+      self.d_params = params["decoder"]
 
-    # Create the decoder
-    decoder = self.default_decoder() if self.decoder is None else self.decoder()
-
-    if sample == False:
-      x = inputs["x"]
+    if inverse == False:
 
       # Get the max and non-max elements
-      max_elts, non_max_elts, max_idx, non_max_idx = self.auto_batch(extract_max_elts)(x)
+      max_elts, non_max_elts, max_idx, non_max_idx = jax.vmap(extract_max_elts)(x)
 
       # See how likely these non-max elements are.  Condition on values and indices
       # so that the decoder has context on what to generate.
       cond = jnp.concatenate([max_elts[...,None], non_max_idx], axis=-1)
       cond = cond.reshape(cond.shape[:-2] + (-1,))
-      decoder_inputs = {"x" : non_max_elts, "condition" : cond}
-      decoder_outputs = decoder(decoder_inputs, rng, sample=False)
-      log_qzgx = decoder_outputs["log_pz"] + decoder_outputs.get("log_det", jnp.array(0.0))
+      _, log_qzgx = self.decoder(non_max_elts, aux=cond, params=self.d_params, inverse=False, rng_key=rng_key)
 
       # We are assuming a uniform distribution for the order of the indices
       log_qkgx = -jnp.log(4)*max_elts.size
-
-      log_contribution = log_qzgx + log_qkgx
-      outputs = {"x": max_elts, "log_det": log_contribution}
-
     else:
-      max_elts = inputs["x"]
-      max_elts_shape = self.get_unbatched_shapes(sample)["x"]
+      max_elts = x
+      max_elts_shape = x.shape[1:]
       max_elts_size = util.list_prod(max_elts_shape)
-      rng1, rng2 = random.split(rng, 2)
+      rng1, rng2 = random.split(rng_key, 2)
 
       # Sample the max indices from q(k|x)
-      n_keys = util.list_prod(self.batch_shape)
-      rngs = random.split(rng1, n_keys).reshape(self.batch_shape + (-1,))
-      max_idx, non_max_idx = self.auto_batch(partial(generate_grid_indices, max_elts_shape))(rngs)
+      n_keys = x.shape[0]
+      rngs = random.split(rng1, n_keys)
+      max_idx, non_max_idx = jax.vmap(partial(generate_grid_indices, max_elts_shape))(rngs)
       log_qkgx = -jnp.log(4)*max_elts_size
 
       # Sample the non-max indices
@@ -181,14 +149,10 @@ class MaxPool(InvertibleLayer):
       cond = jnp.concatenate([max_elts[...,None], non_max_idx], axis=-1)
       cond = cond.reshape(cond.shape[:-2] + (-1,))
       decoder_inputs = {"x": jnp.zeros(self.batch_shape + (H, W, 3*C)), "condition": cond}
-      decoder_outputs = decoder(decoder_inputs, rng2, sample=True)
-      non_max_elts = decoder_outputs["x"]
-      log_qzgx = decoder_outputs["log_pz"] + decoder_outputs.get("log_det", jnp.array(0.0))
+      non_max_elts, log_qzgx = self.decoder(jnp.zeros((1, H, W, 3*C), aux=cond, params=params, inverse=True, rng_key=rng2))
 
       # Combine the max elements with the non-max elements
-      x = self.auto_batch(contruct_from_max_elts)(max_elts, non_max_elts, max_idx, non_max_idx)
+      z = jax.vmap(contruct_from_max_elts)(max_elts, non_max_elts, max_idx, non_max_idx)
 
-      log_contribution = log_qzgx + log_qkgx
-      outputs = {"x": x, "log_det": log_contribution}
-
-    return outputs
+    llc = log_qzgx + log_qkgx
+    return z, llc

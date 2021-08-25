@@ -5,24 +5,22 @@ from functools import partial
 
 __all__ = ["mmd2_estimate"]
 
-@jit
-def kernel(x, y, sigma=0.2):
-    dx = x - y
-    return jnp.exp(-0.5/sigma**2*jnp.sum(dx**2))
+def kernel(x, y, sigma):
+  dx = x - y
+  return jnp.exp(-0.5/sigma**2*jnp.sum(dx**2))
 
-@jit
 def mmd2_estimate(x, y, sigma=0.2):
-    N, M = x.shape[0], y.shape[0]
+  N, M = x.shape[0], y.shape[0]
 
-    k = vmap(vmap(partial(kernel, sigma=sigma), in_axes=(0, None)), in_axes=(None, 0))
-    kxy = k(x, y)
-    kxx = k(x, x)
-    kyy = k(y, y)
+  k = vmap(vmap(kernel, in_axes=(0, None, None)), in_axes=(None, 0, None))
+  kxy = k(x, y, sigma)
+  kxx = k(x, x, sigma)
+  kyy = k(y, y, sigma)
 
-    diag_idx = jax.ops.index[jnp.diag_indices(x.shape[0])]
-    kxx_no_diag = jax.ops.index_update(kxx, diag_idx, 0.0)
+  kxx_no_diag = kxx.at[jnp.diag_indices(x.shape[0])].set(0.0)
+  kyy_no_diag = kyy.at[jnp.diag_indices(y.shape[0])].set(0.0)
 
-    term1 = (kxx.sum() - jnp.diag(kxx).sum())/(N*(N-1))
-    term2 = (kyy.sum() - jnp.diag(kyy).sum())/(M*(M-1))
-    mmd2 = term1 + term2 - 2*kxy.mean()
-    return mmd2
+  term1 = kxx_no_diag.sum()/(N*(N-1))
+  term2 = kyy_no_diag.sum()/(M*(M-1))
+  mmd2 = term1 + term2 - 2*kxy.mean()
+  return mmd2
