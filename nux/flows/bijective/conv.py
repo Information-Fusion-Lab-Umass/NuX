@@ -2,7 +2,6 @@ import jax
 import jax.numpy as jnp
 from jax import random
 from functools import partial
-import haiku as hk
 from typing import Optional, Mapping, Tuple, Sequence, Union, Any, Callable
 import nux.util as util
 from nux.flows.base import Flow

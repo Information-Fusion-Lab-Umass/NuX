@@ -11,41 +11,38 @@ Normalizing flows learn a parametric model over an unknown probability density f
 It is easy to build, train and evaluate normalizing flows with NuX
 
 ```python
-import nux
 import jax
 import jax.numpy as jnp
-key = jax.random.PRNGKey(0)
+import nux
 
-# Build a dummy dataset
-x_train, x_test = jnp.ones((2, 100, 2))
-train_inputs, test_inputs = {"x": x_train}, {"x": x_test}
+# Generate some fake data
+rng_key = jax.random.PRNGKey(0)
+batch_size, dim = 8, 3
+x = jax.random.normal(rng_key, (batch_size, dim))
 
-# Build a simple normalizing flow
-def create_flow():
-  return nux.sequential(nux.RealNVP(), nux.AffineLDU(), nux.UnitGaussianPrior())
+# Create your normalizing flow
+flow = nux.Sequential([nux.DenseMVP(),
+                       nux.SneakyReLU(),
+                       nux.UnitGaussianPrior()])
 
-# Perform data-dependent initialization
-flow = nux.Flow(create_flow, key, train_inputs, batch_axes=(0,))
+# Initialize the flow with data-dependent initialization
+z, log_px = flow(x, rng_key=rng_key)
 
-# Run the flow on inputs
-outputs = flow.apply(key, test_inputs)
-finv_x, log_px = outputs["x"], outputs["log_px"]
+# Retrieve the initialized parameters from the flow
+params = flow.get_params()
 
-# Generate reconstructions
-outputs = flow.reconstruct(key, {"x": finv_x})
-reconstr = outputs["x"]
+# Generate samples
+x_samples, log_px_samples = flow(jnp.zeros_like(x), params=params, inverse=True, rng_key=rng_key)
 
-# Sample from the flow
-outputs = flow.sample(key, n_samples=8)
-fz, log_pfz = outputs["x"], outputs["log_px"]
+# Pass the samples to the latent space
+z, log_px = flow(x_samples, params=params, inverse=False)
 
-# Construct a maximum likelihood trainer for the flow
-trainer = nux.MaximumLikelihoodTrainer(flow)
+# Reconstruct the samples
+x_reconstr, log_px_reconstr = flow(z, params=params, inverse=True, reconstruction=True)
 
-# Train the flow
-keys = jax.random.split(key, 10)
-for key in keys:
-  trainer.grad_step(key, train_inputs)
+assert jnp.allclose(x_samples, x_reconstr)
+assert jnp.allclose(log_px_samples, log_px)
+assert jnp.allclose(log_px, log_px_reconstr)
 ```
 
 ## Get started

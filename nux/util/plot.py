@@ -1,8 +1,5 @@
 import numpy as np
-from matplotlib.lines import Line2D
-import matplotlib.pyplot as plt
-import matplotlib.collections as mcoll
-import matplotlib.path as mpath
+
 
 def make_segments(x, y):
   """
@@ -15,8 +12,8 @@ def make_segments(x, y):
   segments = np.concatenate([points[:-1], points[1:]], axis=1)
   return segments
 
-def colorline(ax, x, y, z=None, colors=None, cmap=plt.get_cmap("inferno"),
-              norm=plt.Normalize(0.0, 1.0), linewidth=1, alpha=1.0):
+def colorline(ax, x, y, z=None, colors=None, cmap=None,
+              norm=None, linewidth=1, alpha=1.0):
   """
   http://nbviewer.ipython.org/github/dpsanders/matplotlib-examples/blob/master/colorline.ipynb
   http://matplotlib.org/examples/pylab_examples/multicolored_line.html
@@ -24,6 +21,8 @@ def colorline(ax, x, y, z=None, colors=None, cmap=plt.get_cmap("inferno"),
   Optionally specify colors in the array z
   Optionally specify a colormap, a norm function and a line width
   """
+  import matplotlib.pyplot as plt
+  import matplotlib.collections as mcoll
 
   # Default colors equally spaced on [0,1]:
   if z is None:

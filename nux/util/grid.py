@@ -1,7 +1,6 @@
 import jax
 from jax import random, jit
 import jax.numpy as jnp
-import matplotlib.pyplot as plt
 
 def two_dim_plot_limits(data, border=0.25, xborder=None, yborder=None):
   assert data.shape[-1] == 2, "Only works for 2d data"
