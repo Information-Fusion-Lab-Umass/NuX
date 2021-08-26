@@ -69,7 +69,7 @@ class RealNVP():
 ################################################################################################################
 
 if __name__ == "__main__":
-  from debug import *
+  # from debug import *
   rng_key = random.PRNGKey(0)
 
   # Generate some dummy data and a data iterator
