@@ -13,6 +13,7 @@ __all__ = ["CPFlow"]
 ################################################################################################################
 
 class CPFlow(Flow):
+  """ https://arxiv.org/pdf/2012.05942.pdf """
 
   def __init__(self, hidden_dim, aug_dim, n_hidden_layers, lanczos_quad=False):
     self.lanczos_quad = lanczos_quad

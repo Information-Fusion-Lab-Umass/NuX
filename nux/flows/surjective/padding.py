@@ -10,7 +10,9 @@ __all__ = ["Padding"]
 
 class Padding():
   """
-  Padding along the last axis
+  Padding along the last axis.  This is VFlows / augmented flows
+  https://arxiv.org/pdf/2002.09741.pdf
+  https://arxiv.org/pdf/2002.07101.pdf
   """
   def __init__(self,
                padding_dim: int,

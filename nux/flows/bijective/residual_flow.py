@@ -11,6 +11,7 @@ __all__ = ["ResidualFlow"]
 ################################################################################################################
 
 class ResidualFlow(Flow):
+  """ https://arxiv.org/pdf/1906.02735.pdf """
 
   def __init__(self, res_block, n_exact=4, n_total=8):
     self.res_block = res_block

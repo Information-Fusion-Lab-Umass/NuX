@@ -168,7 +168,7 @@ class Scale(Flow):
 class ShiftScale(Flow):
 
   def __init__(self, center_init=True):
-    """ Elementwise shift + scale
+    """ Elementwise shift + scale.  This is RealNVP https://arxiv.org/pdf/1605.08803.pdf
     """
     self.s = None
     self.b = None
@@ -276,7 +276,7 @@ U_solve_with_diag = partial(tri_solve, lower=False, unit_diagonal=False)
 class PLUMVP(Flow):
 
   def __init__(self):
-    """ Dense
+    """ Dense layer using the PLU parametrization https://arxiv.org/pdf/1807.03039.pdf
     """
     pass
 

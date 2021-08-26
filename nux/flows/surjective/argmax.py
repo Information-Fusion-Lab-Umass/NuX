@@ -9,7 +9,7 @@ from nux.flows.bijective.nonlinearities import SquarePlus
 __all__ = ["OnehotArgmaxFlow"]
 
 class OnehotArgmaxFlow():
-  """ Thresholding based argmax flows """
+  """ Thresholding based argmax flows https://arxiv.org/pdf/2102.05379.pdf """
   def __init__(self,
                qugx: Callable,
                feature_network: Callable):
