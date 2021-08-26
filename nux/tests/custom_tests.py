@@ -58,6 +58,6 @@ def flat_test():
 
 
 if __name__ == "__main__":
-  from debug import *
+  # from debug import *
   flat_test()
   image_tests()

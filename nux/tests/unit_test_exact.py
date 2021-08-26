@@ -50,7 +50,7 @@ def exact_test(flow, x, rng_key):
 ################################################################################################################
 
 if __name__ == "__main__":
-  from debug import *
+  # from debug import *
   rng_key = random.PRNGKey(0)
   x = random.normal(rng_key, shape=(16, 4, 4, 4))
 

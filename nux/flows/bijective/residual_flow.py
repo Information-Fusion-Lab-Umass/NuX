@@ -8,18 +8,6 @@ from nux.flows.base import Flow
 
 __all__ = ["ResidualFlow"]
 
-# def geometric_roulette_coefficients(key, n_terms):
-#   # Compute the roulette coefficients using a geometric distribution
-#   k = jnp.arange(n_terms)
-#   p = 0.5
-#   u = random.uniform(key, (1,))[0]
-#   N = jnp.floor(jnp.log(u)/jnp.log(1 - p)) + 1
-#   p_N_geq_k = (1 - p)**k
-
-#   # Zero out the terms that are over N
-#   roulette_coeff = jnp.where(k > N, 0.0, 1/p_N_geq_k)
-#   return roulette_coeff
-
 ################################################################################################################
 
 class ResidualFlow(Flow):
@@ -66,7 +54,6 @@ class ResidualFlow(Flow):
 
     k = jnp.arange(1, self.n_total + 1)
 
-    scan_body(v, k[0])
     w, (log_det_terms, grad_terms) = jax.lax.scan(scan_body, v, k, unroll=10)
 
     roulette_coeff = util.geometric_roulette_coefficients(rng_key, self.n_total - self.n_exact)
