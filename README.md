@@ -31,7 +31,7 @@ z, log_px = flow(x, rng_key=rng_key)
 # Retrieve the initialized parameters from the flow
 params = flow.get_params()
 
-# Generate samples
+# Generate samples.  The prior layer will use the input's shape for sampling.
 x_samples, log_px_samples = flow(jnp.zeros_like(x), params=params, inverse=True, rng_key=rng_key)
 
 # Pass the samples to the latent space
@@ -46,6 +46,6 @@ assert jnp.allclose(log_px, log_px_reconstr)
 ```
 
 ## Get started
-The easiest way to use NuX is to clone this repo and install the prerequisites with the "pip install ." command.  JAX needs to be manually installed (see [this](https://github.com/google/jax#installation)) because GPU support is system dependent.  The NuX package available on pip is outdated and does not have much of the functionality of the current code.
+The easiest way to use NuX is to clone this repo and install the prerequisites with the "pip install ." command.  JAX should be manually installed (see [this](https://github.com/google/jax#installation)) because GPU support is system dependent.  The NuX package available on pip is outdated and does not have much of the functionality of the current code.
 
 NuX is in active development, so expect the API to change over time.  Contributions are welcome!

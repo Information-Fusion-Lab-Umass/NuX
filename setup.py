@@ -2,7 +2,7 @@ import setuptools
 
 setuptools.setup(
     name="nux",
-    version="1.0.3",
+    version="2.0.0",
     author="Information Fusion Lab",
     author_email="edmondcunnin@cs.umass.edu",
     description="Normalizing Flows using Jax",
@@ -15,6 +15,6 @@ setuptools.setup(
         "License :: OSI Approved :: MIT License",
         "Operating System :: OS Independent",
     ],
-    python_requires=">=3.6",
+    python_requires=">=3.7",
     install_requires=open("requirements.txt").read().splitlines(),
 )
