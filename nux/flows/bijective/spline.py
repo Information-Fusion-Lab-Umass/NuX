@@ -6,6 +6,9 @@ from functools import partial
 from typing import Optional, Mapping, Tuple, Sequence, Union, Any, Callable
 import nux.util as util
 from jax.flatten_util import ravel_pytree
+from nux.flows.base import Flow
+
+__all__ = ["RationalQuadraticSpline"]
 
 # This function works, but will never compile for use on GPUs if used in
 # a complicated nest of grad, vjp, jit, etc.
@@ -139,7 +142,7 @@ def get_knot_params(settings, theta):
 
 ################################################################################################################
 
-class RationalQuadraticSpline():
+class RationalQuadraticSpline(Flow):
 
   def __init__(self,
                K: int=4,
@@ -214,6 +217,8 @@ class RationalQuadraticSpline():
 
     sum_axes = util.last_axes(x.shape[len(x.shape[:1]):])
     log_det = elementwise_log_det.sum(sum_axes)
+    if inverse == True:
+      log_det *= -1
 
     return z, log_det
 

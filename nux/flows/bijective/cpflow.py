@@ -6,12 +6,13 @@ from typing import Optional, Mapping, Tuple, Sequence, Union, Any, Callable
 import nux.util as util
 from nux.nn.convex import InputConvexNN
 from jax.scipy import optimize
+from nux.flows.base import Flow
 
 __all__ = ["CPFlow"]
 
 ################################################################################################################
 
-class CPFlow():
+class CPFlow(Flow):
 
   def __init__(self, hidden_dim, aug_dim, n_hidden_layers, lanczos_quad=False):
     self.lanczos_quad = lanczos_quad
@@ -88,6 +89,18 @@ class CPFlow():
 
           # Compute the surrogate objective
           surrogate = self.vdot(Hinv_v, self.H(v))
+          if kwargs.get("__test", False):
+            # Make sure that the Hessian is PSD
+            hessian = jax.vmap(jax.hessian(unbatched_potential))(x)
+            s = jnp.linalg.svd(hessian, compute_uv=False)
+            assert jnp.all(s > 0)
+
+            # Test that the surrogate is correct
+            assert jnp.allclose(surrogate, self.vdot(v, v))
+
+            # Test the reconstruction
+            x_reconstr, _ = self(z, params=params, rng_key=rng_key, inverse=True)
+            assert jnp.allclose(x, x_reconstr)
 
           # Return a dummy value to display and optimize
           llc = log_det + util.only_gradient(surrogate)
@@ -101,6 +114,9 @@ class CPFlow():
       log_det = jnp.zeros(z.shape[:1])
 
     return z, log_det
+
+  def test(self, x, params, rng_key):
+    self(x, params=params, rng_key=rng_key, __test=True)
 
 ################################################################################################################
 

@@ -55,6 +55,8 @@ def bisection(f, lower, upper, x, atol=1e-8, max_iters=20000):
 
 from .misc import last_axes, broadcast_to_first_axis, list_prod
 
+cg_result = namedtuple("cg_result", ["x", "rsq", "n_iters"])
+
 def conjugate_gradient(A, b, debug=False, max_iters=1000, tol=1e-3):
   # Linear solve Ax = b
   sum_axes = last_axes(b.shape[1:])
@@ -102,7 +104,7 @@ def conjugate_gradient(A, b, debug=False, max_iters=1000, tol=1e-3):
 
   if debug:
     import pdb; pdb.set_trace()
-  return x
+  return cg_result(x, rsq, n_iters)
 
 ################################################################################################################
 

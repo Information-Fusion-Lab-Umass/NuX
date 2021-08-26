@@ -47,7 +47,7 @@ class CircularConv(Flow):
     if params is None:
 
       def orthogonal_init(shape, dtype):
-        w = random.normal(self.init_key, shape=shape, dtype=dtype)
+        w = random.normal(rng_key, shape=shape, dtype=dtype)
         return jax.vmap(jax.vmap(util.whiten))(w)
       self.w = orthogonal_init(self.filter_shape + (x_c, x_c), x.dtype)
     else:

@@ -36,6 +36,7 @@ class Flow(ABC):
   def get_params(self):
     pass
 
+  @abstractmethod
   def __call__(self, x, params=None, aux=None, inverse=False, **kwargs):
     pass
 

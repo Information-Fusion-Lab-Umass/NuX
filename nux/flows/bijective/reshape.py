@@ -5,8 +5,12 @@ from functools import partial
 from typing import Optional, Mapping, Tuple, Sequence, Union, Any, Callable
 import nux.util as util
 import einops
+from nux.flows.base import Flow
 
-class Reverse():
+__all__ = ["Reverse",
+           "Squeeze"]
+
+class Reverse(Flow):
 
   def __init__(self):
     """ Reverse the last axis of an input.  Useful to put in between coupling layers.
@@ -20,7 +24,7 @@ class Reverse():
     z = x[...,::-1]
     return z, jnp.zeros(x.shape[:1])
 
-class Squeeze():
+class Squeeze(Flow):
 
   def __init__(self):
     """ Space to depth

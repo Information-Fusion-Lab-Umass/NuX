@@ -4,90 +4,90 @@ from jax import random
 from functools import partial
 from typing import Optional, Mapping, Tuple, Sequence, Union, Any, Callable
 import nux.util as util
+from nux.flows.base import Flow
 
 __all__ = ["ResidualFlow"]
 
-def geometric_roulette_coefficients(key, n_terms):
-  # Compute the roulette coefficients using a geometric distribution
-  k = jnp.arange(n_terms)
-  p = 0.5
-  u = random.uniform(key, (1,))[0]
-  N = jnp.floor(jnp.log(u)/jnp.log(1 - p)) + 1
-  p_N_geq_k = (1 - p)**k
+# def geometric_roulette_coefficients(key, n_terms):
+#   # Compute the roulette coefficients using a geometric distribution
+#   k = jnp.arange(n_terms)
+#   p = 0.5
+#   u = random.uniform(key, (1,))[0]
+#   N = jnp.floor(jnp.log(u)/jnp.log(1 - p)) + 1
+#   p_N_geq_k = (1 - p)**k
 
-  # Zero out the terms that are over N
-  roulette_coeff = jnp.where(k > N, 0.0, 1/p_N_geq_k)
-  return roulette_coeff
-
-def log_det_and_surrogate(rng, batch_shape, x_shape, vjp_x):
-
-  k1, k2 = random.split(rng, 2)
-  v = random.normal(k1, batch_shape + x_shape)
-
-  def scan_body(carry, inputs):
-    k = inputs
-    w = carry
-    w = vjp_x(w)
-    term = util.batched_vdot(w, v, x_shape)
-
-    log_det_term = term/k
-    grad_term = -w
-
-    w *= -1
-
-    return w, (log_det_term, grad_term)
-
-  n_exact = 4
-  n_total = 8
-  k = jnp.arange(1, n_total + 1)
-
-  roulette_coeff = geometric_roulette_coefficients(k2, n_total - n_exact)
-  roulette_coeff = jnp.hstack([jnp.ones(n_exact), roulette_coeff])
-
-  _, (log_det_terms, grad_terms) = jax.lax.scan(scan_body, v, k, unroll=10)
-
-  log_det_est = (log_det_terms*util.broadcast_to_first_axis(roulette_coeff, log_det_terms.ndim)).sum(axis=0)
-  log_det_est = jax.lax.stop_gradient(log_det_est)
-
-  b = (grad_terms*util.broadcast_to_first_axis(roulette_coeff, grad_terms.ndim)).sum(axis=0)
-  b = jax.lax.stop_gradient(b)
-
-  surrogate_objective = util.batched_vdot(vjp_x(b), v, x_shape)
-
-  return log_det_est, surrogate_objective
-
-def res_flow_inv(fun, z, *args):
-
-  def flatten(x):
-    return jax.flatten_util.ravel_pytree(x)[0]
-
-  def cond(val):
-    x_prev, x, i = val
-    max_iters_reached = jnp.where(i >= 1000, True, False)
-    tolerance_achieved = jnp.allclose(flatten(x_prev) - flatten(x), 0.0, atol=1e-6)
-    return ~(max_iters_reached | tolerance_achieved)
-
-  def loop(val):
-    _, x, i = val
-    x_new = z - fun(x, *args)
-    return x, x_new, i + 1
-
-  # Initialize x
-  _, x, n_iters = jax.lax.while_loop(cond, loop, (jnp.zeros_like(z), z, 0.0))
-  return x
+#   # Zero out the terms that are over N
+#   roulette_coeff = jnp.where(k > N, 0.0, 1/p_N_geq_k)
+#   return roulette_coeff
 
 ################################################################################################################
 
-class ResidualFlow():
+class ResidualFlow(Flow):
 
-  def __init__(self, res_block):
+  def __init__(self, res_block, n_exact=4, n_total=8):
     self.res_block = res_block
+    self.n_exact   = n_exact
+    self.n_total   = n_total
 
   def get_params(self):
     return self.res_block.get_params()
 
+  def inverse(self, apply_fun, z, max_iters=1000, atol=1e-6):
+
+    def cond(val):
+      x_prev, x, i = val
+      max_iters_reached = jnp.where(i >= max_iters, True, False)
+      tolerance_achieved = jnp.allclose(x_prev - x, 0.0, atol=atol)
+      first_iter = jnp.where(i > 0.0, False, True)
+      return ~(max_iters_reached | tolerance_achieved) | first_iter
+
+    def loop(val):
+      _, x, i = val
+      x_new = z - apply_fun(x)
+      return x, x_new, i + 1
+
+    # Initialize x
+    _, x, n_iters = jax.lax.while_loop(cond, loop, (z, z, 0.0))
+    return x
+
+  def log_det_and_surrogate(self, rng_key, v, vjp):
+
+    def scan_body(carry, inputs):
+      k = inputs
+      w = carry
+      w = vjp(w)
+      term = self.vdot(w, v)
+
+      log_det_term = term/k
+      grad_term = -w
+
+      w *= -1
+      return w, (log_det_term, grad_term)
+
+    k = jnp.arange(1, self.n_total + 1)
+
+    scan_body(v, k[0])
+    w, (log_det_terms, grad_terms) = jax.lax.scan(scan_body, v, k, unroll=10)
+
+    roulette_coeff = util.geometric_roulette_coefficients(rng_key, self.n_total - self.n_exact)
+    roulette_coeff = jnp.hstack([jnp.ones(self.n_exact), roulette_coeff])
+
+    log_det_est = (log_det_terms*util.broadcast_to_first_axis(roulette_coeff, log_det_terms.ndim)).sum(axis=0)
+    log_det_est = jax.lax.stop_gradient(log_det_est)
+
+    b = (grad_terms*util.broadcast_to_first_axis(roulette_coeff, grad_terms.ndim)).sum(axis=0)
+    b += v # k=0 term
+    b = jax.lax.stop_gradient(b)
+
+    surrogate_objective = self.vdot(vjp(b) + b, v)
+
+    return log_det_est, surrogate_objective
+
   def __call__(self, x, params=None, inverse=False, rng_key=None, no_llc=False, **kwargs):
     self.params = params
+
+    sum_axes = util.last_axes(x.shape[1:])
+    self.vdot = lambda x, y: jnp.sum(x*y, axis=sum_axes)
 
     def apply_fun(x):
       x = self.res_block(x, params=self.params, rng_key=rng_key, **kwargs)
@@ -101,22 +101,52 @@ class ResidualFlow():
       if no_llc == True:
         z = x + apply_fun(x)
       else:
-        gx, vjp = jax.vjp(apply_fun, x)
+        gx, _vjp = jax.vjp(apply_fun, x); vjp = lambda x: _vjp(x)[0]
         z = x + gx
     else:
-      z = res_flow_inv(apply_fun, x)
+      z = self.inverse(apply_fun, x)
       if no_llc == False:
-        _, vjp = jax.vjp(apply_fun, z)
+        _, _vjp = jax.vjp(apply_fun, z); vjp = lambda x: _vjp(x)[0]
 
     if no_llc:
       return z, jnp.zeros(z.shape[0])
 
-    batch_shape, x_shape = x.shape[:1], x.shape[1:]
-    vjp_x = lambda x: vjp(x)[0]
-    log_det, surrogate = log_det_and_surrogate(rng_key, batch_shape, x_shape, vjp_x)
+    k1, k2 = random.split(rng_key, 2)
+    v = random.normal(k1, x.shape)
+    log_det, surrogate = self.log_det_and_surrogate(k2, v, vjp)
     res_log_det = jax.lax.stop_gradient(log_det) + util.only_gradient(surrogate)
 
     return z, res_log_det
+
+  def test(self, x, params, rng_key):
+    def apply_fun(x):
+      x = self.res_block(x, params=params, rng_key=rng_key)
+      return x
+
+    gx, _vjp = jax.vjp(apply_fun, x); vjp = lambda x: _vjp(x)[0]
+    z = x + gx
+
+    # Check that the function is Lipschitz continuous with a max val of 1
+    J = jax.vmap(jax.jacobian(lambda x: apply_fun(x[None])[0]))(x)
+    total_dim = util.list_prod(x.shape[1:])
+    J = J.reshape(x.shape[:1] + (total_dim, total_dim))
+    l1_norm = jax.vmap(partial(jnp.linalg.norm, ord=1))(J)
+    linf_norm = jax.vmap(partial(jnp.linalg.norm, ord=jnp.inf))(J)
+    l2_norm = jax.vmap(partial(jnp.linalg.norm, ord=2))(J)
+    assert jnp.all(l1_norm < 1.0)
+    assert jnp.all(linf_norm < 1.0)
+    assert jnp.all(l2_norm < 1.0)
+
+    # Check that the surrogate objective is correct
+    k1, k2 = random.split(rng_key, 2)
+    v = random.normal(k1, x.shape)
+    self.n_exact, self.n_total = 50, 50
+    log_det, surrogate = self.log_det_and_surrogate(k2, v, vjp)
+    assert jnp.allclose(surrogate, self.vdot(v, v))
+
+    # Check that the function is invertible
+    x_reconstr, _ = self(z, params=params, rng_key=rng_key, inverse=True, no_llc=True)
+    assert jnp.allclose(x, x_reconstr)
 
 ################################################################################################################
 

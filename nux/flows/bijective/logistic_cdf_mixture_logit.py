@@ -6,6 +6,7 @@ from functools import partial
 from typing import Optional, Mapping, Tuple, Sequence, Union, Any, Callable
 from jax.scipy.special import logsumexp
 from jax.flatten_util import ravel_pytree
+from nux.flows.base import Flow
 
 __all__ = ["LogisticCDFMixtureLogit"]
 
@@ -64,7 +65,7 @@ def jvp(primals, tangents):
 
 ################################################################################################################
 
-class LogisticCDFMixtureLogit():
+class LogisticCDFMixtureLogit(Flow):
 
   def __init__(self, K: int=4, newton_inverse=False):
     """

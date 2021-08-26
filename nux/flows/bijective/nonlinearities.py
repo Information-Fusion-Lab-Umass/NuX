@@ -6,6 +6,7 @@ from typing import Optional, Mapping, Tuple, Sequence, Union, Any, Callable
 from nux.flows.base import Sequential, Invert
 import nux.util as util
 import einops
+from nux.flows.base import Flow
 
 __all__ = ["Softplus",
            "LeakyReLU",
@@ -20,7 +21,7 @@ __all__ = ["Softplus",
            "SphericalToCartesian",
            "SafeCartesianToSpherical"]
 
-class Softplus():
+class Softplus(Flow):
   def __init__(self):
     """
     """
@@ -44,7 +45,7 @@ class Softplus():
 
     return z, log_det
 
-class LeakyReLU():
+class LeakyReLU(Flow):
 
   def __init__(self, alpha: float=0.01):
     """ Leaky relu
@@ -69,7 +70,7 @@ class LeakyReLU():
 
     return z, log_det
 
-class SneakyReLU():
+class SneakyReLU(Flow):
 
   def __init__(self, alpha: float=0.1):
     """ Originally from https://invertibleworkshop.github.io/INNF_2019/accepted_papers/pdfs/INNF_2019_paper_26.pdf
@@ -99,7 +100,7 @@ class SneakyReLU():
     log_det = log_det.sum(axis=sum_axes)
     return z, log_det
 
-class SquarePlus():
+class SquarePlus(Flow):
 
   def __init__(self, gamma: float=0.5):
     """
@@ -127,7 +128,7 @@ class SquarePlus():
 
     return z, log_det
 
-class SquareSigmoid():
+class SquareSigmoid(Flow):
 
   def __init__(self, gamma: float=0.5):
     """
@@ -160,7 +161,7 @@ class SquareLogit(SquareSigmoid):
     z, log_det = super().__call__(x, inverse=not inverse, **kwargs)
     return z, -log_det
 
-class Sigmoid():
+class Sigmoid(Flow):
 
   def __init__(self, scale: Optional[float]=None):
     """ Sigmoid function.  Transforms data to [scale/2, 1 - scale/2]
@@ -200,7 +201,7 @@ class Sigmoid():
 
     return z, log_det
 
-class Logit():
+class Logit(Flow):
 
   def __init__(self, scale: Optional[float]=0.05, force_values: bool=False):
     """ Logit function.  Transforms from [scale/2, 1 - scale/2] to the reals.
@@ -237,7 +238,7 @@ class Logit():
 
     return z, log_det
 
-class SLog():
+class SLog(Flow):
 
   def __init__(self, alpha=None):
     """ https://papers.nips.cc/paper/2019/file/b1f62fa99de9f27a048344d55c5ef7a6-Paper.pdf
@@ -259,7 +260,7 @@ class SLog():
         self.alpha = jnp.zeros(x.shape[1:])
       else:
         self.alpha = params["alpha"]
-      alpha = util.square_plus(alpha) + 1e-4
+      alpha = util.square_plus(self.alpha) + 1e-4
     else:
       self.alpha = ()
       alpha = self.constant_alpha
@@ -277,7 +278,9 @@ class SLog():
     log_det = -log_det.sum(axis=sum_axes)
     return z, log_det
 
-class CartesianToSpherical():
+class CartesianToSpherical(Flow):
+  # This will probably fail if x is close to 0 or 2pi!
+  # Use the safe versions instead
 
   def __init__(self):
     pass
@@ -307,21 +310,12 @@ class CartesianToSpherical():
     return r*first_part*second_part
 
   def __call__(self, x, inverse=False, **kwargs):
-    assert x.ndim == 2
-
     if inverse == False:
       z = self.forward(x)
       r, phi = z[...,0], z[...,1:]
-
-      if "a" in kwargs.get("debug", []):
-        import pdb; pdb.set_trace()
-
     else:
       z = self.inverse(x)
       r, phi = x[...,0], x[...,1:]
-
-      if "b" in kwargs.get("debug", []):
-        import pdb; pdb.set_trace()
 
     x_shape = x.shape[1:]
 
@@ -329,6 +323,7 @@ class CartesianToSpherical():
     n_range = jnp.arange(n - 2, -1, -1)
     log_abs_sin_phi = jnp.log(jnp.abs(jnp.sin(phi)))
     log_det = -(n - 1)*jnp.log(r) - jnp.sum(n_range*log_abs_sin_phi, axis=-1)
+    log_det = log_det.sum(axis=util.last_axes(x.shape[1:-1]))
     return z, log_det
 
 class SphericalToCartesian(CartesianToSpherical):

@@ -62,7 +62,7 @@ class DiscreteBias(Flow):
   def __call__(self, x, params=None, inverse=False, **kwargs):
     if params is None:
       reduce_axes = list(range(0, x.ndim - 1))
-      self.b = jnp.mean(x, axis=(0,) + reduce_axes)
+      self.b = jnp.mean(x, axis=reduce_axes)
     else:
       self.b = params["b"]
 
@@ -95,7 +95,7 @@ class Bias(Flow):
   def __call__(self, x, params=None, inverse=False, **kwargs):
     if params is None:
       reduce_axes = list(range(0, x.ndim - 1))
-      self.b = jnp.mean(x, axis=(0,) + reduce_axes)
+      self.b = jnp.mean(x, axis=reduce_axes)
     else:
       self.b = params["b"]
 
@@ -147,7 +147,7 @@ class Scale(Flow):
   def __call__(self, x, params=None, inverse=False, **kwargs):
     if params is None:
       reduce_axes = list(range(0, x.ndim - 1))
-      std = jnp.std(x, axis=(0,) + reduce_axes)
+      std = jnp.std(x, axis=reduce_axes)
       self.s = std - 1/std
     else:
       self.s = params["s"]
