@@ -7,6 +7,23 @@ import jax
 from typing import Optional, Mapping, Tuple, Sequence, Union, Any, Callable
 import jax.lax as lax
 
+################################################################################################################
+
+def linear_lr(i, lr=1e-4):
+  return lr
+
+def linear_warmup_schedule(i, warmup=1000, lr_decay=1.0):
+  return jnp.where(i < warmup,
+                   i/warmup,
+                   (lr_decay**(i - warmup)))
+
+def linear_warmup_lr_schedule(i, warmup=1000, lr_decay=1.0, lr=1e-4):
+  return jnp.where(i < warmup,
+                   lr*i/warmup,
+                   lr*(lr_decay**(i - warmup)))
+
+################################################################################################################
+
 def conv(w, x):
   no_batch = False
   if x.ndim == 3:
