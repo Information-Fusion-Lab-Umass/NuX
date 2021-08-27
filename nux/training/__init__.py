@@ -1,1 +1,0 @@
-from nux.training.trainer import Trainer
