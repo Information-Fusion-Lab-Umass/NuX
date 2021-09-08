@@ -11,7 +11,7 @@ matplotlib==3.4.3
 numpy==1.21.2
 opt-einsum==3.3.0
 pdbpp==0.10.3
-Pillow==8.3.1
+Pillow==8.3.2
 Pygments==2.10.0
 pyparsing==2.4.7
 pyrepl==0.9.0
