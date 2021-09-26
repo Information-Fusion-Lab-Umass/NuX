@@ -6,10 +6,12 @@ import nux.util as util
 from typing import Optional, Mapping, Callable, Sequence
 import nux
 
-__all__ = ["TallMVP"]
+__all__ = ["TallMVP", "WideMVP"]
 
 def mvp(A, x):
   return jnp.einsum("ij,...j->...i", A, x)
+
+solve = jax.vmap(jnp.linalg.solve, in_axes=(None, 0))
 
 def logZ(x, A, diag_cov):
 
@@ -39,12 +41,12 @@ class TallMVP():
                create_network):
     self.s_dim = output_dim
     self.create_network = create_network
+    self.is_tall = True
 
   def get_params(self):
     return dict(network=self.network.get_params(),
                 A=self.A,
-                scale=self.scale_params,
-                orthogonal_noise=self.gamma_perp)
+                scale=self.scale_params)
 
   def __call__(self, x, params=None, inverse=False, rng_key=None, is_training=True, save_orthogonal_noise=False, **kwargs):
 
@@ -53,27 +55,30 @@ class TallMVP():
       self.t_dim = x.shape[-1]
     else:
       s = x
-      assert s.shape[-1] == self.s_dim
+      self.s_dim = x.shape[-1]
 
     self.network = self.create_network(2*self.t_dim)
 
-    self.gamma_perp = None
     if params is None:
       k1, k2 = random.split(rng_key, 2)
       self.scale_params = random.normal(k1, ())*0.01
       self.network_params = None
-      self.A = random.normal(k2, shape=(self.t_dim, self.s_dim))
+      if self.is_tall:
+        A_init = jax.nn.initializers.glorot_normal(in_axis=-1, out_axis=-2, dtype=x.dtype)
+      else:
+        A_init = jax.nn.initializers.glorot_normal(in_axis=-2, out_axis=-1, dtype=x.dtype)
+      self.A = A_init(k2, shape=(self.t_dim, self.s_dim))
     else:
       self.scale_params = params["scale"]
       self.network_params = params["network"]
       self.A = params["A"]
-      gamma_perp = params.get("orthogonal_noise", None)
 
     self.ATA = self.A.T@self.A
     self.ATA_inv = jnp.linalg.inv(self.ATA)
 
     if inverse == False:
       # Pseudo-inverse of t
+      # s = solve(self.ATA, mvp(self.A.T, t)) # There is a bug in jnp.linalg.solve
       s = mvp(self.ATA_inv, mvp(self.A.T, t))
 
       # Projection of t
@@ -85,7 +90,7 @@ class TallMVP():
         self.gamma_perp = gamma_perp
 
       # Create the features.  Pass in t instead of s to make the code simpler.
-      theta = self.network(t_proj, aux=None, params=self.network_params, rng_key=rng_key, is_training=is_training)
+      theta = self.network(s, aux=None, params=self.network_params, rng_key=rng_key, is_training=is_training)
       theta *= self.scale_params # Initialize to identity
       mu, diag_cov = jnp.split(theta, 2, axis=-1)
       diag_cov = util.square_plus(diag_cov, gamma=1.0) + 1e-4
@@ -97,18 +102,18 @@ class TallMVP():
       t_proj = jnp.einsum("ij,...j->...i", self.A, s)
 
       # Create the features.  Pass in t instead of s to make the code simpler.
-      theta = self.network(t_proj, aux=None, params=self.network_params, rng_key=k1, is_training=is_training)
-      # theta *= self.scale_params # Initialize to identity
+      theta = self.network(s, aux=None, params=self.network_params, rng_key=k1, is_training=is_training)
+      theta *= self.scale_params # Initialize to identity
       mu, diag_cov = jnp.split(theta, 2, axis=-1)
       diag_cov = util.square_plus(diag_cov, gamma=1.0) + 1e-4
 
-      if gamma_perp is None:
-        # Sample orthogonal noise
-        gaussian_params = dict(mu=mu, s=jnp.sqrt(diag_cov))
-        gamma, _ = nux.GaussianPrior()(jnp.zeros_like(mu), params=gaussian_params, rng_key=k2, inverse=True, is_training=is_training)
+      # Sample orthogonal noise
+      noise = random.normal(k2, mu.shape)
+      gamma = mu + noise*jnp.sqrt(diag_cov)
 
-        # Orthogonalize the noise
-        gamma_perp = gamma - mvp(self.A, mvp(self.ATA_inv, mvp(self.A.T, gamma)))
+      # Orthogonalize the noise
+      # gamma_perp = gamma - mvp(self.A, solve(self.ATA, mvp(self.A.T, gamma))) # There is a bug in jnp.linalg.solve
+      gamma_perp = gamma - mvp(self.A, mvp(self.ATA_inv, mvp(self.A.T, gamma)))
 
       # Compute t
       t = t_proj + gamma_perp
@@ -117,7 +122,20 @@ class TallMVP():
     llc = jax.vmap(logZ, in_axes=(0, None, 0))(mu - gamma_perp, self.A, diag_cov)
 
     z = s if inverse == False else t
+
     return z, llc
+
+class WideMVP(TallMVP):
+  def __init__(self,
+               output_dim,
+               create_network):
+    self.t_dim = output_dim
+    self.create_network = create_network
+    self.is_tall = False
+
+  def __call__(self, *args, inverse=False, **kwargs):
+    z, llc = super().__call__(*args, inverse=not inverse, **kwargs)
+    return z, -llc
 
 ################################################################################################################
 
@@ -138,15 +156,17 @@ if __name__ == "__main__":
                                                         dropout_prob=0.0,
                                                         n_layers=3)
 
-  flow = nux.Sequential([nux.TallMVP(output_dim=1,
-                                     create_network=create_network),
+  mvp = nux.WideMVP(output_dim=4, create_network=create_network)
+  mvp = nux.Invert(mvp)
+
+  flow = nux.Sequential([mvp,
                          nux.UnitGaussianPrior()])
 
   z, log_px1 = flow(x, rng_key=rng_key)
   params = flow.get_params()
 
-  gamma_perp = flow.layers[0].gamma_perp
-  reconstr, log_px2 = flow(z, params=params, rng_key=rng_key, inverse=True, reconstruction=True, gamma_perp=gamma_perp)
+
+  reconstr, log_px2 = flow(z, params=params, rng_key=rng_key, inverse=True, reconstruction=True)
   # import pdb; pdb.set_trace()
 
   # Evaluate the log likelihood of a lot of samples

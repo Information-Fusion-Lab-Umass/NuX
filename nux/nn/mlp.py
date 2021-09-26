@@ -38,12 +38,13 @@ class ResBlock1D():
     return x
 
 class ResNet1D():
-  def __init__(self, hidden_dim, nonlinearity, dropout_prob, n_layers):
+  def __init__(self, hidden_dim, nonlinearity, dropout_prob, n_layers, unroll=1):
     self.hidden_dim   = hidden_dim
     self.nonlinearity = nonlinearity
     self.dropout_prob = dropout_prob
     self.n_layers     = n_layers
     self.params = None
+    self.unroll = unroll
 
   def get_params(self):
     return self.params
@@ -78,7 +79,7 @@ class ResNet1D():
           params.append(block_params)
         self.params = jax.tree_multimap(lambda *xs: jnp.array(xs), *params)
       else:
-        x, self.params = jax.lax.scan(scan_block, x, (keys, self.params), unroll=10)
+        x, self.params = jax.lax.scan(scan_block, x, (keys, self.params), unroll=self.unroll)
     return x
 
 class CouplingResNet1D():
@@ -88,13 +89,15 @@ class CouplingResNet1D():
                hidden_dim,
                nonlinearity,
                dropout_prob,
-               n_layers):
+               n_layers,
+               unroll=1):
     self.out_dim      = out_dim
     self.working_dim  = working_dim
     self.hidden_dim   = hidden_dim
     self.nonlinearity = nonlinearity
     self.dropout_prob = dropout_prob
     self.n_layers     = n_layers
+    self.unroll       = unroll
 
   def get_params(self):
     return dict(wn_in=self.wn_in.get_params(),
@@ -117,7 +120,8 @@ class CouplingResNet1D():
     self.resnet = ResNet1D(hidden_dim=self.hidden_dim,
                            nonlinearity=self.nonlinearity,
                            dropout_prob=self.dropout_prob,
-                           n_layers=self.n_layers)
+                           n_layers=self.n_layers,
+                           unroll=self.unroll)
     x = self.resnet(x, aux=aux, params=self.resnet_params, rng_key=k2, is_training=is_training)
 
     # Project to output channel

@@ -12,7 +12,8 @@ __all__ = ["UnitGammaPrior",
            "LogisticPrior",
            "DirichletPrior",
            "PowerSphericalPrior",
-           "StudentTPrior"]
+           "StudentTPrior",
+           "SigmoidUniform"]
 
 class UnitGammaPrior():
 
@@ -152,18 +153,36 @@ class StudentTPrior():
 
     return x, log_pz
 
+from nux.flows.bijective.nonlinearities import SquareSigmoid
+class SigmoidUniform():
+
+  def __init__(self):
+    self.eps = 1e-5
+
+  def get_params(self):
+    return {}
+
+  def __call__(self, x, rng_key=None, inverse=False, reconstruction=False, **kwargs):
+
+    if inverse == False:
+      z, log_pz = SquareSigmoid()(x)
+
+    else:
+      if reconstruction == False:
+        x = random.uniform(rng_key, minval=self.eps, maxval=1.0 - self.eps, shape=x.shape)
+      z, log_pz = SquareSigmoid()(x, inverse=True)
+
+    return z, log_pz
+
 if __name__ == "__main__":
   from debug import *
   import scipy.stats
 
   key = random.PRNGKey(0)
-  x = random.normal(key, shape=(1000, 4))
-  x = x/jnp.linalg.norm(x, axis=-1, keepdims=True)
+  x = random.normal(key, shape=(1000, 4))*100
 
-  prior = PowerSphericalPrior()
-  _, log_pdf = prior(x)
+  prior = SigmoidUniform()
+  z, log_pz = prior(x, rng_key=key)
 
   samples, _ = prior(x, rng_key=key, inverse=True)
-
   import pdb; pdb.set_trace()
-

@@ -8,7 +8,7 @@ from functools import partial
 import nux.util as util
 from nux.nn.mlp import CouplingResNet1D, ResNet1D
 from nux.nn.resnet import CouplingResNet
-from nux.flows.bijective.affine import ShiftScale, PLUMVP, DiscreteBias, Bias
+from nux.flows.bijective.affine import ShiftScale, PLUMVP, DiscreteBias, Bias, CaleyOrthogonalMVP
 from nux.flows.bijective.reshape import Reverse
 from nux.flows.bijective.conv import OneByOneConv
 from nux.flows.base import Sequential, Repeat
@@ -92,14 +92,20 @@ class RealNVPBlock(_coupling):
                dropout_prob=0.2,
                n_layers=4,
                additive=False,
-               discrete=False):
+               discrete=False,
+               make_coupling_net=None,
+               **kwargs):
     super().__init__(additive=additive, discrete=discrete)
-    self.make_coupling_net = lambda out_dim: CouplingResNet1D(out_dim,
-                                                              working_dim,
-                                                              hidden_dim,
-                                                              nonlinearity,
-                                                              dropout_prob,
-                                                              n_layers)
+    if make_coupling_net is None:
+      self.make_coupling_net = lambda out_dim: CouplingResNet1D(out_dim,
+                                                                working_dim,
+                                                                hidden_dim,
+                                                                nonlinearity,
+                                                                dropout_prob,
+                                                                n_layers,
+                                                                **kwargs)
+    else:
+      self.make_coupling_net = make_coupling_net
 
 class RealNVPImageBlock(_coupling):
 
@@ -110,15 +116,21 @@ class RealNVPImageBlock(_coupling):
                dropout_prob=0.2,
                n_layers=4,
                additive=False,
-               discrete=False):
+               discrete=False,
+               make_coupling_net=None,
+               **kwargs):
     super().__init__(additive=additive, discrete=discrete)
-    self.make_coupling_net = lambda out_dim: CouplingResNet(out_dim,
-                                                            working_channel,
-                                                            (3, 3),
-                                                            hidden_channel,
-                                                            nonlinearity,
-                                                            dropout_prob,
-                                                            n_layers)
+    if make_coupling_net is None:
+      self.make_coupling_net = lambda out_dim: CouplingResNet(out_dim,
+                                                              working_channel,
+                                                              (3, 3),
+                                                              hidden_channel,
+                                                              nonlinearity,
+                                                              dropout_prob,
+                                                              n_layers,
+                                                              **kwargs)
+    else:
+      self.make_coupling_net = make_coupling_net
 
 ################################################################################################################
 
@@ -132,21 +144,25 @@ class RealNVP(Repeat):
                dropout_prob=0.2,
                n_resnet_layers=4,
                additive=False,
-               discrete=False):
+               discrete=False,
+               make_coupling_net=None,
+               **kwargs):
     coupling_layer = RealNVPBlock(working_dim=working_dim,
                                   hidden_dim=hidden_dim,
                                   nonlinearity=nonlinearity,
                                   dropout_prob=dropout_prob,
                                   n_layers=n_resnet_layers,
                                   additive=additive,
-                                  discrete=discrete)
+                                  discrete=discrete,
+                                  make_coupling_net=make_coupling_net,
+                                  **kwargs)
     layers = []
     layers.append(coupling_layer)
     layers.append(Reverse())
     if discrete == False:
       layers.append(ShiftScale())
     self.flow = Sequential(layers)
-    super().__init__(flow=self.flow, n_repeats=n_layers, checkerboard=False)
+    super().__init__(flow=self.flow, n_repeats=n_layers, checkerboard=False, **kwargs)
 
 class GLOW(Repeat):
 
@@ -157,20 +173,31 @@ class GLOW(Repeat):
                nonlinearity=util.square_swish,
                dropout_prob=0.2,
                n_resnet_layers=4,
-               additive=False):
+               additive=False,
+               orthogonal=False,
+               make_coupling_net=None,
+               **kwargs):
     coupling_layer = RealNVPBlock(working_dim=working_dim,
                                   hidden_dim=hidden_dim,
                                   nonlinearity=nonlinearity,
                                   dropout_prob=dropout_prob,
                                   n_layers=n_resnet_layers,
                                   additive=additive,
-                                  discrete=False)
+                                  discrete=False,
+                                  make_coupling_net=make_coupling_net,
+                                  **kwargs)
     layers = []
     layers.append(coupling_layer)
-    layers.append(ShiftScale())
-    layers.append(PLUMVP())
+    if additive:
+      layers.append(Bias())
+    else:
+      layers.append(ShiftScale())
+    if orthogonal:
+      layers.append(CaleyOrthogonalMVP())
+    else:
+      layers.append(PLUMVP())
     self.flow = Sequential(layers)
-    super().__init__(flow=self.flow, n_repeats=n_layers, checkerboard=False)
+    super().__init__(flow=self.flow, n_repeats=n_layers, checkerboard=False, **kwargs)
 
 class RealNVPImage(Repeat):
 
@@ -183,21 +210,25 @@ class RealNVPImage(Repeat):
                n_resnet_layers=4,
                additive=False,
                discrete=False,
-               checkerboard=True):
+               checkerboard=True,
+               make_coupling_net=None,
+               **kwargs):
     coupling_layer = RealNVPImageBlock(working_channel=working_channel,
                                        hidden_channel=hidden_channel,
                                        nonlinearity=nonlinearity,
                                        dropout_prob=dropout_prob,
                                        n_layers=n_resnet_layers,
                                        additive=additive,
-                                       discrete=discrete)
+                                       discrete=discrete,
+                                       make_coupling_net=make_coupling_net,
+                                       **kwargs)
     layers = []
     layers.append(coupling_layer)
     layers.append(Reverse())
     if discrete == False:
       layers.append(ShiftScale())
     self.flow = Sequential(layers)
-    super().__init__(flow=self.flow, n_repeats=n_layers, checkerboard=checkerboard)
+    super().__init__(flow=self.flow, n_repeats=n_layers, checkerboard=checkerboard, **kwargs)
 
 class GLOWImage(Repeat):
 
@@ -209,20 +240,31 @@ class GLOWImage(Repeat):
                dropout_prob=0.2,
                n_resnet_layers=4,
                additive=False,
-               checkerboard=True):
+               checkerboard=True,
+               orthogonal=False,
+               make_coupling_net=None,
+               **kwargs):
     coupling_layer = RealNVPImageBlock(working_channel=working_channel,
                                        hidden_channel=hidden_channel,
                                        nonlinearity=nonlinearity,
                                        dropout_prob=dropout_prob,
                                        n_layers=n_resnet_layers,
                                        additive=additive,
-                                       discrete=False)
+                                       discrete=False,
+                                       make_coupling_net=make_coupling_net,
+                                       **kwargs)
     layers = []
     layers.append(coupling_layer)
-    layers.append(OneByOneConv())
-    layers.append(ShiftScale())
+    if orthogonal:
+      layers.append(CaleyOrthogonalMVP())
+    else:
+      layers.append(OneByOneConv())
+    if additive:
+      layers.append(Bias())
+    else:
+      layers.append(ShiftScale())
     self.flow = Sequential(layers)
-    super().__init__(flow=self.flow, n_repeats=n_layers, checkerboard=checkerboard)
+    super().__init__(flow=self.flow, n_repeats=n_layers, checkerboard=checkerboard, **kwargs)
 
 ################################################################################################################
 

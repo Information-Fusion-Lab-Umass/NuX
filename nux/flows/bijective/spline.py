@@ -176,7 +176,7 @@ class RationalQuadraticSpline(Flow):
   def extract_coupling_params(self, theta):
     return (theta,)
 
-  def __call__(self, x, params=None, inverse=False, rng_key=None, **kwargs):
+  def __call__(self, x, params=None, inverse=False, rng_key=None, no_llc=False, **kwargs):
 
     if params is None:
       x_shape = x.shape[1:]
@@ -208,12 +208,16 @@ class RationalQuadraticSpline(Flow):
     args = find_knots(x, knot_x, knot_y, knot_derivs, inverse)
 
     # Compute the pass and retrieve the jvp and vjp
-    primals = x, mask, *args
-    tangents = (jnp.ones_like(x),) + jax.tree_map(jnp.zeros_like, primals[:-1])
-    z, dzdx = jax.jvp(apply_fun, primals, tangents)
-    if params is None:
-      self.dzdx = dzdx
-    elementwise_log_det = jnp.log(dzdx)
+    if no_llc == False:
+      primals = x, mask, *args
+      tangents = (jnp.ones_like(x),) + jax.tree_map(jnp.zeros_like, primals[:-1])
+      z, dzdx = jax.jvp(apply_fun, primals, tangents)
+      if params is None:
+        self.dzdx = dzdx
+      elementwise_log_det = jnp.log(dzdx)
+    else:
+      z = apply_fun(x, mask, *args)
+      elementwise_log_det = jnp.zeros_like(x)
 
     sum_axes = util.last_axes(x.shape[len(x.shape[:1]):])
     log_det = elementwise_log_det.sum(sum_axes)

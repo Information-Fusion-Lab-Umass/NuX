@@ -117,9 +117,11 @@ class GatedDense():
 
 class WeightNormConv():
 
-  def __init__(self, filter_shape, out_channel):
+  def __init__(self, filter_shape, out_channel, positive=False, before_square_plus=False):
     self.filter_shape = filter_shape
     self.C_out = out_channel
+    self.positive = positive
+    self.before_square_plus = before_square_plus
 
   def get_params(self):
     return dict(w=self.w, g=self.g, b=self.b)
@@ -133,12 +135,26 @@ class WeightNormConv():
       self.w, self.g, self.b = params["w"], params["g"], params["b"]
 
     w = self.w*jax.lax.rsqrt((self.w**2).sum(axis=(0, 1, 2)))[None,None,None,:]
+    if self.positive:
+      w = util.square_plus(w)
     x = util.conv(w, x)
+    if self.positive:
+      fan_in = util.list_prod(w.shape[:-1])
+      x /= fan_in
 
     if params is None:
       std = jnp.std(x.reshape((-1, x.shape[-1])), axis=0) + 1e-5
+
+      if self.before_square_plus:
+        std = std - 1/std
+
       self.g = 1/std
-    x *= self.g
+
+    g = self.g
+
+    if self.positive:
+      g = util.square_plus(g)
+    x *= g
 
     if params is None:
       mean = jnp.mean(x.reshape((-1, x.shape[-1])), axis=0) + 1e-5

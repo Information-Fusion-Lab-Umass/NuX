@@ -8,7 +8,7 @@ from nux.nn.convex import InputConvexNN
 from jax.scipy import optimize
 from nux.flows.base import Flow
 
-__all__ = ["CPFlow"]
+__all__ = ["CPFlow", "ImageCPFlow"]
 
 ################################################################################################################
 
@@ -44,13 +44,17 @@ class CPFlow(Flow):
     if inverse == False:
       z = self.f(x)
     else:
+      x_shape = x.shape[1:]
+      flat_unbatched_potential = lambda x_flat: unbatched_potential(x_flat.reshape(x_shape))
+
       def invert_unbatched(x):
         def closure(z):
-          return unbatched_potential(z) - jnp.vdot(z, x)
-        z = optimize.minimize(closure, x, method="l-bfgs-experimental-do-not-rely-on-this") # This is slow
-        # z = optimize.minimize(closure, x, method="BFGS") # This is slow
+          return flat_unbatched_potential(z) - jnp.vdot(z, x)
+        z = optimize.minimize(closure, x, method="l-bfgs-experimental-do-not-rely-on-this")
         return z
-      z = jax.vmap(invert_unbatched)(x).x
+      x_flat = x.reshape(x.shape[:1] + (-1,))
+      z_flat = jax.vmap(invert_unbatched)(x_flat).x
+      z = z_flat.reshape(x.shape)
 
     if no_llc == False:
 
@@ -101,7 +105,7 @@ class CPFlow(Flow):
 
             # Test the reconstruction
             x_reconstr, _ = self(z, params=params, rng_key=rng_key, inverse=True)
-            assert jnp.allclose(x, x_reconstr)
+            assert jnp.allclose(x, x_reconstr, atol=1e-5)
 
           # Return a dummy value to display and optimize
           llc = log_det + util.only_gradient(surrogate)
@@ -118,6 +122,11 @@ class CPFlow(Flow):
 
   def test(self, x, params, rng_key):
     self(x, params=params, rng_key=rng_key, __test=True)
+
+class ImageCPFlow(CPFlow):
+  def __init__(self, hidden_dim, aug_dim, n_hidden_layers, lanczos_quad=False):
+    self.lanczos_quad = lanczos_quad
+    self.F = InputConvexNN(hidden_dim, aug_dim, n_hidden_layers, image=True)
 
 ################################################################################################################
 

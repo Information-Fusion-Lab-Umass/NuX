@@ -42,6 +42,8 @@ class Trainer():
     else:
       self.map = jax.vmap
 
+    self.map_kwargs = {}
+
   @property
   def train_losses(self):
     return self.train_metrics["losses"]
@@ -54,11 +56,11 @@ class Trainer():
     pathlib.Path(path).mkdir(parents=True, exist_ok=True)
 
   def load_data(self, classification=False):
-    from datasets import get_dataset
-    train_ds, get_test_ds = get_dataset(self.args.dataset,
-                                        self.args.train_batch_size,
-                                        self.args.train_n_batches,
-                                        self.args.test_batch_size,
+    from nux.datasets.datasets import get_dataset
+    train_ds, get_test_ds = get_dataset(dataset_name=self.args.dataset,
+                                        train_batch_size=self.args.train_batch_size,
+                                        train_n_batches=self.args.train_n_batches,
+                                        test_batch_size=self.args.test_batch_size,
                                         test_n_batches=None,
                                         quantize_bits=self.args.quantize_bits,
                                         classification=classification,
@@ -158,6 +160,10 @@ class Trainer():
     (train_loss, aux), grad = self.valgrad(params, inputs)
     grad_summary = self.grad_hook(grad)
 
+    if "params" in aux:
+      params = aux["params"]
+      del aux["params"]
+
     # Take a gradient step
     updates, opt_state = self.opt_update(grad, opt_state, params)
     params = self.apply_updates(params, updates)
@@ -169,9 +175,11 @@ class Trainer():
     if hasattr(self, "_train_scan_loop") == False:
       self._train_scan_loop = partial(jax.lax.scan, self.grad_step)
       if self.data_augmentation:
-        self._train_scan_loop = self.map(self._train_scan_loop, in_axes=(0, {"x": None, "x_aug": None, "rng_key": 0}))
+        in_axes = {"x": None, "x_aug": None, "rng_key": 0}
       else:
-        self._train_scan_loop = self.map(self._train_scan_loop, in_axes=(0, {"x": None, "rng_key": 0}))
+        in_axes = {"x": None, "rng_key": 0}
+      in_axes.update(self.map_kwargs) # If we're applying a different input for every model
+      self._train_scan_loop = self.map(self._train_scan_loop, in_axes=(0, in_axes))
       self._train_scan_loop = jax.jit(self._train_scan_loop)
     return self._train_scan_loop
 
@@ -235,7 +243,6 @@ class Trainer():
         # Save off the metrics
         t_metrics = dict(losses=test_loss, aux=aux)
         t_metrics = jax.tree_map(lambda x: x[:,None], t_metrics)
-        test_metrics_old = test_metrics
         test_metrics = util.tree_concat(test_metrics, t_metrics, axis=1)
 
     except StopIteration:
@@ -283,6 +290,14 @@ class Trainer():
     training_curves_path = os.path.join(root, "training_curves")
     self.ensure_path(training_curves_path)
     return training_curves_path
+
+  def reset_internal_state(self):
+    self.params          = None
+    self.opt_state       = None
+    self.train_metrics   = None
+    self.test_metrics    = None
+    self.n_train_steps   = 0
+    self.test_eval_times = None
 
   def get_internal_state(self):
     items = dict(params=self.params,
@@ -459,10 +474,10 @@ class Trainer():
     del train_df
     del test_df
 
-  def apply_fun(self, x, params, rng_key):
+  def apply_fun(self, x, params, rng_key, **kwargs):
 
     def _apply_fun(x, params, rng_key):
-      z, log_px = self.flow(x, params=params, rng_key=rng_key)
+      z, log_px = self.flow(x, params=params, rng_key=rng_key, **kwargs)
       return z, log_px
 
     keys = random.split(rng_key, self.n_models)
@@ -489,9 +504,9 @@ class Trainer():
     return self._jitted_sample
 
 
-  def reconstruct(self, z, rng_key, params, n_samples):
+  def reconstruct(self, z, params, rng_key):
     def _reconstr(z, params, rng_key):
-      x, _ = self.flow(z, params=params, rng_key=rng_key, inverse=True)
+      x, _ = self.flow(z, params=params, rng_key=rng_key, inverse=True, reconstruction=True)
       return x
     keys = random.split(rng_key, self.n_models)
     return self.map(_reconstr)(z, params, keys)
@@ -499,7 +514,7 @@ class Trainer():
   @property
   def jitted_reconstruct(self):
     if hasattr(self, "_jitted_reconstruct") == False:
-      self._jitted_reconstruct = jax.jit(self.reconstruct, static_argnums=(3,))
+      self._jitted_reconstruct = jax.jit(self.reconstruct)
     return self._jitted_reconstruct
 
   def save_samples(self, train_ds):

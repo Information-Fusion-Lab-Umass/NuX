@@ -10,6 +10,7 @@ __all__ = ["tridiag_solve",
            "tridiag_eigenvector_from_eigenvalues",
            "bisection",
            "conjugate_gradient",
+           "psd_implicit_mat_logdet_surrogate",
            "cg_and_lanczos_quad",
            "weighted_jacobi",
            "newtons_with_grad",
@@ -106,6 +107,32 @@ def conjugate_gradient(A, b, debug=False, max_iters=1000, tol=1e-3):
     import pdb; pdb.set_trace()
   return cg_result(x, rsq, n_iters)
 
+from .misc import only_gradient
+def psd_implicit_mat_logdet_surrogate(A, v, lower_bound=True):
+  # Compute a cheap bound on \log|A| but an unbiased gradient estimate
+  # v should be random vector to use in Hutchinson's trace estimator
+
+  cg_result = conjugate_gradient(A, v)
+  A_inv_v = jax.lax.stop_gradient(cg_result.x)
+
+  sum_axes = last_axes(v.shape[1:])
+  vdot = lambda x, y: jnp.sum(x*y, axis=sum_axes)
+
+  # Compute an unbiased gradient estimate
+  Av = A(v)
+  surrogate = vdot(A_inv_v, Av)
+
+  # Compute a bound
+  total_dim = list_prod(v.shape[1:])
+  if lower_bound:
+    log_det = total_dim - vdot(v, A_inv_v)
+  else:
+    log_det = vdot(v, jax.lax.stop_gradient(Av)) - total_dim
+
+  # Return a value to display that will optimize correctly
+  llc = log_det + only_gradient(surrogate)
+  return llc
+
 ################################################################################################################
 
 def tridiag_solve(a, b, c, d):
@@ -165,12 +192,13 @@ def tridiag_eigenvector_from_eigenvalues(a, b, c, eigvals):
 
 ################################################################################################################
 
-def cg_and_lanczos_quad(A, b, debug=False):
+def cg_and_lanczos_quad(A, b, max_iters=-1, debug=False):
   # Linear solve Ax = b
   sum_axes = last_axes(b.shape[1:])
   broadcast = lambda x: broadcast_to_first_axis(x, b.ndim)
   vdot = lambda x, y: jnp.sum(x*y, axis=sum_axes)
-  max_iters = list_prod(b.shape[1:])
+  if max_iters == -1:
+    max_iters = list_prod(b.shape[1:])
 
   x = jnp.zeros_like(b)
   r = b - A(x)

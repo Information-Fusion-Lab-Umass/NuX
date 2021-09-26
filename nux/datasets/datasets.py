@@ -67,6 +67,8 @@ def get_dataset(dataset_name,
                 data_augmentation=data_augmentation,
                 train_split=train_split)
 
+  dataset_name = dataset_name.lower()
+
   if dataset_name == "mnist":
     train_ds, get_test_ds = make_train_test(get_mnist_dataset, **kwargs)
   elif dataset_name == "fashion_mnist":
@@ -79,6 +81,8 @@ def get_dataset(dataset_name,
     train_ds, get_test_ds = make_train_test(get_svhn_dataset, **kwargs)
   elif dataset_name == "celeb_a":
     train_ds, get_test_ds = make_train_test(get_celeba_dataset, **kwargs)
+  elif dataset_name == "celeb_a32x32":
+    train_ds, get_test_ds = make_train_test(get_celeb_a32x32_dataset, **kwargs)
   elif dataset_name == "celeb_ahq":
     train_ds, get_test_ds = make_train_test(get_celebahq_dataset, **kwargs)
   elif dataset_name == "imagenet":
@@ -99,19 +103,23 @@ def get_dataset(dataset_name,
     train_ds, get_test_ds = make_train_test(get_circles_dataset, **kwargs)
   elif dataset_name == "swirl_clusters":
     train_ds, get_test_ds = make_train_test(get_swirl_clusters_dataset, **kwargs)
+  elif dataset_name == "double_roll":
+    train_ds, get_test_ds = make_train_test(get_double_roll_dataset, **kwargs)
+  elif dataset_name == "spiral_3d":
+    train_ds, get_test_ds = make_train_test(get_spiral_3d_dataset, **kwargs)
   elif dataset_name == "2d_manifold":
     train_ds, get_test_ds = make_train_test(get_2d_manifold_dataset, **kwargs)
   elif dataset_name == "6_points":
     train_ds, get_test_ds = make_train_test(get_6_point_manifold_dataset, **kwargs)
-  elif dataset_name == "uci/BSDS300":
+  elif dataset_name == "uci/bsds300":
     train_ds, get_test_ds = make_train_test(get_BSDS300_dataset, **kwargs)
-  elif dataset_name == "uci/Gas":
+  elif dataset_name == "uci/gas":
     train_ds, get_test_ds = make_train_test(get_Gas_dataset, **kwargs)
-  elif dataset_name == "uci/MiniBooNE":
+  elif dataset_name == "uci/miniboone":
     train_ds, get_test_ds = make_train_test(get_MiniBooNE_dataset, **kwargs)
-  elif dataset_name == "uci/Power":
+  elif dataset_name == "uci/power":
     train_ds, get_test_ds = make_train_test(get_Power_dataset, **kwargs)
-  elif dataset_name == "uci/HEPMASS":
+  elif dataset_name == "uci/hepmass":
     train_ds, get_test_ds = make_train_test(get_HEPMASS_dataset, **kwargs)
 
   else:
@@ -129,6 +137,7 @@ if __name__ == "__main__":
   import tqdm
   from hashlib import sha1
   import tensorflow_datasets as tfds
+
   # import tensorflow_graphics as tfg
   # from tensorflow_graphics.datasets.shapenet import Shapenet
 

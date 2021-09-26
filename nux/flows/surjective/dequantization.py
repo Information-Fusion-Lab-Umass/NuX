@@ -30,7 +30,7 @@ class UniformDequantization():
       noise = noise.mean(axis=-1) # Bates distribution
       z = x + noise
     else:
-      z = jnp.floor(x).astype(jnp.int32)
+      z = util.st_floor(x)
 
     log_det = jnp.zeros(x.shape[:1])
     return z, log_det
@@ -38,31 +38,43 @@ class UniformDequantization():
 ################################################################################################################
 
 class VariationalDequantization():
-  def __init__(self, flow: Optional[Callable]=None):
+  def __init__(self, flow, feature_network=None):
     """ Variational dequantization https://arxiv.org/pdf/1902.00275.pdf
-    Args:
-      flow          : The flow to use for dequantization
-      name          : Optional name for this module.
     """
-    self.flow           = flow
+    self.flow = flow
+    self.feature_network = feature_network
 
   def get_params(self):
-    return {"log_qugx": self.flow.get_params()}
+    return dict(log_qugx=self.flow.get_params(),
+                feature_params=self.feature_network.get_params())
 
   def __call__(self, x, params=None, inverse=False, rng_key=None, **kwargs):
     if params is None:
       self.q_params = None
+      self.feature_params = None
     else:
       self.q_params = params["log_qugx"]
+      self.feature_params = params["feature_params"]
+
+    k1, k2 = random.split(rng_key, 2)
 
     if inverse == False:
-      noise, log_qugx = self.flow(jnp.zeros(x.shape), aux=x, params=self.q_params, rng_key=rng_key, inverse=True)
+      if self.feature_network is not None:
+        aux = self.feature_network(x, params=self.feature_params, rng_key=k2)
+      else:
+        aux = None
+      noise, log_qugx = self.flow(jnp.zeros(x.shape), aux=aux, params=self.q_params, rng_key=k1, inverse=True)
       z = x + noise
     else:
       z_continuous = x
-      z = jnp.floor(z_continuous).astype(jnp.int32)
+      z = util.st_floor(z_continuous)
       noise = z_continuous - z
-      _, log_qugx = self.flow(noise, aux=x, params=self.q_params, rng_key=rng_key, inverse=False)
+
+      if self.feature_network is not None:
+        aux = self.feature_network(z, params=self.feature_params, rng_key=k2)
+      else:
+        aux = None
+      _, log_qugx = self.flow(noise, aux=aux, params=self.q_params, rng_key=k1, inverse=False)
 
     return z, -log_qugx
 
@@ -120,7 +132,7 @@ class FusedDequantizationAndPadding():
       flow_in = jnp.zeros(x.shape[:-1] + (self.out_channel,))
       noise, log_qugs = self.flow(flow_in, aux=f, params=self.q_params, inverse=True, rng_key=k2, **kwargs)
 
-      # Squash part of the nosie to be between 0 and 1
+      # Squash part of the noise to be between 0 and 1
       dequant_noise, log_det1 = self.sigmoid(noise[...,:C], params=self.sigmoid_params, rng_key=rng_key, inverse=False)
 
       # Add this noise for dequantization
@@ -142,14 +154,14 @@ class FusedDequantizationAndPadding():
       x, padding_noise = x[...,:C], x[...,C:]
 
       # Squash the image from the reals to (0, 1)
-      # x, log_det3 = self.sigmoid(x, params=self.sigmoid_params, rng_key=rng_key, inverse=False, scale=0.05)
-      x, log_det3 = self.sigmoid(x, params=self.sigmoid_params, rng_key=rng_key, inverse=False)
+      x, log_det3 = self.sigmoid(x, params=self.sigmoid_params, rng_key=rng_key, inverse=False, scale=0.05)
+      # x, log_det3 = self.sigmoid(x, params=self.sigmoid_params, rng_key=rng_key, inverse=False)
 
       # Scale the image from (0, 1) to the full range
       x, log_det2 = self.scale(x, params=self.scale_params, rng_key=rng_key, inverse=True)
 
       # Extract dequantization noise
-      z = jnp.floor(x)
+      z = util.st_floor(x)
       dequant_noise = x - z
 
       # Unsquash the dequantization noise so that we can evaluate it

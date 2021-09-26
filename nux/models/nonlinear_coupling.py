@@ -96,14 +96,18 @@ class Block(_coupling):
                K=8,
                kind="spline",
                with_affine_coupling=True,
+               make_coupling_net=None,
                **kwargs):
     super().__init__(K=K, kind=kind, with_affine_coupling=with_affine_coupling, **kwargs)
-    self.make_coupling_net = lambda out_dim: CouplingResNet1D(out_dim,
-                                                              working_dim,
-                                                              hidden_dim,
-                                                              nonlinearity,
-                                                              dropout_prob,
-                                                              n_layers)
+    if make_coupling_net is None:
+      self.make_coupling_net = lambda out_dim: CouplingResNet1D(out_dim,
+                                                                working_dim,
+                                                                hidden_dim,
+                                                                nonlinearity,
+                                                                dropout_prob,
+                                                                n_layers)
+    else:
+      self.make_coupling_net = make_coupling_net
 
 class ImageBlock(_coupling):
 
@@ -116,15 +120,19 @@ class ImageBlock(_coupling):
                K=8,
                kind="spline",
                with_affine_coupling=True,
+               make_coupling_net=None,
                **kwargs):
     super().__init__(K=K, kind=kind, with_affine_coupling=with_affine_coupling, **kwargs)
-    self.make_coupling_net = lambda out_dim: CouplingResNet(out_dim,
-                                                            working_channel,
-                                                            (3, 3),
-                                                            hidden_channel,
-                                                            nonlinearity,
-                                                            dropout_prob,
-                                                            n_layers)
+    if make_coupling_net is None:
+      self.make_coupling_net = lambda out_dim: CouplingResNet(out_dim,
+                                                              working_channel,
+                                                              (3, 3),
+                                                              hidden_channel,
+                                                              nonlinearity,
+                                                              dropout_prob,
+                                                              n_layers)
+    else:
+      self.make_coupling_net = make_coupling_net
 
 ################################################################################################################
 

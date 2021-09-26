@@ -43,12 +43,13 @@ class ResBlock():
     return x
 
 class ResNet():
-  def __init__(self, filter_shape, hidden_channel, nonlinearity, dropout_prob, n_layers):
+  def __init__(self, filter_shape, hidden_channel, nonlinearity, dropout_prob, n_layers, unroll=1):
     self.filter_shape   = filter_shape
     self.hidden_channel = hidden_channel
     self.nonlinearity   = nonlinearity
     self.dropout_prob   = dropout_prob
     self.n_layers       = n_layers
+    self.unroll = unroll
 
   def get_params(self):
     return self.params
@@ -76,7 +77,7 @@ class ResNet():
         init_params.append(block_params)
       self.params = jax.tree_multimap(lambda *xs: jnp.array(xs), *init_params)
     else:
-      x, self.params = jax.lax.scan(scan_block, x, (keys, self.params), unroll=10)
+      x, self.params = jax.lax.scan(scan_block, x, (keys, self.params), unroll=self.unroll)
 
     return x
 
@@ -88,7 +89,8 @@ class CouplingResNet():
                hidden_channel,
                nonlinearity,
                dropout_prob,
-               n_layers):
+               n_layers,
+               unroll=1):
     self.out_channel     = out_channel
     self.working_channel = working_channel
     self.filter_shape    = filter_shape
@@ -96,10 +98,14 @@ class CouplingResNet():
     self.nonlinearity    = nonlinearity
     self.dropout_prob    = dropout_prob
     self.n_layers        = n_layers
+    self.unroll = unroll
 
   def get_params(self):
-    return dict(wn_in=self.wn_in.get_params(),
-                resnet=self.resnet.get_params(),
+    if self.working_channel is not None:
+      return dict(wn_in=self.wn_in.get_params(),
+                  resnet=self.resnet.get_params(),
+                  wn_out=self.wn_out.get_params())
+    return dict(resnet=self.resnet.get_params(),
                 wn_out=self.wn_out.get_params())
 
   def __call__(self, x, params=None, aux=None, rng_key=None, is_training=True, **kwargs):
@@ -108,18 +114,22 @@ class CouplingResNet():
     if params is None:
       self.wn_in_params, self.resnet_params, self.wn_out_params = [None]*3
     else:
-      self.wn_in_params, self.resnet_params, self.wn_out_params = params["wn_in"], params["resnet"], params["wn_out"]
+      if self.working_channel is not None:
+        self.wn_in_params = params["wn_in"]
+      self.resnet_params, self.wn_out_params = params["resnet"], params["wn_out"]
 
     # Project to working dim
-    self.wn_in = WeightNormConv(filter_shape=(1, 1), out_channel=self.working_channel)
-    x = self.wn_in(x, params=self.wn_in_params, rng_key=k1)
+    if self.working_channel is not None:
+      self.wn_in = WeightNormConv(filter_shape=(1, 1), out_channel=self.working_channel)
+      x = self.wn_in(x, params=self.wn_in_params, rng_key=k1)
 
     # ResNet
     self.resnet = ResNet(filter_shape=self.filter_shape,
                          hidden_channel=self.hidden_channel,
                          nonlinearity=self.nonlinearity,
                          dropout_prob=self.dropout_prob,
-                         n_layers=self.n_layers)
+                         n_layers=self.n_layers,
+                         unroll=self.unroll)
     x = self.resnet(x, aux=aux, params=self.resnet_params, rng_key=k2, is_training=is_training)
 
     # Project to output channel

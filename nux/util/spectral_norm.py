@@ -26,7 +26,8 @@ def max_singular_value(mvp, v, n_iters=10):
       v_prev, v, i = val
       max_iters_reached = jnp.where(i >= 5000, True, False)
       tolerance_achieved = jnp.allclose(flatten(v_prev) - flatten(v), 0.0, atol=1e-6)
-      return ~(max_iters_reached | tolerance_achieved)
+      first_iter = jnp.where(i > 0.0, False, True)
+      return ~(max_iters_reached | tolerance_achieved) | first_iter
 
     def loop(val):
       _, v, i = val
@@ -34,7 +35,7 @@ def max_singular_value(mvp, v, n_iters=10):
       return v, v_new, i + 1
 
     # Initialize v
-    _, v, _ = jax.lax.while_loop(cond, loop, (jnp.zeros_like(v), v, 0.0))
+    _, v, _ = jax.lax.while_loop(cond, loop, (v, v, 0.0))
   else:
 
     def body(v, _):

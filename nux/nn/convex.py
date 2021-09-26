@@ -6,16 +6,22 @@ from functools import partial
 from typing import Optional, Mapping, Tuple, Sequence, Union, Any, Callable
 import nux.util as util
 import einops
-from .layers import WeightNormDense
+from .layers import WeightNormDense, WeightNormConv
 
 class InputConvexNN():
-  def __init__(self, hidden_dim, aug_dim, n_hidden_layers):
+  def __init__(self, hidden_dim, aug_dim, n_hidden_layers, image=False):
     self.hidden_dim = hidden_dim
     self.aug_dim = aug_dim
     self.total_dim = self.hidden_dim + self.aug_dim
     self.n_hidden_layers = n_hidden_layers
     self.s = partial(util.square_plus, gamma=1.0)
     self.mvp = lambda w, x: jnp.einsum("ij,bj->bi", w, x)
+
+    self.image = image
+    if self.image:
+      self.affine = partial(WeightNormConv, (3, 3))
+    else:
+      self.affine = WeightNormDense
 
   def get_params(self):
     return dict(L_in=self.l_in.get_params(),
@@ -52,15 +58,15 @@ class InputConvexNN():
       self.w0, self.w1 = params["w0"], params["w1"]
 
     # First layer to project to the right dim
-    self.l_in = WeightNormDense(self.hidden_dim, before_square_plus=True)
-    self.laug_in = WeightNormDense(self.aug_dim, before_square_plus=True)
+    self.l_in = self.affine(self.hidden_dim, before_square_plus=True)
+    self.laug_in = self.affine(self.aug_dim, before_square_plus=True)
     ht = self.l_in(x, params=self.L_in, rng_key=k1)
     ha = self.laug_in(x, params=self.Laug_in, rng_key=k2)
     h = self.s(jnp.concatenate([ht, ha], axis=-1))
 
-    self.lp = WeightNormDense(self.hidden_dim, positive=True, before_square_plus=True)
-    self.l = WeightNormDense(self.hidden_dim, before_square_plus=True)
-    self.laug = WeightNormDense(self.aug_dim, before_square_plus=True)
+    self.lp = self.affine(self.hidden_dim, positive=True, before_square_plus=True)
+    self.l = self.affine(self.hidden_dim, before_square_plus=True)
+    self.laug = self.affine(self.aug_dim, before_square_plus=True)
     def scan_block(carry, inputs):
       h, x = carry
       Lp, L, Laug, (k1, k2, k3) = inputs
@@ -82,15 +88,22 @@ class InputConvexNN():
       self.Lp, self.L, self.Laug = jax.tree_multimap(lambda *xs: jnp.array(xs), *zip(weights))[0]
 
     else:
-      (h, _), _ = jax.lax.scan(scan_block, (h, x), (self.Lp, self.L, self.Laug, keys))
+      (h, _), _ = jax.lax.scan(scan_block, (h, x), (self.Lp, self.L, self.Laug, keys), unroll=1)
 
-    self.lp_out = WeightNormDense(1, positive=True)
-    self.l_out = WeightNormDense(1)
+    self.lp_out = self.affine(1, positive=True)
+    self.l_out = self.affine(1)
     F = self.lp_out(h, params=self.Lp_out, rng_key=k4)
     F += self.l_out(x, params=self.L_out, rng_key=k5)
 
+    # Avg. pool
+    if self.image:
+      sum_axes = util.last_axes(F.shape[1:])
+      F = jnp.mean(F, axis=sum_axes)[...,None]
+    else:
+      sum_axes = -1
+
     # Should be strictly convex
-    half_norm_sq = jnp.sum(x**2, axis=-1)/2
+    half_norm_sq = jnp.sum(x**2, axis=sum_axes)/2
     F = self.s(self.w0)*half_norm_sq + self.s(self.w1)*F
     return F
 
@@ -100,25 +113,29 @@ if __name__ == "__main__":
   rng_key = random.PRNGKey(1)
   dim = 4
   batch_size = 16
-  x = random.normal(rng_key, (batch_size, dim))
+  # x = random.normal(rng_key, (batch_size, dim))
+  x = random.normal(rng_key, (batch_size, 8, 8, 2))
 
-  hidden_dim = 8
-  aug_dim = 2
+  hidden_dim = 2
+  aug_dim = 1
   n_hidden_layers = 4
-  net = InputConvexNN(hidden_dim, aug_dim, n_hidden_layers)
+  net = InputConvexNN(hidden_dim, aug_dim, n_hidden_layers, image=True)
 
   z = net(x, rng_key=rng_key)
   params = net.get_params()
 
-  x = random.normal(rng_key, (10000, dim))
+  x = random.normal(rng_key, (100, *x.shape[1:]))
   z = net(x, params=params, rng_key=rng_key)
 
   # Ensure that the network has a psd hessian
   def F(x):
     z = net(x[None], params=params, rng_key=rng_key)[0]
-    return z
+    return z.sum(axis=-1)
 
-  H = jax.vmap(jax.hessian(F))(x)[:,0]
+  H = jax.vmap(jax.hessian(F))(x)
+  total_dim = util.list_prod(x.shape[1:])
+  H = H.reshape((-1, total_dim, total_dim))
+  import pdb; pdb.set_trace()
   s = jnp.linalg.svd(H, compute_uv=False)
   assert jnp.all(s > 0)
 

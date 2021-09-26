@@ -56,7 +56,6 @@ def distribute_experiment(python_command,
   sbatch_command = f"sbatch -p {gpu} --gres=gpu:{n_gpus} tmp_run_scripts/{tmp_name}"
   if test == False:
     os.system(sbatch_command)
-  else:
-    print(f"Sending {sbatch_command}")
+  print(f"Sending {sbatch_command}")
 
 

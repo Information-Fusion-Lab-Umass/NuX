@@ -50,6 +50,12 @@ def get_tf_image_dataset(*,
     x["image"] = x["image"][::2,::2][26:-19,12:-13]#[::2,::2]
     if "augmented" in x:
       x["augmented"] = x["augmented"][::2,::2][26:-19,12:-13]#[::2,::2]
+
+    if dataset_name == "celeb_a32x32":
+      x["image"] = x["image"][::2,::2]
+      if "augmented" in x:
+        x["augmented"] = x["augmented"][::2,::2]
+
     return x
 
   def to_float(x):
@@ -111,7 +117,12 @@ def get_tf_image_dataset(*,
       del x["y_non_one_hot"]
     return x
 
-  ds = tfds.load(dataset_name, split=split)
+  # TODO: Get rid of this hack
+  if dataset_name == "celeb_a32x32":
+    ds = tfds.load("celeb_a", split=split)
+  else:
+    ds = tfds.load(dataset_name, split=split)
+
   if crop:
     ds = ds.map(central_crop)
 
@@ -306,6 +317,29 @@ def get_celeba_dataset(quantize_bits=8,
                         random_label_percent=random_label_percent,
                         data_augmentation=data_augmentation,
                         **kwargs)
+
+def get_celeb_a32x32_dataset(quantize_bits=8,
+                       batch_size=64,
+                       n_batches=1000,
+                       split="train",
+                       classification=False,
+                       label_keep_percent=1.0,
+                       random_label_percent=0.0,
+                       data_augmentation=False,
+                       **kwargs):
+
+  return get_tf_image_dataset(quantize_bits=quantize_bits,
+                        batch_size=batch_size,
+                        dataset_name="celeb_a32x32",
+                        n_batches=n_batches,
+                        split=split,
+                        crop=True,
+                        classification=classification,
+                        label_keep_percent=label_keep_percent,
+                        random_label_percent=random_label_percent,
+                        data_augmentation=data_augmentation,
+                        **kwargs)
+
 
 def get_celebahq_dataset(quantize_bits=8,
                          batch_size=64,

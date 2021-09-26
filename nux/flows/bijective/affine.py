@@ -14,8 +14,10 @@ __all__ = ["CenterAndScale",
            "StaticScale",
            "Scale",
            "ShiftScale",
+           "ShiftScalarScale",
            "StaticShiftScale",
            "DenseMVP",
+           "CaleyOrthogonalMVP",
            "PLUMVP"]
 
 class CenterAndScale(Flow):
@@ -213,6 +215,47 @@ class ShiftScale(Flow):
     log_det = -log_s.sum(axis=sum_axes)
     return z, log_det
 
+class ShiftScalarScale(Flow):
+
+  def __init__(self, unit_norm=False):
+    """ Elementwise shift + scalar scale
+    """
+    self.s = None
+    self.b = None
+    self.unit_norm = unit_norm
+
+  def get_params(self):
+    return {"s": self.s, "b": self.b}
+
+  def __call__(self, x, params=None, rng_key=None, inverse=False, **kwargs):
+    if params is None:
+      reduce_axes = list(range(0, x.ndim - 1))
+      mean = jnp.mean(x, axis=reduce_axes)
+      self.b = mean
+      if self.unit_norm == False:
+        std = jnp.std(x) + 1e-5
+        self.s = std - 1/std
+      else:
+        x_norm = jnp.sum(x**2, axis=util.last_axes(x.shape[1:]))
+        x_norm = jnp.sqrt(x_norm).mean()
+        self.s = x_norm - 1/x_norm
+
+    else:
+      self.b, self.s = params["b"], params["s"]
+
+    s = util.square_plus(self.s, gamma=1.0) + 1e-4
+    s = jnp.broadcast_to(s, x.shape)
+    log_s = jnp.log(s)
+
+    if inverse == False:
+      z = (x - self.b)/s
+    else:
+      z = x*s + self.b
+
+    sum_axes = util.last_axes(x.shape[1:])
+    log_det = -log_s.sum(axis=sum_axes)
+    return z, log_det
+
 class StaticShiftScale(Flow):
 
   def __init__(self, s, b):
@@ -264,6 +307,41 @@ class DenseMVP(Flow):
 
     log_det = jnp.linalg.slogdet(self.A)[1]*util.list_prod(x.shape[1:-1])
     log_det = log_det*jnp.ones(x.shape[:1])
+    return z, log_det
+
+################################################################################################################
+
+class CaleyOrthogonalMVP(Flow):
+
+  def __init__(self):
+    """ Dense
+    """
+    pass
+
+  def get_params(self):
+    return {"W": self.W}
+
+  def __call__(self, x, params=None, inverse=False, rng_key=None, **kwargs):
+    x_shape = x.shape[1:]
+    dim = x_shape[-1]
+
+    if params is None:
+      self.W = random.normal(rng_key, shape=(dim, dim))
+    else:
+      self.W = params["W"]
+
+    A = self.W - self.W.T
+
+    if inverse == False:
+      IpA_inv = jnp.linalg.inv(jnp.eye(dim) + A)
+      y = jnp.einsum("ij,...j->...i", IpA_inv, x)
+      z = y - jnp.einsum("ij,...j->...i", A, y)
+    else:
+      ImA_inv = jnp.linalg.inv(jnp.eye(dim) - A)
+      y = jnp.einsum("ij,...j->...i", ImA_inv, x)
+      z = y + jnp.einsum("ij,...j->...i", A, y)
+
+    log_det = jnp.zeros(x.shape[:1])
     return z, log_det
 
 ################################################################################################################

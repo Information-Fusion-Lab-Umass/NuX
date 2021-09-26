@@ -66,25 +66,40 @@ class FixedGaussianPrior():
 
 class GaussianPrior():
 
-  def __init__(self):
+  def __init__(self, use_scale=True, random_init=False):
     """ Unit Gaussian prior
     Args:
       name: Optional name for this module.
     """
-    pass
+    self.use_scale = use_scale
+    self.random_init = random_init
 
   def get_params(self):
+    if self.use_scale == False:
+      return dict(mu=self.mu)
     return dict(mu=self.mu, s=self.s)
 
   def __call__(self, x, params=None, rng_key=None, inverse=False, reconstruction=False, **kwargs):
 
     if params is None:
-      # self.mu, self.s = jnp.zeros((2, *x.shape[1:]))
-      self.mu, self.s = random.normal(rng_key, (2, *x.shape[1:]))
+      if x.shape[0] > 1 and self.random_init == False:
+        self.mu = x.mean(axis=0)
+        if self.use_scale:
+          std = x.std(axis=0)
+          self.s = std - 1/std
+      else:
+        self.mu, s = random.normal(rng_key, (2, *x.shape[1:]))*0.05
+        if self.use_scale:
+          self.s = s
     else:
-      self.mu, self.s = params["mu"], params["s"]
+      self.mu = params["mu"]
+      if self.use_scale:
+        self.s = params["s"]
 
-    s = util.square_plus(self.s, gamma=1.0) + 1e-4
+    if self.use_scale:
+      s = util.square_plus(self.s, gamma=1.0) + 1e-4
+    else:
+      s = jnp.ones_like(x)
 
     if inverse and reconstruction == False:
       x = random.normal(rng_key, x.shape)
@@ -147,7 +162,7 @@ class ParametrizedGaussianPrior():
     # Pass the condition through the parametrized gaussian
     theta = self.network(aux, params=self.network_params, rng_key=k1, is_training=is_training)
     mu, diag_cov = jnp.split(theta, 2, axis=-1)
-    diag_cov = util.square_plus(diag_cov)
+    diag_cov = util.square_plus(diag_cov) + 1e-4
     log_diag_cov = jnp.log(diag_cov)
 
     if inverse and reconstruction == False:

@@ -40,8 +40,6 @@ class Padding():
     k1, k2 = random.split(rng_key, 2)
     C = x.shape[-1]
 
-    outputs = {}
-
     if inverse == False:
 
       # Extract features to condition on
@@ -66,3 +64,37 @@ class Padding():
     log_det = -log_qugs
 
     return z, log_det
+
+if __name__ == "__main__":
+  from debug import *
+  import matplotlib.pyplot as plt
+  import nux
+
+  rng_key = random.PRNGKey(0)
+  x = random.normal(rng_key, (10, 3))
+
+  flow = nux.GLOW(n_layers=1,#5,
+                  working_dim=32,
+                  hidden_dim=64,
+                  nonlinearity=util.square_swish,
+                  dropout_prob=0.0,
+                  n_resnet_layers=1,#5,
+                  additive=False)
+
+  padding_flow = nux.GLOW(n_layers=1,#2,
+                          working_dim=32,
+                          hidden_dim=64,
+                          nonlinearity=util.square_swish,
+                          dropout_prob=0.0,
+                          n_resnet_layers=1,#2,
+                          additive=False)
+  padding_flow = nux.Sequential([padding_flow, nux.UnitGaussianPrior()])
+  pad = nux.Padding(2, padding_flow)
+  flow = nux.Sequential([pad, flow])
+
+  z, log_px = flow(x, rng_key=rng_key)
+  params = flow.get_params()
+
+  x_reconstr, log_px2 = flow(z, params=params, rng_key=rng_key, inverse=True, reconstruction=True)
+
+  import pdb; pdb.set_trace()

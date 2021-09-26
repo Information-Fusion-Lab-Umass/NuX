@@ -7,6 +7,15 @@ import jax
 from typing import Optional, Mapping, Tuple, Sequence, Union, Any, Callable
 import jax.lax as lax
 
+def scaled_weight_standardization_conv(w, gain=None, eps=1e-4):
+  fan_in = list_prod(w.shape[:-1])
+  mean = jnp.mean(w, axis=(0, 1, 2), keepdims=True)
+  var = jnp.var(w, axis=(0, 1, 2), keepdims=True)
+  weight = (w - mean)*jax.lax.rsqrt(var*fan_in + eps)
+  if gain is not None:
+    weight *= gain
+  return weight
+
 ################################################################################################################
 
 def linear_lr(i, lr=1e-4):
@@ -108,7 +117,8 @@ def square_sigmoid(x, gamma=0.5):
 
 def square_swish(x, gamma=0.5):
   x2 = x**2
-  return 0.5*(x + x2*jax.lax.rsqrt(x2 + 4*gamma))
+  out = 0.5*(x + x2*jax.lax.rsqrt(x2 + 4*gamma))
+  return out
 
 ################################################################################################################
 
@@ -123,6 +133,8 @@ def str_to_nonlinearity(name):
     nonlinearity = jax.nn.swish
   elif name == "lipswish":
     nonlinearity = lambda x: jax.nn.swish(x)/1.1
+  elif name == "square_lipswish":
+    nonlinearity = lambda x: square_swish(x, gamma=0.5)/(0.5 + 2/9*np.sqrt(6))
   elif name == "square_swish":
     nonlinearity = square_swish
   elif name == "square_plus":
@@ -179,14 +191,14 @@ def only_gradient(x):
 
 ################################################################################################################
 
-def mean_and_std(x, axis=-1):
-  mean = jnp.mean(x, axis=axis)
-  std = jnp.std(x, axis=axis)
+def mean_and_std(x, axis=-1, keepdims=False):
+  mean = jnp.mean(x, axis=axis, keepdims=keepdims)
+  std = jnp.std(x, axis=axis, keepdims=keepdims)
   return mean, std
 
-def mean_and_inverse_std(x, axis=-1):
-  mean = jnp.mean(x, axis=axis)
-  mean_sq = jnp.mean(lax.square(x), axis=axis)
+def mean_and_inverse_std(x, axis=-1, keepdims=False):
+  mean = jnp.mean(x, axis=axis, keepdims=keepdims)
+  mean_sq = jnp.mean(lax.square(x), axis=axis, keepdims=keepdims)
   var = mean_sq - lax.square(mean)
   inv_std = lax.rsqrt(var + 1e-6)
   return mean, inv_std

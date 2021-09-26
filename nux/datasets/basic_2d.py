@@ -155,6 +155,79 @@ def get_moons_dataset(batch_size=32,
 
 ################################################################################################################
 
+def generate_double_roll(key, n_samples):
+  theta = jnp.linspace(0.0, 2*jnp.pi, n_samples//2)
+  r = jnp.linspace(0.0, 1.0, n_samples//2)
+  x, y = r*jnp.cos(theta), r*jnp.sin(theta)
+  data = jnp.vstack([x, y]).T
+  data = jnp.vstack([data, -data])
+
+  k1, k2 = random.split(key, 2)
+  data = random.permutation(k1, data)
+  data += random.normal(k2, data.shape)*0.05
+  return data
+
+def get_double_roll_dataset(batch_size=32,
+                            n_batches=None,
+                            split="train",
+                            train_ratio=0.7,
+                            classification=False,
+                            label_keep_percent=1.0,
+                            random_label_percent=0.0,
+                            data_augmentation=False,
+                            **kwargs):
+  key = random.PRNGKey(0)
+  data = generate_double_roll(key, n_samples=20000)
+
+  return get_regular_dataset(data,
+                             labels=None,
+                             batch_size=batch_size,
+                             n_batches=n_batches,
+                             split=split,
+                             train_ratio=train_ratio,
+                             classification=False,
+                             label_keep_percent=label_keep_percent,
+                             data_augmentation=False,
+                             **kwargs)
+
+################################################################################################################
+
+def generate_3d_spiral(key, n_samples):
+  z = jnp.linspace(-3, 3, n_samples)
+  r = jnp.ones(n_samples)
+  theta = random.normal(key, shape=(n_samples,))*2.0
+  theta = jnp.sort(theta)
+  x, y = r*jnp.cos(theta), r*jnp.sin(theta)
+  data = jnp.vstack([x, y, z]).T
+  data = random.permutation(key, data)
+  data += random.normal(key, shape=data.shape)*0.2
+  return data
+
+def get_spiral_3d_dataset(batch_size=32,
+                          n_batches=None,
+                          split="train",
+                          train_ratio=0.7,
+                          classification=False,
+                          label_keep_percent=1.0,
+                          random_label_percent=0.0,
+                          data_augmentation=False,
+                          **kwargs):
+  key = random.PRNGKey(0)
+  data = generate_3d_spiral(key, n_samples=20000)
+
+  return get_regular_dataset(data,
+                             labels=None,
+                             batch_size=batch_size,
+                             n_batches=n_batches,
+                             split=split,
+                             train_ratio=train_ratio,
+                             classification=False,
+                             label_keep_percent=label_keep_percent,
+                             data_augmentation=False,
+                             **kwargs)
+
+################################################################################################################
+
 def generate_line(key,
                   n_samples):
   k1, k2 = random.split(key, 2)

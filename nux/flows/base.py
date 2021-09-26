@@ -112,11 +112,12 @@ class Identity():
 import copy
 class Repeat():
 
-  def __init__(self, flow, n_repeats, checkerboard=False):
+  def __init__(self, flow, n_repeats, checkerboard=False, unroll=1):
     self.make_flow = lambda : copy.deepcopy(flow)
     self.flow = flow
     self.n_repeats = n_repeats
     self.checkerboard = checkerboard
+    self.unroll = unroll
 
   def get_params(self):
     return dict(repeated=self.repeated_params)
@@ -151,23 +152,25 @@ class Repeat():
         init_params.append(block_params)
       self.repeated_params = jax.tree_multimap(lambda *xs: jnp.array(xs), *init_params)
     else:
-      if False:
-        # For testing
+      if self.unroll == -1:
+        init_params = []
         log_det = 0.0
         for i, key in enumerate(keys):
           if inverse:
-            k = self.n_layers - i - 1
+            k = self.n_repeats - i - 1
           else:
             k = i
           in_shape = x.shape
           x, (_log_det, block_params) = scan_block(x, (key, jax.tree_map(lambda x: x[k], self.repeated_params)))
           assert x.shape == in_shape
           log_det += _log_det
+          init_params.append(block_params)
+        self.repeated_params = jax.tree_multimap(lambda *xs: jnp.array(xs), *init_params)
       else:
         # There is a leaked tracer here because self.flow.get_params() will contain the traced values!
         # This won't affect anything though because we never need those values.
         # TODO: clean up unused variables.
-        x, (log_dets, self.repeated_params) = jax.lax.scan(scan_block, x, (keys, self.repeated_params), unroll=10, reverse=inverse)
+        x, (log_dets, self.repeated_params) = jax.lax.scan(scan_block, x, (keys, self.repeated_params), unroll=self.unroll, reverse=inverse)
         log_det = log_dets.sum(axis=0)
 
     if self.checkerboard:

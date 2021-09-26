@@ -10,9 +10,10 @@ __all__ = ["Mixture"]
 
 class Mixture():
 
-  def __init__(self, K, component):
+  def __init__(self, K, component, cluster_init=False):
     self.K = K
     self.component = component
+    self.cluster_init = cluster_init
 
   def get_params(self):
     return dict(component=self.component_params, pi=self.pi)
@@ -25,10 +26,32 @@ class Mixture():
         return self.component.get_params()
 
       keys = random.split(rng_key, self.K)
-      self.component_params = jax.vmap(apply_and_params)(keys)
+      if self.cluster_init == False:
+        self.component_params = jax.vmap(apply_and_params)(keys)
+        self.pi = jnp.zeros((self.K,))
+        # self.pi += random.normal(rng_key, self.pi.shape)*0.01
+      else:
+        x_flat = x.reshape(x.shape[:1] + (-1,))
+        # Cluster x into K groups and then initialize each component with a group
+        @partial(jax.vmap, in_axes=(None, 0))
+        @partial(jax.vmap, in_axes=(0, None))
+        def distance(x, y):
+          return jnp.sum((x - y)**2)
+        adjancency_matrix = distance(x_flat, x_flat)
+        cluster_assignments = util.spectral_cluster(adjancency_matrix, k=self.K)
 
-      self.pi = jnp.zeros((self.K,))
-      self.pi += random.normal(rng_key, self.pi.shape)
+        mask = cluster_assignments[:,None] == jnp.arange(self.K)
+
+        component_params = []
+        for i, key in enumerate(keys):
+          x_masked = x_flat[mask[:,i]].reshape((-1,) + x.shape[1:])
+          self.component(x_masked, params=None, rng_key=key, inverse=inverse, reconstruction=reconstruction, **kwargs)
+          component_params.append(self.component.get_params())
+        self.component_params = jax.tree_multimap(lambda *xs: jnp.array(xs), *component_params)
+
+        # Based on cluster assignments
+        self.pi = jnp.log(mask.sum(axis=0)/x.shape[0])
+
     else:
       self.pi = params["pi"]
       self.component_params = params["component"]
@@ -72,11 +95,14 @@ if __name__ == "__main__":
 
   x = random.randint(rng_key, minval=-10, maxval=10, shape=(2000, 2))
 
-  prior = Mixture(5, GaussianPrior())
+  prior = Mixture(5, GaussianPrior(use_scale=True, random_init=True), cluster_init=False)
   _, log_pz = prior(x, rng_key=rng_key)
   params = prior.get_params()
 
   samples, _ = prior(x, params=params, rng_key=rng_key, inverse=True)
+
+  prior = Mixture(5, GaussianPrior(use_scale=True, random_init=False), cluster_init=True)
+  prior(samples, rng_key=rng_key)
 
   import pdb; pdb.set_trace()
 
