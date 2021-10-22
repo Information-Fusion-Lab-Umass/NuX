@@ -39,6 +39,8 @@ class _coupling(ABC):
 
     self.transformer = Sequential(layers)
 
+    self._check_aux = kwargs.get("_check_aux", True)
+
   def get_params(self):
     return dict(scale=self.scale_params,
                 conditioner=self.conditioner.get_params())
@@ -58,7 +60,7 @@ class _coupling(ABC):
     x1, x2 = x[...,:split_dim], x[...,split_dim:]
 
     # The auxiliary input and x1 must have the same spatial dimensions
-    if aux is not None:
+    if aux is not None and self._check_aux:
       x_spatial_shape, aux_spatial_shape = x.shape[1:-1], aux.shape[1:-1]
       if x_spatial_shape != aux_spatial_shape:
         assert len(x_spatial_shape) == 2

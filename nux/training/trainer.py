@@ -55,7 +55,7 @@ class Trainer():
   def ensure_path(self, path):
     pathlib.Path(path).mkdir(parents=True, exist_ok=True)
 
-  def load_data(self, classification=False):
+  def load_data(self, classification=False, **kwargs):
     from nux.datasets.datasets import get_dataset
     train_ds, get_test_ds = get_dataset(dataset_name=self.args.dataset,
                                         train_batch_size=self.args.train_batch_size,
@@ -67,7 +67,8 @@ class Trainer():
                                         label_keep_percent=self.args.label_keep_percent,
                                         random_label_percent=self.args.random_label_percent,
                                         train_split=self.args.train_split,
-                                        data_augmentation=self.data_augmentation)
+                                        data_augmentation=self.data_augmentation,
+                                        **kwargs)
     return train_ds, get_test_ds
 
   @property

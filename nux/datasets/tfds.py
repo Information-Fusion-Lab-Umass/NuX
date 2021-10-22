@@ -18,7 +18,8 @@ def get_tf_image_dataset(*,
                          classification=False,
                          label_keep_percent=1.0,
                          random_label_percent=0.0,
-                         data_augmentation=False):
+                         data_augmentation=False,
+                         filter_fn=None):
 
   if random_label_percent > 0:
     assert 0, "Random labels not implemented for tf datasets"
@@ -122,6 +123,9 @@ def get_tf_image_dataset(*,
     ds = tfds.load("celeb_a", split=split)
   else:
     ds = tfds.load(dataset_name, split=split)
+
+  if filter_fn is not None:
+    ds = ds.filter(filter_fn)
 
   if crop:
     ds = ds.map(central_crop)

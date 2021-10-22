@@ -24,7 +24,7 @@ def contour_grid(xmin,
                  n_x,
                  n_y,
                  n_importance_samples=None):
-  x_range, y_range = jnp.linspace(xmin, xmax, 100), jnp.linspace(ymin, ymax, 100)
+  x_range, y_range = jnp.linspace(xmin, xmax, n_x), jnp.linspace(ymin, ymax, n_y)
   X, Y = jnp.meshgrid(x_range, y_range)
   XY = jnp.dstack([X, Y]).reshape((-1, 2))
 

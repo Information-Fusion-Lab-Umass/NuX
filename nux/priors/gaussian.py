@@ -26,10 +26,12 @@ class UnitGaussianPrior():
   def get_params(self):
     return {}
 
-  def __call__(self, x, rng_key=None, inverse=False, reconstruction=False, **kwargs):
+  def __call__(self, x, rng_key=None, inverse=False, reconstruction=False, prior_temp=None, **kwargs):
 
     if inverse and reconstruction == False:
       x = random.normal(rng_key, x.shape)
+      if prior_temp is not None:
+        x *= prior_temp
 
     sum_axes = util.last_axes(x.shape[1:])
     log_pz = -0.5*(x**2).sum(axis=sum_axes) - 0.5*util.list_prod(x.shape[1:])*jnp.log(2*jnp.pi)

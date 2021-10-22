@@ -23,12 +23,15 @@ class UniformDequantization():
   def get_params(self):
     return {}
 
-  def __call__(self, x, params=None, inverse=False, rng_key=None, **kwargs):
+  def __call__(self, x, params=None, inverse=False, rng_key=None, no_dequantization=False, **kwargs):
 
     if inverse == False:
-      noise = random.uniform(rng_key, x.shape + (self.n_samples,))
-      noise = noise.mean(axis=-1) # Bates distribution
-      z = x + noise
+      if no_dequantization:
+        z = x
+      else:
+        noise = random.uniform(rng_key, x.shape + (self.n_samples,))
+        noise = noise.mean(axis=-1) # Bates distribution
+        z = x + noise
     else:
       z = util.st_floor(x)
 

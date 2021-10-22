@@ -13,7 +13,8 @@ __all__ = ["Flow",
            "NoOp",
            "Identity",
            "Repeat",
-           "AsFlat"]
+           "AsFlat",
+           "Vmap"]
 
 ################################################################################################################
 
@@ -112,7 +113,7 @@ class Identity():
 import copy
 class Repeat():
 
-  def __init__(self, flow, n_repeats, checkerboard=False, unroll=1):
+  def __init__(self, flow, n_repeats, checkerboard=False, unroll=1, **kwargs):
     self.make_flow = lambda : copy.deepcopy(flow)
     self.flow = flow
     self.n_repeats = n_repeats
@@ -192,3 +193,79 @@ class AsFlat():
     z_flat, llc = self.flow(x_flat, *args, **kwargs)
     z = z_flat.reshape(x.shape)
     return z, llc
+
+################################################################################################################
+
+class Vmap():
+  """ Vectorize a flow """
+  def __init__(self, flow):
+    self.flow = flow
+
+  def get_params(self):
+    return self.params
+
+  def __call__(self, x, params=None, rng_key=None, inverse=False, **kwargs):
+    n_vmaps = x.shape[-1]
+    keys = random.split(rng_key, n_vmaps)
+
+    if params is None:
+
+      def apply_fun_init(x, rng_key):
+        z, log_det = self.flow(x[...,None], params=None, rng_key=rng_key, inverse=inverse, **kwargs)
+        params = self.flow.get_params()
+        return params
+
+      self.params = jax.vmap(apply_fun_init, in_axes=(-1, 0), out_axes=0)(x, keys)
+    else:
+      self.params = params
+
+    def apply_fun(x, params, rng_key):
+      z, log_det = self.flow(x[...,None], params=params, rng_key=rng_key, inverse=inverse, **kwargs)
+      return z[...,0], log_det
+
+    z, log_dets = jax.vmap(apply_fun, in_axes=(-1, 0, 0), out_axes=-1)(x, self.params, keys)
+    log_det = log_dets.sum(axis=-1)
+    return z, log_det
+
+################################################################################################################
+
+if __name__ == "__main__":
+  from debug import *
+  import nux
+  from nux.tests.basic_unit_test import exact_test
+
+  rng_key = random.PRNGKey(0)
+  x = random.normal(rng_key, shape=(5, 4))
+  flow = Vmap(nux.LogisticCDFMixtureLogit(K=8))
+
+  # Initialize the flow
+  flow(x, rng_key=rng_key)
+  params = flow.get_params()
+
+  # Scramble the parameters to undo the data dependent init
+  flat_params, unflatten = jax.flatten_util.ravel_pytree(params)
+  flat_params = random.normal(rng_key, flat_params.shape)
+  params = unflatten(flat_params)
+
+  # Compute the log likelihood contribution of flow
+  z, log_det = flow(x, params=params, rng_key=rng_key)
+
+  # Reconstruct x
+  x_reconstr, log_det2 = flow(z, params=params, rng_key=rng_key, inverse=True)
+  assert jnp.allclose(x, x_reconstr)
+  assert jnp.allclose(log_det, log_det2)
+
+  # Compute the exact jacobian
+  def unbatched_apply_fun(x):
+    z, _ = flow(x[None], params=params, rng_key=rng_key)
+    return z[0]
+
+  J = jax.vmap(jax.jacobian(unbatched_apply_fun))(x)
+  total_dim = util.list_prod(x.shape[1:])
+  J_flat = J.reshape((-1, total_dim, total_dim))
+  log_det_exact = jnp.linalg.slogdet(J_flat)[1]
+
+  assert jnp.allclose(log_det_exact, log_det)
+  print(f"{str(flow)} passed the reconstruction and log det test")
+
+  import pdb; pdb.set_trace()

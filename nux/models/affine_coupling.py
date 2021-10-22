@@ -23,7 +23,7 @@ __all__ = ["RealNVP",
 
 class _coupling(ABC):
 
-  def __init__(self, additive=False, discrete=False):
+  def __init__(self, additive=False, discrete=False, **kwargs):
     if discrete:
       assert additive == True
     self.additive = additive
@@ -37,6 +37,8 @@ class _coupling(ABC):
     else:
       self.transformer = ShiftScale()
       self.mul = 2
+
+    self._check_aux = kwargs.get("_check_aux", True)
 
   def get_params(self):
     return dict(scale=self.scale_params,
@@ -57,7 +59,7 @@ class _coupling(ABC):
     x1, x2 = x[...,:split_dim], x[...,split_dim:]
 
     # The auxiliary input and x1 must have the same spatial dimensions
-    if aux is not None:
+    if aux is not None and self._check_aux:
       x_spatial_shape, aux_spatial_shape = x.shape[1:-1], aux.shape[1:-1]
       if x_spatial_shape != aux_spatial_shape:
         assert len(x_spatial_shape) == 2
@@ -95,7 +97,7 @@ class RealNVPBlock(_coupling):
                discrete=False,
                make_coupling_net=None,
                **kwargs):
-    super().__init__(additive=additive, discrete=discrete)
+    super().__init__(additive=additive, discrete=discrete, **kwargs)
     if make_coupling_net is None:
       self.make_coupling_net = lambda out_dim: CouplingResNet1D(out_dim,
                                                                 working_dim,
@@ -119,7 +121,7 @@ class RealNVPImageBlock(_coupling):
                discrete=False,
                make_coupling_net=None,
                **kwargs):
-    super().__init__(additive=additive, discrete=discrete)
+    super().__init__(additive=additive, discrete=discrete, **kwargs)
     if make_coupling_net is None:
       self.make_coupling_net = lambda out_dim: CouplingResNet(out_dim,
                                                               working_channel,

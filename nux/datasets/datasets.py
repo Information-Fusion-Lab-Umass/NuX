@@ -21,7 +21,8 @@ def make_train_test(dataset_fun,
                     label_keep_percent=1.0,
                     random_label_percent=0.0,
                     data_augmentation=False,
-                    train_split=None):
+                    train_split=None,
+                    **kwargs):
   if train_split is None:
     train_split = "train"
   train_ds = dataset_fun(quantize_bits=quantize_bits,
@@ -31,7 +32,8 @@ def make_train_test(dataset_fun,
                          classification=classification,
                          label_keep_percent=label_keep_percent,
                          random_label_percent=random_label_percent,
-                         data_augmentation=data_augmentation)
+                         data_augmentation=data_augmentation,
+                         **kwargs)
 
   get_test_ds = lambda : dataset_fun(quantize_bits=quantize_bits,
                                      batch_size=test_batch_size,
@@ -40,7 +42,8 @@ def make_train_test(dataset_fun,
                                      classification=classification,
                                      label_keep_percent=1.0,
                                      random_label_percent=0.0,
-                                     data_augmentation=False)
+                                     data_augmentation=False,
+                                     **kwargs)
 
   return train_ds, get_test_ds
 
@@ -54,18 +57,20 @@ def get_dataset(dataset_name,
                 label_keep_percent=1.0,
                 random_label_percent=0.0,
                 data_augmentation=False,
-                train_split=None):
+                train_split=None,
+                **kwargs):
 
-  kwargs = dict(train_batch_size=train_batch_size,
-                train_n_batches=train_n_batches,
-                test_batch_size=test_batch_size,
-                test_n_batches=test_n_batches,
-                quantize_bits=quantize_bits,
-                classification=classification,
-                label_keep_percent=label_keep_percent,
-                random_label_percent=random_label_percent,
-                data_augmentation=data_augmentation,
-                train_split=train_split)
+  _kwargs = dict(train_batch_size=train_batch_size,
+                 train_n_batches=train_n_batches,
+                 test_batch_size=test_batch_size,
+                 test_n_batches=test_n_batches,
+                 quantize_bits=quantize_bits,
+                 classification=classification,
+                 label_keep_percent=label_keep_percent,
+                 random_label_percent=random_label_percent,
+                 data_augmentation=data_augmentation,
+                 train_split=train_split)
+  kwargs.update(_kwargs)
 
   dataset_name = dataset_name.lower()
 
@@ -103,6 +108,8 @@ def get_dataset(dataset_name,
     train_ds, get_test_ds = make_train_test(get_circles_dataset, **kwargs)
   elif dataset_name == "swirl_clusters":
     train_ds, get_test_ds = make_train_test(get_swirl_clusters_dataset, **kwargs)
+  elif dataset_name == "cosine":
+    train_ds, get_test_ds = make_train_test(get_cosine_dataset, **kwargs)
   elif dataset_name == "double_roll":
     train_ds, get_test_ds = make_train_test(get_double_roll_dataset, **kwargs)
   elif dataset_name == "spiral_3d":

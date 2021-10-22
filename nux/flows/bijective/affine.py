@@ -48,8 +48,12 @@ class DiscreteBias(Flow):
   def __init__(self):
     self.b = None
 
+  @property
+  def param_multiplier(self):
+    return 1
+
   def get_param_dim(self, dim):
-    return 1*dim
+    return self.param_multiplier*dim
 
   def get_params(self):
     return {"b": self.b}
@@ -81,8 +85,12 @@ class Bias(Flow):
   def __init__(self):
     self.b = None
 
+  @property
+  def param_multiplier(self):
+    return 1
+
   def get_param_dim(self, dim):
-    return 1*dim
+    return self.param_multiplier*dim
 
   def get_params(self):
     return {"b": self.b}
@@ -133,8 +141,12 @@ class Scale(Flow):
   def __init__(self):
     self.s = None
 
+  @property
+  def param_multiplier(self):
+    return 1
+
   def get_param_dim(self, dim):
-    return 1*dim
+    return self.param_multiplier*dim
 
   def get_params(self):
     return {"s": self.s}
@@ -176,8 +188,12 @@ class ShiftScale(Flow):
     self.b = None
     self.center_init = center_init
 
+  @property
+  def param_multiplier(self):
+    return 2
+
   def get_param_dim(self, dim):
-    return 2*dim
+    return self.param_multiplier*dim
 
   def get_params(self):
     return {"s": self.s, "b": self.b}

@@ -112,7 +112,7 @@ def get_swiss_roll_dataset(batch_size=32,
                            data_augmentation=False,
                            **kwargs):
   from sklearn.datasets import make_swiss_roll
-  data = make_swiss_roll(n_samples=20000, noise=0.3, random_state=0)[0][:,[0,2]]
+  data = make_swiss_roll(n_samples=1000000, noise=0.3, random_state=0)[0][:,[0,2]]
   data = jnp.array(data)#/10.0
   key = random.PRNGKey(0)
   data = random.permutation(key, data)
@@ -138,7 +138,7 @@ def get_moons_dataset(batch_size=32,
                       data_augmentation=False,
                       **kwargs):
   from sklearn.datasets import make_moons
-  data, labels = make_moons(n_samples=20000, noise=0.07, random_state=0)
+  data, labels = make_moons(n_samples=1000000, noise=0.07, random_state=0)
   data, labels = jnp.array(data), jnp.array(labels)
 
   return get_regular_dataset(data,
@@ -150,6 +150,41 @@ def get_moons_dataset(batch_size=32,
                              classification=classification,
                              label_keep_percent=label_keep_percent,
                              random_label_percent=random_label_percent,
+                             data_augmentation=False,
+                             **kwargs)
+
+################################################################################################################
+
+def generate_cosine(key, n_samples):
+  x = jnp.linspace(-jnp.pi, jnp.pi, n_samples)
+  y = jnp.cos(x)
+  data = jnp.vstack([x, y]).T
+
+  k1, k2 = random.split(key, 2)
+  data = random.permutation(k1, data)
+  data += random.normal(k2, data.shape)*0.2
+  return data
+
+def get_cosine_dataset(batch_size=32,
+                       n_batches=None,
+                       split="train",
+                       train_ratio=0.7,
+                       classification=False,
+                       label_keep_percent=1.0,
+                       random_label_percent=0.0,
+                       data_augmentation=False,
+                       **kwargs):
+  key = random.PRNGKey(0)
+  data = generate_cosine(key, n_samples=1000000)
+
+  return get_regular_dataset(data,
+                             labels=None,
+                             batch_size=batch_size,
+                             n_batches=n_batches,
+                             split=split,
+                             train_ratio=train_ratio,
+                             classification=False,
+                             label_keep_percent=label_keep_percent,
                              data_augmentation=False,
                              **kwargs)
 
@@ -177,7 +212,7 @@ def get_double_roll_dataset(batch_size=32,
                             data_augmentation=False,
                             **kwargs):
   key = random.PRNGKey(0)
-  data = generate_double_roll(key, n_samples=20000)
+  data = generate_double_roll(key, n_samples=1000000)
 
   return get_regular_dataset(data,
                              labels=None,
@@ -213,7 +248,7 @@ def get_spiral_3d_dataset(batch_size=32,
                           data_augmentation=False,
                           **kwargs):
   key = random.PRNGKey(0)
-  data = generate_3d_spiral(key, n_samples=20000)
+  data = generate_3d_spiral(key, n_samples=1000000)
 
   return get_regular_dataset(data,
                              labels=None,
@@ -249,7 +284,7 @@ def get_2d_manifold_dataset(batch_size=32,
                             data_augmentation=False,
                             **kwargs):
   key = random.PRNGKey(0)
-  data = generate_line(key, n_samples=20000)
+  data = generate_line(key, n_samples=1000000)
 
   return get_regular_dataset(data,
                              labels=None,
@@ -290,7 +325,7 @@ def get_6_point_manifold_dataset(batch_size=32,
                                  data_augmentation=False,
                                  **kwargs):
   key = random.PRNGKey(0)
-  data = generate_6_points(key, n_samples=20000)
+  data = generate_6_points(key, n_samples=1000000)
 
   return get_regular_dataset(data,
                              labels=None,
@@ -345,7 +380,7 @@ def get_circles_dataset(batch_size=32,
                         data_augmentation=False,
                         **kwargs):
   key = random.PRNGKey(0)
-  data, labels = generate_nested_circles(key, n_samples=20000)
+  data, labels = generate_nested_circles(key, n_samples=1000000)
 
   return get_regular_dataset(data,
                              labels=labels,
@@ -393,7 +428,7 @@ def get_grid_dataset(batch_size=32,
                      data_augmentation=False,
                      **kwargs):
   key = random.PRNGKey(0)
-  data = generate_grid(key, n_samples=20000, min_val=-10, max_val=10, n_clusters_per_axis=4)
+  data = generate_grid(key, n_samples=1000000, min_val=-10, max_val=10, n_clusters_per_axis=4)
   return get_regular_dataset(data,
                              labels=None,
                              batch_size=batch_size,
@@ -473,7 +508,7 @@ def get_swirl_clusters_dataset(batch_size=32,
                                data_augmentation=False,
                                **kwargs):
   key = random.PRNGKey(0)
-  data, labels = gen_all_clusters(key, n_samples=20000)
+  data, labels = gen_all_clusters(key, n_samples=1000000)
 
   return get_regular_dataset(data,
                              labels=labels,
