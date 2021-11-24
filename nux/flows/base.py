@@ -14,7 +14,9 @@ __all__ = ["Flow",
            "Identity",
            "Repeat",
            "AsFlat",
-           "Vmap"]
+           "Flatten",
+           "Vmap",
+           "ZeroInitWrapper"]
 
 ################################################################################################################
 
@@ -44,8 +46,20 @@ class Flow(ABC):
 ################################################################################################################
 
 class Sequential():
-  def __init__(self, layers):
+  def __init__(self, layers, prior=None, is_transform=False):
+    if prior is not None:
+      if isinstance(layers, tuple):
+        layers = layers + (prior,)
+      elif isinstance(layers, list):
+        layers = layers + [prior]
+      else:
+        layers = [layers, prior]
+
     self.layers = layers
+    self.is_transform = is_transform
+    if is_transform == False:
+      self.transform = Sequential(self.layers[:-1], is_transform=True)
+      self.prior = self.layers[-1]
 
   def get_params(self):
     return [layer.get_params() for layer in self.layers]
@@ -56,8 +70,12 @@ class Sequential():
     if params is None:
       self.params = [None]*n_layers
     else:
-      assert len(params) == n_layers
-      self.params = params
+      if self.is_transform and len(params) == n_layers + 1:
+        # The last parameter is for the prior
+        self.params = params[:-1]
+      else:
+        assert len(params) == n_layers
+        self.params = params
 
     keys = [None]*n_layers if rng_key is None else random.split(rng_key, n_layers)
     iterable = list(zip(keys, self.params, self.layers))
@@ -194,6 +212,23 @@ class AsFlat():
     z = z_flat.reshape(x.shape)
     return z, llc
 
+class Flatten():
+  def __init__(self):
+    pass
+
+  def get_params(self):
+    return ()
+
+  def __call__(self, x, inverse=False, **kwargs):
+    if inverse == False:
+      self.x_shape = x.shape[1:]
+      z = x.reshape(x.shape[:1] + (-1,))
+    else:
+      z = x.reshape(x.shape[:1] + self.x_shape)
+
+    llc = jnp.zeros(x.shape[:1])
+    return z, llc
+
 ################################################################################################################
 
 class Vmap():
@@ -226,6 +261,27 @@ class Vmap():
     z, log_dets = jax.vmap(apply_fun, in_axes=(-1, 0, 0), out_axes=-1)(x, self.params, keys)
     log_det = log_dets.sum(axis=-1)
     return z, log_det
+
+################################################################################################################
+
+class ZeroInitWrapper():
+  def __init__(self, net):
+    self.net = net
+
+  def get_params(self):
+    return dict(net=self.net.get_params(),
+                scale=self.scale)
+
+  def __call__(self, x, params=None, rng_key=None, **kwargs):
+    if params is None:
+      self.scale = random.normal(rng_key, (1,))*0.001
+      params = dict(scale=self.scale, net=None)
+    else:
+      self.scale = params["scale"]
+
+    out = self.net(x, params=params["net"], rng_key=rng_key, **kwargs)
+    out *= self.scale
+    return out
 
 ################################################################################################################
 

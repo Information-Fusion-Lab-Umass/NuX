@@ -8,10 +8,20 @@ import os
 import pathlib
 import optax
 import pandas as pd
+import einops
+import tqdm
 
 class Trainer():
 
-  def __init__(self, args, init_key=None, train_key=None, eval_key=None, loss_scale=1.0, use_pmap=False):
+  def __init__(self,
+               args,
+               init_key=None,
+               train_key=None,
+               eval_key=None,
+               use_pmap=False,
+               use_vmap=True,
+               pmap_batch=True,
+               train_for_loop=False):
     self.args = args
 
     # Make sure that the save path exists
@@ -28,21 +38,31 @@ class Trainer():
     self.n_train_steps = 0
     self.test_eval_times = None
 
-    self.loss_scale = loss_scale
-
     self.apply_updates = jax.jit(optax.apply_updates)
+
+    self.using_map = True
+    if "n_models" in args and args.n_models == 1:
+      use_pmap = False
+      use_vmap = False
+    if use_pmap:
+      self.map = jax.pmap
+    elif use_vmap:
+      self.map = jax.vmap
+    else:
+      self.map = lambda fun, *args, **kwargs: fun
+      args.n_models = 1
+      self.using_map = False
+
+    self.pmap_batch = pmap_batch
 
     self.n_models = args.n_models
     self.model_mask = jnp.ones(args.n_models).astype(bool)
 
     self.data_augmentation = args.data_augmentation
 
-    if use_pmap:
-      self.map = jax.pmap
-    else:
-      self.map = jax.vmap
-
     self.map_kwargs = {}
+
+    self.train_for_loop = train_for_loop
 
   @property
   def train_losses(self):
@@ -94,6 +114,8 @@ class Trainer():
     self.flow = flow
     self.loss_fun = loss_fun
     self.valgrad = jax.jit(jax.value_and_grad(partial(loss_fun, is_training=True), has_aux=True))
+    if self.pmap_batch:
+      self.pmaped_valgrad = jax.pmap(self.valgrad, in_axes=(None, 0))
 
     # Create the optimizer
     chain = []
@@ -154,16 +176,36 @@ class Trainer():
   def grad_hook(self, grad):
     return ()
 
-  def grad_step(self, carry, inputs):
+  def grad_step(self, carry, inputs, catch_nan=False):
     params, opt_state = carry
 
     # Evaluate the gradient
-    (train_loss, aux), grad = self.valgrad(params, inputs)
+    n_devices = jax.local_device_count()
+    if self.pmap_batch and n_devices > 1:
+      x = inputs["x"]
+      batch_size = x.shape[0]
+      assert batch_size%n_devices == 0
+      inputs["x"] = einops.rearrange(x, "(d b) ... -> d b ...", d=n_devices)
+      inputs["rng_key"] = random.split(inputs["rng_key"], n_devices)
+      if self.data_augmentation:
+        inputs["x_aug"] = einops.rearrange(inputs["x_aug"], "(d b) ... -> d b ...", d=n_devices)
+
+      (train_loss, aux), grad = self.pmaped_valgrad(params, inputs)
+      combine = lambda x: jax.tree_map(partial(jnp.mean, axis=0), x)
+      train_loss, aux, grad = combine(train_loss), combine(aux), combine(grad)
+    else:
+      (train_loss, aux), grad = self.valgrad(params, inputs)
+
     grad_summary = self.grad_hook(grad)
 
     if "params" in aux:
       params = aux["params"]
       del aux["params"]
+
+    if catch_nan:
+      if jnp.any(jnp.isnan(train_loss)):
+        # Don't perform the parameter update
+        return (params, opt_state), (train_loss, aux, grad_summary)
 
     # Take a gradient step
     updates, opt_state = self.opt_update(grad, opt_state, params)
@@ -176,12 +218,12 @@ class Trainer():
     if hasattr(self, "_train_scan_loop") == False:
       self._train_scan_loop = partial(jax.lax.scan, self.grad_step)
       if self.data_augmentation:
-        in_axes = {"x": None, "x_aug": None, "rng_key": 0}
+        self.train_in_axes = {"x": None, "x_aug": None, "rng_key": 0}
       else:
-        in_axes = {"x": None, "rng_key": 0}
-      in_axes.update(self.map_kwargs) # If we're applying a different input for every model
-      self._train_scan_loop = self.map(self._train_scan_loop, in_axes=(0, in_axes))
-      self._train_scan_loop = jax.jit(self._train_scan_loop)
+        self.train_in_axes = {"x": None, "rng_key": 0}
+      self.train_in_axes.update(self.map_kwargs) # If we're applying a different input for every model
+      self._train_scan_loop = self.map(self._train_scan_loop, in_axes=(0, self.train_in_axes))
+      # self._train_scan_loop = jax.jit(self._train_scan_loop)
     return self._train_scan_loop
 
   def train(self, train_iter, train_key=None):
@@ -196,20 +238,39 @@ class Trainer():
 
     # Get a key for each model
     keys = random.split(rng_key, self.n_models*n_grad_steps)
-    keys = keys.reshape((self.n_models, n_grad_steps, -1))
+    if self.using_map == True:
+      keys = keys.reshape((self.n_models, n_grad_steps, -1))
 
     # Train using the scan loop
     inputs = dict(x=x, rng_key=keys)
     if self.data_augmentation:
       inputs["x_aug"] = data["x_aug"]
 
-    self.train_state, (train_losses, aux, grad_summary) = self.train_scan_loop(self.train_state, inputs)
+    if self.train_for_loop:
+      assert self.using_map == False, "Not tested yet"
+      outs = []
+      pbar = tqdm.tqdm(jnp.arange(n_grad_steps), leave=False)
+      for i in pbar:
+        _inputs = jax.tree_map(lambda x: x[i], inputs)
+        self.train_state, out = self.grad_step(self.train_state, _inputs)
+        train_loss = out[0].mean()
+        outs.append(out)
+        pbar.set_description(f"loss: {train_loss}")
+        if jnp.isnan(train_loss):
+          break
+      train_losses, aux, grad_summary = jax.tree_multimap(lambda *xs: jnp.array(xs), *outs)
+    else:
+      self.train_state, (train_losses, aux, grad_summary) = self.train_scan_loop(self.train_state, inputs)
+
     self.n_train_steps += n_grad_steps
 
     # Update the training losses and auxiliary values from the loss function
     train_metrics = dict(losses=train_losses, aux=aux, grad_summary=grad_summary)
     self.shapes_before = util.tree_shapes(self.train_metrics)
-    self.train_metrics = util.tree_concat(self.train_metrics, train_metrics, axis=1)
+    if self.using_map:
+      self.train_metrics = util.tree_concat(self.train_metrics, train_metrics, axis=1)
+    else:
+      self.train_metrics = util.tree_concat(self.train_metrics, train_metrics, axis=0)
     self.shapes_after = util.tree_shapes(self.train_metrics)
     return self.train_losses.mean()
 
@@ -217,7 +278,12 @@ class Trainer():
   def jitted_test(self):
     if hasattr(self, "_jitted_test") == False:
       loss_fun = partial(self.loss_fun, is_training=False)
-      loss_fun = self.map(loss_fun, in_axes=(0, {"x": None, "rng_key": 0}))
+      if self.data_augmentation:
+        in_axes = {"x": None, "x_aug": None, "rng_key": 0}
+      else:
+        in_axes = {"x": None, "rng_key": 0}
+      in_axes.update(self.map_kwargs) # If we're applying a different input for every model
+      loss_fun = self.map(loss_fun, in_axes=(0, in_axes))
       self._jitted_test = jax.jit(loss_fun)
     return self._jitted_test
 
@@ -235,7 +301,10 @@ class Trainer():
         x = next(test_iter)["x"]
         total_examples += x.shape[0]
         eval_key, rng_key = random.split(eval_key, 2)
-        keys = random.split(rng_key, self.n_models)
+        if self.using_map:
+          keys = random.split(rng_key, self.n_models)
+        else:
+          keys = rng_key
         inputs = dict(x=x, rng_key=keys)
 
         # Evaluate a batch of the test set
@@ -243,8 +312,11 @@ class Trainer():
 
         # Save off the metrics
         t_metrics = dict(losses=test_loss, aux=aux)
-        t_metrics = jax.tree_map(lambda x: x[:,None], t_metrics)
-        test_metrics = util.tree_concat(test_metrics, t_metrics, axis=1)
+        if self.using_map:
+          t_metrics = jax.tree_map(lambda x: x[:,None], t_metrics)
+          test_metrics = util.tree_concat(test_metrics, t_metrics, axis=1)
+        else:
+          test_metrics = util.tree_hstack(test_metrics, t_metrics)
 
     except StopIteration:
       pass
@@ -252,9 +324,13 @@ class Trainer():
     del test_iter
 
     # Average the test metrics
-    test_metrics = jax.tree_map(lambda x: jnp.mean(x, axis=1), test_metrics)
-    test_metrics = jax.tree_map(lambda x: x[:,None], test_metrics)
-    self.test_metrics = util.tree_concat(self.test_metrics, test_metrics, axis=1)
+    if self.using_map:
+      test_metrics = jax.tree_map(lambda x: jnp.mean(x, axis=1), test_metrics)
+      test_metrics = jax.tree_map(lambda x: x[:,None], test_metrics)
+      self.test_metrics = util.tree_concat(self.test_metrics, test_metrics, axis=1)
+    else:
+      test_metrics = jax.tree_map(jnp.mean, test_metrics)
+      self.test_metrics = util.tree_hstack(self.test_metrics, test_metrics)
 
     # Mark when we evaluated the test set
     self.test_eval_times = util.tree_hstack(self.test_eval_times, jnp.array(self.n_train_steps))
@@ -349,7 +425,10 @@ class Trainer():
       best_test_loss = best_test_loss.to_numpy().min()
 
       # Is the current model the best?
-      current_is_best = best_test_loss > self.test_losses[:,-1].min()
+      if self.using_map:
+        current_is_best = best_test_loss > self.test_losses[:,-1].min()
+      else:
+        current_is_best = best_test_loss > self.test_losses[-1].min()
 
       # If we are running a new experiment, then override the best model
       best_index = best_losses["index"]
@@ -367,8 +446,10 @@ class Trainer():
 
       # Save the losses
       n_params = self.n_params
-      best_test = test_losses.iloc[-1,:]
-      best_train = train_losses.iloc[-1,:]
+      # best_test = test_losses.iloc[-1,:]
+      # best_train = train_losses.iloc[-1,:]
+      best_test = test_losses.iloc[-1]
+      best_train = train_losses.iloc[-1]
       best_idx = self.test_eval_times[-1]
       df = pd.DataFrame({"train": best_train,
                          "test": best_test,
@@ -386,29 +467,36 @@ class Trainer():
     train_dfs = []
     test_dfs = []
 
-    for model_index in range(self.n_models):
-      train_aux = jax.tree_map(lambda x: np.array(x[model_index]), self.train_metrics["aux"])
-      test_aux = jax.tree_map(lambda x: np.array(x[model_index]), self.test_metrics["aux"])
+    if self.using_map:
+      for model_index in range(self.n_models):
+        train_aux = jax.tree_map(lambda x: np.array(x[model_index]), self.train_metrics["aux"])
+        test_aux = jax.tree_map(lambda x: np.array(x[model_index]), self.test_metrics["aux"])
 
-      train_df = pd.DataFrame(train_aux)
-      train_df = train_df.ewm(alpha=0.1).mean()
-      test_df = pd.DataFrame(test_aux, index=self.test_eval_times)
+        train_df = pd.DataFrame(train_aux)
+        train_df = train_df.ewm(alpha=0.1).mean()
+        test_df = pd.DataFrame(test_aux, index=self.test_eval_times)
 
-      train_dfs.append(train_df)
-      test_dfs.append(test_df)
+        train_dfs.append(train_df)
+        test_dfs.append(test_df)
 
-    train_df = pd.concat(train_dfs, axis=1, keys=list(range(self.n_models)))
-    test_df = pd.concat(test_dfs, axis=1, keys=list(range(self.n_models)))
+      train_df = pd.concat(train_dfs, axis=1, keys=list(range(self.n_models)))
+      test_df = pd.concat(test_dfs, axis=1, keys=list(range(self.n_models)))
+    else:
+      train_df = pd.DataFrame(self.train_metrics["aux"])
+      test_df = pd.DataFrame(self.test_metrics["aux"])
 
     def make_plot(col, M=2000):
-      plot_test = True if col in [name for _, name in test_df.columns] else False
-
-      idx_slice = pd.IndexSlice[:,col]
+      if self.using_map:
+        plot_test = True if col in [name for _, name in test_df.columns] else False
+        idx_slice = pd.IndexSlice[:,col]
+        train_slice, test_slice = train_df.loc[:,idx_slice], test_df.loc[:,idx_slice]
+      else:
+        plot_test = True if col in test_df.columns else False
+        train_slice, test_slice = train_df[col], test_df[col]
 
       train_color = "blue"
       test_color = "red"
 
-      train_slice, test_slice = train_df.loc[:,idx_slice], test_df.loc[:,idx_slice]
       if plot_test == False:
         test_slice = None
 
@@ -417,7 +505,8 @@ class Trainer():
       if plot_test:
         test_slice.plot(ax=ax1, alpha=0.1, linewidth=1, color=test_color, legend=False)
 
-      train_slice.iloc[-M:,:].plot(ax=ax2, alpha=0.1, linewidth=1, color=train_color, legend=False)
+      train_slice.iloc[-M:].plot(ax=ax2, alpha=0.1, linewidth=1, color=train_color, legend=False)
+      # train_slice.iloc[-M:,:].plot(ax=ax2, alpha=0.1, linewidth=1, color=train_color, legend=False)
       if plot_test:
         mask = test_slice.index >= train_df.shape[0] - M
         test_slice[mask].plot(ax=ax2, alpha=0.1, linewidth=1, color=test_color, legend=False)
@@ -432,7 +521,8 @@ class Trainer():
 
       def bounds(df):
         # Get the models that are in the top 50%
-        latest = df.ewm(alpha=0.1).mean().iloc[-1,:]
+        latest = df.ewm(alpha=0.1).mean().iloc[-1]
+        # latest = df.ewm(alpha=0.1).mean().iloc[-1,:]
         latest = latest[~latest.isna()]
         # K = max(1, latest.shape[0]//2)
         K = max(1, latest.shape[0])
@@ -451,16 +541,26 @@ class Trainer():
         return jnp.nanmin(x_filter), jnp.nanmax(x_filter)
 
       def set_axis_bounds(ax, train, test):
-        train_min, train_max = bounds(train)
-        return ax.set_ylim(train_min, train_max)
-        if test is None:
-          return ax.set_ylim(train_min, train_max)
-        test_min, test_max = bounds(test)
-        y_min, y_max = min(train_min, test_min), max(train_max, test_max)
-        ax.set_ylim(y_min, y_max)
+        if self.using_map:
+          train_min, train_max = bounds(train)
+        else:
+          train_min, train_max = train.min(), train.max()
+
+        if jnp.isfinite(train_min) and jnp.isfinite(train_max):
+          ax.set_ylim(train_min, train_max)
 
       set_axis_bounds(ax1, train_slice, test_slice)
-      set_axis_bounds(ax2, train_slice.iloc[-M:,:], test_slice)
+      set_axis_bounds(ax2, train_slice.iloc[-M:], test_slice)
+      # set_axis_bounds(ax2, train_slice.iloc[-M:,:], test_slice)
+
+      ax1.set_title(f"Full training history")
+      ax2.set_title(f"{M} most recent training steps")
+
+      ax1.set_xlabel("# Gradient Steps")
+      ax2.set_xlabel("# Gradient Steps")
+
+      ax1.set_ylabel(f"{col}")
+      # ax2.set_ylabel(f"{col}")
 
       if hasattr(self, "plot_title"):
         fig.suptitle(self.plot_title)
@@ -481,6 +581,9 @@ class Trainer():
       z, log_px = self.flow(x, params=params, rng_key=rng_key, **kwargs)
       return z, log_px
 
+    if self.using_map == False:
+      return _apply_fun(x, params, rng_key)
+
     keys = random.split(rng_key, self.n_models)
     return self.map(_apply_fun, in_axes=(None, 0, 0))(x, params, keys)
 
@@ -495,6 +598,10 @@ class Trainer():
       z = jnp.zeros((n_samples, *self.latent_shape))
       x, _ = self.flow(z, params=params, rng_key=rng_key, inverse=True)
       return x
+
+    if self.using_map == False:
+      return _sample(params, rng_key)
+
     keys = random.split(rng_key, self.n_models)
     return self.map(_sample)(params, keys)
 
@@ -509,6 +616,10 @@ class Trainer():
     def _reconstr(z, params, rng_key):
       x, _ = self.flow(z, params=params, rng_key=rng_key, inverse=True, reconstruction=True)
       return x
+
+    if self.using_map == False:
+      return _reconstr(z, params, rng_key)
+
     keys = random.split(rng_key, self.n_models)
     return self.map(_reconstr)(z, params, keys)
 
@@ -520,3 +631,9 @@ class Trainer():
 
   def save_samples(self, train_ds):
     pass
+
+################################################################################################################
+
+if __name__ == "__main__":
+  from debug import *
+  import pdb; pdb.set_trace()

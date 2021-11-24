@@ -49,7 +49,7 @@ class ResNet1D():
   def get_params(self):
     return self.params
 
-  def __call__(self, x, params=None, aux=None, rng_key=None, is_training=True):
+  def __call__(self, x, params=None, aux=None, rng_key=None, is_training=True, **kwargs):
 
     if params is None:
       self.params = None
@@ -104,7 +104,7 @@ class CouplingResNet1D():
                 resnet=self.resnet.get_params(),
                 wn_out=self.wn_out.get_params())
 
-  def __call__(self, x, params=None, aux=None, rng_key=None, is_training=True):
+  def __call__(self, x, params=None, aux=None, rng_key=None, is_training=True, **kwargs):
     k1, k2, k3 = random.split(rng_key, 3)
 
     if params is None:

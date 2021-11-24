@@ -38,17 +38,21 @@ class TallMVP():
 
   def __init__(self,
                output_dim,
-               create_network):
+               create_network,
+               condition_on_t=False,
+               pca_init=False):
     self.s_dim = output_dim
     self.create_network = create_network
     self.is_tall = True
+    self.condition_on_t = condition_on_t
+    self.pca_init = pca_init
 
   def get_params(self):
     return dict(network=self.network.get_params(),
                 A=self.A,
                 scale=self.scale_params)
 
-  def __call__(self, x, params=None, inverse=False, rng_key=None, is_training=True, save_orthogonal_noise=False, **kwargs):
+  def __call__(self, x, params=None, inverse=False, rng_key=None, is_training=True, reuse_orthogonal_noise=False, no_llc=False, **kwargs):
 
     if inverse == False:
       t = x # Follow convention from paper
@@ -57,17 +61,30 @@ class TallMVP():
       s = x
       self.s_dim = x.shape[-1]
 
-    self.network = self.create_network(2*self.t_dim)
+    if kwargs.get("gamma_perp", None) is None:
+      self.network = self.create_network(2*self.t_dim)
 
     if params is None:
       k1, k2 = random.split(rng_key, 2)
       self.scale_params = random.normal(k1, ())*0.01
       self.network_params = None
-      if self.is_tall:
-        A_init = jax.nn.initializers.glorot_normal(in_axis=-1, out_axis=-2, dtype=x.dtype)
+
+      if self.pca_init and self.is_tall:
+        import sklearn
+        from sklearn.decomposition import PCA
+        pca = PCA(n_components=self.s_dim, whiten=True)
+        z = pca.fit_transform(x)
+
+        # Retrieve matrix
+        A_pinv = (pca.components_.T/jnp.sqrt(pca.explained_variance_)).T
+        self.A = A_pinv.T@jnp.linalg.inv(A_pinv@A_pinv.T)
       else:
-        A_init = jax.nn.initializers.glorot_normal(in_axis=-2, out_axis=-1, dtype=x.dtype)
-      self.A = A_init(k2, shape=(self.t_dim, self.s_dim))
+
+        if self.is_tall:
+          A_init = jax.nn.initializers.glorot_normal(in_axis=-1, out_axis=-2, dtype=x.dtype)
+        else:
+          A_init = jax.nn.initializers.glorot_normal(in_axis=-2, out_axis=-1, dtype=x.dtype)
+        self.A = A_init(k2, shape=(self.t_dim, self.s_dim))
     else:
       self.scale_params = params["scale"]
       self.network_params = params["network"]
@@ -86,11 +103,11 @@ class TallMVP():
 
       # Orthogonal component
       gamma_perp = t - t_proj
-      if save_orthogonal_noise:
-        self.gamma_perp = gamma_perp
+      self.gamma_perp = gamma_perp
 
-      # Create the features.  Pass in t instead of s to make the code simpler.
-      theta = self.network(s, aux=None, params=self.network_params, rng_key=rng_key, is_training=is_training)
+      # Create the features.
+      cond = t if self.condition_on_t else s
+      theta = self.network(cond, aux=None, params=self.network_params, rng_key=rng_key, is_training=is_training)
       theta *= self.scale_params # Initialize to identity
       mu, diag_cov = jnp.split(theta, 2, axis=-1)
       diag_cov = util.square_plus(diag_cov, gamma=1.0) + 1e-4
@@ -101,25 +118,34 @@ class TallMVP():
       # Projection
       t_proj = jnp.einsum("ij,...j->...i", self.A, s)
 
-      # Create the features.  Pass in t instead of s to make the code simpler.
-      theta = self.network(s, aux=None, params=self.network_params, rng_key=k1, is_training=is_training)
-      theta *= self.scale_params # Initialize to identity
-      mu, diag_cov = jnp.split(theta, 2, axis=-1)
-      diag_cov = util.square_plus(diag_cov, gamma=1.0) + 1e-4
+      if kwargs.get("gamma_perp", None) is None:
+        # Create the features.
+        cond = t if self.condition_on_t else s
+        theta = self.network(cond, aux=None, params=self.network_params, rng_key=k1, is_training=is_training)
+        theta *= self.scale_params # Initialize to identity
+        mu, diag_cov = jnp.split(theta, 2, axis=-1)
+        diag_cov = util.square_plus(diag_cov, gamma=1.0) + 1e-4
 
-      # Sample orthogonal noise
-      noise = random.normal(k2, mu.shape)
-      gamma = mu + noise*jnp.sqrt(diag_cov)
+        # Sample orthogonal noise
+        noise = random.normal(k2, mu.shape)
+        gamma = mu + noise*jnp.sqrt(diag_cov)
 
-      # Orthogonalize the noise
-      # gamma_perp = gamma - mvp(self.A, solve(self.ATA, mvp(self.A.T, gamma))) # There is a bug in jnp.linalg.solve
-      gamma_perp = gamma - mvp(self.A, mvp(self.ATA_inv, mvp(self.A.T, gamma)))
+        # Orthogonalize the noise
+        # gamma_perp = gamma - mvp(self.A, solve(self.ATA, mvp(self.A.T, gamma))) # There is a bug in jnp.linalg.solve
+        gamma_perp = gamma - mvp(self.A, mvp(self.ATA_inv, mvp(self.A.T, gamma)))
+        gamma_perp *= 0.0
+
+      else:
+        gamma_perp = kwargs.get("gamma_perp", None)
 
       # Compute t
-      t = t_proj + gamma_perp
+      t = t_proj# + gamma_perp
 
     # Log likelihood contribution
-    llc = jax.vmap(logZ, in_axes=(0, None, 0))(mu - gamma_perp, self.A, diag_cov)
+    if no_llc == False:
+      llc = jax.vmap(logZ, in_axes=(0, None, 0))(mu - gamma_perp, self.A, diag_cov)
+    else:
+      llc = jnp.zeros(x.shape[:1])
 
     z = s if inverse == False else t
 
