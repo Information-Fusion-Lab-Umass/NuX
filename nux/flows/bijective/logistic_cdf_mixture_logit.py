@@ -107,7 +107,7 @@ class LogisticCDFMixtureLogit(Flow):
       theta = self.theta.reshape(x.shape + (self.param_multiplier,))
 
     # Split the parameters
-    weight_logits, means, scales = jnp.split(theta, jnp.array([self.K, 2*self.K]), axis=-1)
+    weight_logits, means, scales = theta[...,:self.K], theta[...,self.K:2*self.K], theta[...,2*self.K:]
     scales = util.square_plus(scales, gamma=1.0) + 1e-4
 
     # Create the jvp function that we'll need

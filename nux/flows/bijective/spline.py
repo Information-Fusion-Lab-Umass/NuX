@@ -109,7 +109,7 @@ def get_knot_params(settings, theta):
   K, min_width, min_height, min_derivative, bounds = settings
 
   # Get the individual parameters
-  tw, th, td = jnp.split(theta, jnp.array([K, 2*K]), axis=-1)
+  tw, th, td = theta[...,:K], theta[...,K:2*K], theta[...,2*K:]
 
   # Make the parameters fit the discription of knots
   tw, th = jax.nn.softmax(tw, axis=-1), jax.nn.softmax(th, axis=-1)
