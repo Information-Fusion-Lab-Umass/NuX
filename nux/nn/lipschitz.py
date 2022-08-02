@@ -165,7 +165,9 @@ class LinfLipschitzConv():
     C_in = x.shape[-1]
 
     if params is None:
-      self.w = random.normal(rng_key, shape=self.filter_shape + (C_in, self.C_out))*0.05
+      init = jax.nn.initializers.glorot_normal()
+      self.w = init(rng_key, shape=self.filter_shape + (C_in, self.C_out))
+      # self.w = random.normal(rng_key, shape=self.filter_shape + (C_in, self.C_out))*0.05
     else:
       self.w, self.b = params["w"], params["b"]
 

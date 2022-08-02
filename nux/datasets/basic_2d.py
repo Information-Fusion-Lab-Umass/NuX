@@ -16,11 +16,12 @@ def get_regular_dataset(data,
                         label_keep_percent=1.0,
                         random_label_percent=0.0,
                         data_augmentation=False,
+                        one_hot_labels=True,
                         **kwargs):
 
   n_train = int(data.shape[0]*train_ratio)
   if classification and labels is not None:
-    n_classes = len(set(labels.ravel()))
+    n_classes = len(jnp.unique(labels))
     range_classes = jnp.arange(n_classes)
 
   key = random.PRNGKey(0)
@@ -46,15 +47,17 @@ def get_regular_dataset(data,
     while True:
       key, data_key = random.split(key, 2)
       batch_idx = random.randint(data_key, minval=0, maxval=n_train, shape=batch_shape)
-      data_batch = data[batch_idx]
+      data_batch = data[batch_idx,...]
       inputs = {"x": data_batch}
 
       if classification and labels is not None:
-        y = labels[batch_idx]
-        y_one_hot = (y[...,None] == range_classes[...,:])*1.0
-
-        inputs["y"] = y_one_hot
-        inputs["y_is_labeled"] = labels_to_keep[batch_idx]
+        y = labels[batch_idx,...]
+        if one_hot_labels:
+          y_one_hot = (y[...,None] == range_classes[...,:])*1.0
+          inputs["y"] = y_one_hot
+        else:
+          inputs["y"] = y
+        inputs["y_is_labeled"] = labels_to_keep[batch_idx,...]
 
       yield inputs
 
@@ -83,9 +86,11 @@ def get_regular_dataset(data,
         y = labels[start_idx:end_idx]
         if n_batches is not None:
           y = rebatch(y, batch_size, n_batches)
-        y_one_hot = (y[...,None] == range_classes[...,:])*1.0
-
-        inputs["y"] = y_one_hot
+        if one_hot_labels:
+          y_one_hot = (y[...,None] == range_classes[...,:])*1.0
+          inputs["y"] = y_one_hot
+        else:
+          inputs["y"] = y
 
       yield inputs
 

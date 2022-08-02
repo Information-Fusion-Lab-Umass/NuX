@@ -44,6 +44,10 @@ class Trainer():
     if "n_models" in args and args.n_models == 1:
       use_pmap = False
       use_vmap = False
+    elif "n_models" not in args:
+      use_pmap = False
+      use_vmap = False
+
     if use_pmap:
       self.map = jax.pmap
     elif use_vmap:
@@ -70,6 +74,8 @@ class Trainer():
 
   @property
   def test_losses(self):
+    if self.test_metrics is None:
+      return jnp.array([])
     return self.test_metrics["losses"]
 
   def ensure_path(self, path):
@@ -89,6 +95,7 @@ class Trainer():
                                         train_split=self.args.train_split,
                                         data_augmentation=self.data_augmentation,
                                         **kwargs)
+    self.train_ds, self.get_test_ds = train_ds, get_test_ds
     return train_ds, get_test_ds
 
   @property
@@ -174,7 +181,7 @@ class Trainer():
     self.params, self.opt_state = val
 
   def grad_hook(self, grad):
-    return ()
+    return grad, ()
 
   def grad_step(self, carry, inputs, catch_nan=False):
     params, opt_state = carry
@@ -189,6 +196,7 @@ class Trainer():
       inputs["rng_key"] = random.split(inputs["rng_key"], n_devices)
       if self.data_augmentation:
         inputs["x_aug"] = einops.rearrange(inputs["x_aug"], "(d b) ... -> d b ...", d=n_devices)
+      inputs["i"] = jnp.ones(n_devices)*inputs["i"]
 
       (train_loss, aux), grad = self.pmaped_valgrad(params, inputs)
       combine = lambda x: jax.tree_map(partial(jnp.mean, axis=0), x)
@@ -196,20 +204,36 @@ class Trainer():
     else:
       (train_loss, aux), grad = self.valgrad(params, inputs)
 
-    grad_summary = self.grad_hook(grad)
+    grad, grad_summary = self.grad_hook(grad)
 
     if "params" in aux:
       params = aux["params"]
       del aux["params"]
 
-    if catch_nan:
-      if jnp.any(jnp.isnan(train_loss)):
-        # Don't perform the parameter update
-        return (params, opt_state), (train_loss, aux, grad_summary)
+    # if catch_nan:
+    #   any_nan_grad = jax.tree_map(lambda x: jnp.any(jnp.isnan(x)), grad)
+    #   if any(jax.tree_leaves(any_nan_grad)):
+    #     # Don't perform the parameter update
+    #     save_state = dict(params=params, inputs=inputs)
+    #     import pdb; pdb.set_trace()
+    #     return (params, opt_state), (train_loss, aux, grad_summary)
 
-    # Take a gradient step
-    updates, opt_state = self.opt_update(grad, opt_state, params)
-    params = self.apply_updates(params, updates)
+    # # Take a gradient step
+    # updates, opt_state = self.opt_update(grad, opt_state, params)
+    # params = self.apply_updates(params, updates)
+
+    if self.train_for_loop:
+      any_nan_grad = jax.tree_map(lambda x: jnp.any(jnp.isnan(x)), grad)
+      if any(jax.tree_leaves(any_nan_grad)):
+        pass
+      else:
+        # Take a gradient step
+        updates, opt_state = self.opt_update(grad, opt_state, params)
+        params = self.apply_updates(params, updates)
+    else:
+      # Take a gradient step
+      updates, opt_state = self.opt_update(grad, opt_state, params)
+      params = self.apply_updates(params, updates)
 
     return (params, opt_state), (train_loss, aux, grad_summary)
 
@@ -218,9 +242,9 @@ class Trainer():
     if hasattr(self, "_train_scan_loop") == False:
       self._train_scan_loop = partial(jax.lax.scan, self.grad_step)
       if self.data_augmentation:
-        self.train_in_axes = {"x": None, "x_aug": None, "rng_key": 0}
+        self.train_in_axes = {"x": None, "x_aug": None, "rng_key": 0, "i": 0}
       else:
-        self.train_in_axes = {"x": None, "rng_key": 0}
+        self.train_in_axes = {"x": None, "rng_key": 0, "i": 0}
       self.train_in_axes.update(self.map_kwargs) # If we're applying a different input for every model
       self._train_scan_loop = self.map(self._train_scan_loop, in_axes=(0, self.train_in_axes))
       # self._train_scan_loop = jax.jit(self._train_scan_loop)
@@ -242,9 +266,12 @@ class Trainer():
       keys = keys.reshape((self.n_models, n_grad_steps, -1))
 
     # Train using the scan loop
-    inputs = dict(x=x, rng_key=keys)
+    inputs = dict(x=x, rng_key=keys, i=jnp.arange(self.n_train_steps, self.n_train_steps + n_grad_steps))
     if self.data_augmentation:
       inputs["x_aug"] = data["x_aug"]
+
+    for key in self.map_kwargs:
+      inputs[key] = data[key]
 
     if self.train_for_loop:
       assert self.using_map == False, "Not tested yet"
@@ -252,7 +279,7 @@ class Trainer():
       pbar = tqdm.tqdm(jnp.arange(n_grad_steps), leave=False)
       for i in pbar:
         _inputs = jax.tree_map(lambda x: x[i], inputs)
-        self.train_state, out = self.grad_step(self.train_state, _inputs)
+        self.train_state, out = self.grad_step(self.train_state, _inputs, catch_nan=True)
         train_loss = out[0].mean()
         outs.append(out)
         pbar.set_description(f"loss: {train_loss}")
@@ -298,7 +325,8 @@ class Trainer():
       i = -1
       while True:
         i += 1
-        x = next(test_iter)["x"]
+        data = next(test_iter)
+        x = data["x"]
         total_examples += x.shape[0]
         eval_key, rng_key = random.split(eval_key, 2)
         if self.using_map:
@@ -306,6 +334,9 @@ class Trainer():
         else:
           keys = rng_key
         inputs = dict(x=x, rng_key=keys)
+
+        for key in self.map_kwargs:
+          inputs[key] = data[key]
 
         # Evaluate a batch of the test set
         test_loss, aux = self.jitted_test(self.params, inputs)
@@ -425,15 +456,18 @@ class Trainer():
       best_test_loss = best_test_loss.to_numpy().min()
 
       # Is the current model the best?
-      if self.using_map:
-        current_is_best = best_test_loss > self.test_losses[:,-1].min()
+      if self.test_metrics:
+        if self.using_map:
+          current_is_best = best_test_loss > self.test_losses[:,-1].min()
+        else:
+          current_is_best = best_test_loss > self.test_losses[-1].min()
       else:
-        current_is_best = best_test_loss > self.test_losses[-1].min()
+        current_is_best = True
 
       # If we are running a new experiment, then override the best model
       best_index = best_losses["index"]
       best_index = best_index.to_numpy()[0]
-      if best_index > self.test_eval_times[-1]:
+      if self.test_eval_times and best_index > self.test_eval_times[-1]:
         current_is_best = True
     else:
       current_is_best = True
@@ -448,9 +482,9 @@ class Trainer():
       n_params = self.n_params
       # best_test = test_losses.iloc[-1,:]
       # best_train = train_losses.iloc[-1,:]
-      best_test = test_losses.iloc[-1]
+      best_test = test_losses.iloc[-1] if test_losses.size > 0 else jnp.nan
       best_train = train_losses.iloc[-1]
-      best_idx = self.test_eval_times[-1]
+      best_idx = self.test_eval_times[-1] if self.test_eval_times else -1
       df = pd.DataFrame({"train": best_train,
                          "test": best_test,
                          "index": best_idx*jnp.ones(best_train.shape[0]),
@@ -466,33 +500,43 @@ class Trainer():
 
     train_dfs = []
     test_dfs = []
+    plot_test = self.test_metrics is not None
 
     if self.using_map:
       for model_index in range(self.n_models):
         train_aux = jax.tree_map(lambda x: np.array(x[model_index]), self.train_metrics["aux"])
-        test_aux = jax.tree_map(lambda x: np.array(x[model_index]), self.test_metrics["aux"])
-
         train_df = pd.DataFrame(train_aux)
         train_df = train_df.ewm(alpha=0.1).mean()
-        test_df = pd.DataFrame(test_aux, index=self.test_eval_times)
-
         train_dfs.append(train_df)
-        test_dfs.append(test_df)
+
+        if plot_test:
+          test_aux = jax.tree_map(lambda x: np.array(x[model_index]), self.test_metrics["aux"])
+          test_df = pd.DataFrame(test_aux, index=self.test_eval_times)
+          test_dfs.append(test_df)
 
       train_df = pd.concat(train_dfs, axis=1, keys=list(range(self.n_models)))
-      test_df = pd.concat(test_dfs, axis=1, keys=list(range(self.n_models)))
+      if plot_test:
+        test_df = pd.concat(test_dfs, axis=1, keys=list(range(self.n_models)))
     else:
       train_df = pd.DataFrame(self.train_metrics["aux"])
-      test_df = pd.DataFrame(self.test_metrics["aux"])
+      if plot_test:
+        test_df = pd.DataFrame(self.test_metrics["aux"])
+
+    if plot_test == False:
+      test_df = pd.DataFrame()
 
     def make_plot(col, M=2000):
       if self.using_map:
         plot_test = True if col in [name for _, name in test_df.columns] else False
         idx_slice = pd.IndexSlice[:,col]
-        train_slice, test_slice = train_df.loc[:,idx_slice], test_df.loc[:,idx_slice]
+        train_slice = train_df.loc[:,idx_slice]
+        if plot_test:
+          test_slice = test_df.loc[:,idx_slice]
       else:
         plot_test = True if col in test_df.columns else False
-        train_slice, test_slice = train_df[col], test_df[col]
+        train_slice = train_df[col]
+        if plot_test:
+          test_slice = test_df[col]
 
       train_color = "blue"
       test_color = "red"
@@ -506,25 +550,14 @@ class Trainer():
         test_slice.plot(ax=ax1, alpha=0.1, linewidth=1, color=test_color, legend=False)
 
       train_slice.iloc[-M:].plot(ax=ax2, alpha=0.1, linewidth=1, color=train_color, legend=False)
-      # train_slice.iloc[-M:,:].plot(ax=ax2, alpha=0.1, linewidth=1, color=train_color, legend=False)
       if plot_test:
         mask = test_slice.index >= train_df.shape[0] - M
         test_slice[mask].plot(ax=ax2, alpha=0.1, linewidth=1, color=test_color, legend=False)
 
-      # # Only plot the non outliers
-      # def bounds(df):
-      #   x = jnp.array(df.to_numpy().ravel())
-      #   z_score = (x - jnp.nanmean(x))/jnp.nanstd(x)
-      #   mask = jnp.abs(z_score) < 2
-      #   x_filter = x[mask]
-      #   return jnp.nanmin(x_filter), jnp.nanmax(x_filter)
-
       def bounds(df):
         # Get the models that are in the top 50%
         latest = df.ewm(alpha=0.1).mean().iloc[-1]
-        # latest = df.ewm(alpha=0.1).mean().iloc[-1,:]
         latest = latest[~latest.isna()]
-        # K = max(1, latest.shape[0]//2)
         K = max(1, latest.shape[0])
         idx = latest.argsort()[::-1]
 
@@ -535,10 +568,7 @@ class Trainer():
         x = jnp.array(top_k.to_numpy().ravel())
         z_score = (x - jnp.nanmean(x))/jnp.nanstd(x)
         mask = jnp.abs(z_score) < 2
-        # x_filter = x[mask]
-        x_filter = x
-        # return jnp.min(x_filter), jnp.max(x_filter)
-        return jnp.nanmin(x_filter), jnp.nanmax(x_filter)
+        return jnp.nanmin(x), jnp.nanmax(x)
 
       def set_axis_bounds(ax, train, test):
         if self.using_map:

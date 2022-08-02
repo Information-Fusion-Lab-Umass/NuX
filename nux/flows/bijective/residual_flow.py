@@ -5,6 +5,7 @@ from functools import partial
 from typing import Optional, Mapping, Tuple, Sequence, Union, Any, Callable
 import nux.util as util
 from nux.flows.base import Flow
+from fax import implicit
 
 __all__ = ["ResidualFlow"]
 
@@ -20,24 +21,6 @@ class ResidualFlow(Flow):
 
   def get_params(self):
     return self.res_block.get_params()
-
-  def inverse(self, apply_fun, z, max_iters=5000, atol=1e-8):
-
-    def cond(val):
-      x_prev, x, i = val
-      max_iters_reached = jnp.where(i >= max_iters, True, False)
-      tolerance_achieved = jnp.allclose(x_prev - x, 0.0, atol=atol)
-      first_iter = jnp.where(i > 0.0, False, True)
-      return ~(max_iters_reached | tolerance_achieved) | first_iter
-
-    def loop(val):
-      _, x, i = val
-      x_new = z - apply_fun(x)
-      return x, x_new, i + 1
-
-    # Initialize x
-    _, x, n_iters = jax.lax.while_loop(cond, loop, (z, z, 0.0))
-    return x
 
   def log_det_and_surrogate(self, rng_key, v, vjp):
 
@@ -96,7 +79,17 @@ class ResidualFlow(Flow):
         gx, _vjp = jax.vjp(apply_fun, x); vjp = lambda x: _vjp(x)[0]
         z = x + gx
     else:
-      z = self.inverse(partial(apply_fun, update_params=False), x)
+
+      z0 = x
+      def fp(inputs):
+        x, params, rng_key = inputs
+        def _fp(z):
+          gz = self.res_block(z, params=params, rng_key=rng_key, sv_update=False, **kwargs)
+          return x - gz
+        return _fp
+
+      z = implicit.two_phase_solve(fp, z0, (x, self.params, rng_key))
+
       if no_llc == False:
         _, _vjp = jax.vjp(apply_fun, z); vjp = lambda x: _vjp(x)[0]
 
@@ -172,5 +165,7 @@ if __name__ == "__main__":
 
   z, log_det = flow(x, rng_key=rng_key)
   params = flow.get_params()
+
+  x_reconstr, log_det2 = flow(z, params=params, rng_key=rng_key, inverse=True)
 
   import pdb; pdb.set_trace()

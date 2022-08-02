@@ -10,9 +10,6 @@ from nux.flows.base import Flow
 
 __all__ = ["RationalQuadraticSpline"]
 
-# This function works, but will never compile for use on GPUs if used in
-# a complicated nest of grad, vjp, jit, etc.
-
 ################################################################################################################
 
 def forward_spline(x,
@@ -30,7 +27,8 @@ def forward_spline(x,
   s_k = delta_y/delta_x
 
   zeta = (x - knot_x_k)/delta_x
-  z1mz = zeta*(1 - zeta)
+  onemz = (1 - zeta)
+  z1mz = zeta*onemz
 
   # Return the output
   alpha = delta_y*(s_k*zeta**2 + delta_k*z1mz)
@@ -39,7 +37,10 @@ def forward_spline(x,
   z = knot_y_k + gamma
 
   z = jnp.where(mask, z, x)
-  return z
+
+  dzdx = (s_k/beta)**2 * (delta_kp1*zeta**2 + 2*s_k*z1mz + delta_k*onemz**2)
+  dzdx = jnp.where(mask, dzdx, 1.0)
+  return z, dzdx
 
 def inverse_spline(x,
                    mask,
@@ -72,7 +73,11 @@ def inverse_spline(x,
   z = zeta*delta_x + knot_x_k
 
   z = jnp.where(mask, z, x)
-  return z
+
+  beta = s_k + (delta_kp1 + delta_k - 2*s_k)*z1mz
+  dzdx = (s_k/beta)**2 * (delta_kp1*zeta**2 + 2*s_k*z1mz + delta_k*(1 - zeta)**2)
+  dzdx = jnp.where(mask, dzdx, 1.0)
+  return z, dzdx
 
 ################################################################################################################
 
@@ -149,7 +154,8 @@ class RationalQuadraticSpline(Flow):
                min_width: Optional[float]=1e-3,
                min_height: Optional[float]=1e-3,
                min_derivative: Optional[float]=1e-3,
-               bounds: Sequence[float]=((-6.0, 6.0), (-6.0, 6.0))
+               bounds: Sequence[float]=((-6.0, 6.0), (-6.0, 6.0)),
+               **kwargs
   ):
     """
     """
@@ -189,7 +195,6 @@ class RationalQuadraticSpline(Flow):
       theta = self.theta.reshape(x.shape[1:] + (self.param_multiplier,))
       theta = jnp.broadcast_to(theta, x.shape[:1] + theta.shape)
     else:
-      # theta = self.theta
       theta = self.theta.reshape(x.shape + (self.param_multiplier,))
 
     # Get the parameters
@@ -203,26 +208,17 @@ class RationalQuadraticSpline(Flow):
     else:
       mask = (x > self.bounds[1][0] + 1e-5)&(x < self.bounds[1][1] - 1e-5)
       apply_fun = inverse_spline
-    mask = mask.astype(x.dtype)
 
     args = find_knots(x, knot_x, knot_y, knot_derivs, inverse)
 
-    # Compute the pass and retrieve the jvp and vjp
+    z, dzdx = apply_fun(x, mask, *args)
     if no_llc == False:
-      primals = x, mask, *args
-      tangents = (jnp.ones_like(x),) + jax.tree_map(jnp.zeros_like, primals[:-1])
-      z, dzdx = jax.jvp(apply_fun, primals, tangents)
-      if params is None:
-        self.dzdx = dzdx
       elementwise_log_det = jnp.log(dzdx)
     else:
-      z = apply_fun(x, mask, *args)
-      elementwise_log_det = jnp.zeros_like(x)
+      elementwise_log_det = jnp.zeros_like(dzdx)
 
     sum_axes = util.last_axes(x.shape[len(x.shape[:1]):])
     log_det = elementwise_log_det.sum(sum_axes)
-    if inverse == True:
-      log_det *= -1
 
     return z, log_det
 

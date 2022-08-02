@@ -6,14 +6,29 @@ from functools import partial
 from typing import Optional, Mapping, Callable, Sequence
 import nux.util as util
 from jax.scipy.special import gammaln, logsumexp
-
-__all__ = ["UnitGammaPrior",
+__all__ = ["Uniform",
+           "UnitGammaPrior",
            "UnitChiSquaredPrior",
            "LogisticPrior",
            "DirichletPrior",
            "PowerSphericalPrior",
            "StudentTPrior",
            "SigmoidUniform"]
+
+class Uniform():
+
+  def __init__(self):
+    pass
+
+  def get_params(self):
+    return {}
+
+  def __call__(self, x, rng_key=None, inverse=False, reconstruction=False, **kwargs):
+
+    if inverse == True and reconstruction == False:
+      x = random.uniform(rng_key, minval=0, maxval=1.0, shape=x.shape)
+
+    return x, jnp.zeros(x.shape[:1])
 
 class UnitGammaPrior():
 

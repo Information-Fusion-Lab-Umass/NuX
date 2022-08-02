@@ -5,6 +5,7 @@ from functools import partial
 import nux.util as util
 from typing import Optional, Mapping, Callable, Sequence
 import nux
+import numpy as np
 
 __all__ = ["TallMVP", "WideMVP"]
 
@@ -70,14 +71,9 @@ class TallMVP():
       self.network_params = None
 
       if self.pca_init and self.is_tall:
-        import sklearn
-        from sklearn.decomposition import PCA
-        pca = PCA(n_components=self.s_dim, whiten=True)
-        z = pca.fit_transform(x)
-
-        # Retrieve matrix
-        A_pinv = (pca.components_.T/jnp.sqrt(pca.explained_variance_)).T
-        self.A = A_pinv.T@jnp.linalg.inv(A_pinv@A_pinv.T)
+        assert x.shape[0] > self.s_dim
+        _, s, VT = jnp.linalg.svd(x)
+        self.A = VT[:self.s_dim].T*s[:self.s_dim]/jnp.sqrt(x.shape[0] - 1)
       else:
 
         if self.is_tall:
@@ -133,13 +129,12 @@ class TallMVP():
         # Orthogonalize the noise
         # gamma_perp = gamma - mvp(self.A, solve(self.ATA, mvp(self.A.T, gamma))) # There is a bug in jnp.linalg.solve
         gamma_perp = gamma - mvp(self.A, mvp(self.ATA_inv, mvp(self.A.T, gamma)))
-        gamma_perp *= 0.0
 
       else:
         gamma_perp = kwargs.get("gamma_perp", None)
 
       # Compute t
-      t = t_proj# + gamma_perp
+      t = t_proj + gamma_perp
 
     # Log likelihood contribution
     if no_llc == False:

@@ -298,10 +298,10 @@ class StaticShiftScale(Flow):
 
 class DenseMVP(Flow):
 
-  def __init__(self):
+  def __init__(self, pca_init=False):
     """ Dense
     """
-    pass
+    self.pca_init = pca_init
 
   def get_params(self):
     return {"A": self.A}
@@ -311,7 +311,12 @@ class DenseMVP(Flow):
     dim = x_shape[-1]
 
     if params is None:
-      self.A = random.normal(rng_key, shape=(dim, dim))
+      if self.pca_init:
+        assert x.shape[0] > x.shape[1]
+        _, s, VT = jnp.linalg.svd(x)
+        self.A = VT.T*s/jnp.sqrt(x.shape[0] - 1)
+      else:
+        self.A = random.normal(rng_key, shape=(dim, dim))
     else:
       self.A = params["A"]
 
@@ -369,10 +374,11 @@ U_solve_with_diag = partial(tri_solve, lower=False, unit_diagonal=False)
 
 class PLUMVP(Flow):
 
-  def __init__(self):
+  def __init__(self, identity_init=True, pca_init=False):
     """ Dense layer using the PLU parametrization https://arxiv.org/pdf/1807.03039.pdf
     """
-    pass
+    self.pca_init = pca_init
+    self.identity_init = identity_init
 
   def get_params(self):
     return {"A": self.A}
@@ -381,15 +387,27 @@ class PLUMVP(Flow):
     x_shape = x.shape[1:]
     dim = x_shape[-1]
 
-    if params is None:
-      self.A = random.normal(rng_key, shape=(dim, dim))*0.01
-      self.A = self.A.at[jnp.arange(dim),jnp.arange(dim)].set(1.0)
-    else:
-      self.A = params["A"]
-
     mask = jnp.ones((dim, dim), dtype=bool)
     upper_mask = jnp.triu(mask)
     lower_mask = jnp.tril(mask, k=-1)
+
+    if params is None:
+      if self.pca_init:
+        assert x.shape[0] > x.shape[1]
+        _, s, VT = jnp.linalg.svd(x)
+        B = VT.T*s/jnp.sqrt(x.shape[0] - 1)
+        P, L, U = jax.scipy.linalg.lu(B)
+        self.A = lower_mask*L + upper_mask*U
+      elif self.identity_init:
+        self.A = random.normal(rng_key, shape=(dim, dim))*0.01
+        self.A = self.A.at[jnp.arange(dim),jnp.arange(dim)].set(1.0)
+      else:
+        init = jax.nn.initializers.glorot_normal()
+        B = init(rng_key, shape=(dim, dim))
+        P, L, U = jax.scipy.linalg.lu(B)
+        self.A = lower_mask*L + upper_mask*U
+    else:
+      self.A = params["A"]
 
     if inverse == False:
       z = jnp.einsum("ij,...j->...i", self.A*upper_mask, x)
@@ -413,7 +431,7 @@ def regular_test():
   from jax.flatten_util import ravel_pytree
 
   rng_key = random.PRNGKey(0)
-  x = random.normal(rng_key, shape=(2, 4))
+  x = random.normal(rng_key, shape=(10, 4))
   x_orig = x
 
   flow = PLUMVP()

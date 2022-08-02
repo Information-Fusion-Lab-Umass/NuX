@@ -19,7 +19,9 @@ __all__ = ["Softplus",
            "SLog",
            "CartesianToSpherical",
            "SphericalToCartesian",
-           "SafeCartesianToSpherical"]
+           "SafeCartesianToSpherical",
+           "GaussianCDF",
+           "LogisticCDF"]
 
 class Softplus(Flow):
   def __init__(self):
@@ -213,7 +215,7 @@ class Logit(Flow):
   def get_params(self):
     return {}
 
-  def __call__(self, x, inverse=False, **kwargs):
+  def __call__(self, x, inverse=False, force_values=False, **kwargs):
     x_shape = x.shape[1:]
     sum_axes = util.last_axes(x_shape)
 
@@ -227,7 +229,7 @@ class Logit(Flow):
       z = jax.nn.sigmoid(x)
       log_det = (jax.nn.softplus(x) + jax.nn.softplus(-x))
 
-      if self.has_scale == True and self.force_values == False:
+      if self.has_scale == True and force_values == False and self.force_values == False:
         z -= self.scale
         z /= (1.0 - 2*self.scale)
 
@@ -357,6 +359,49 @@ class SafeCartesianToSpherical(CartesianToSpherical):
 
     log_det = log_det + log_det1 + log_det2
     return z, log_det
+
+from nux.priors.gaussian import UnitGaussianPrior
+class GaussianCDF(Flow):
+  # Gaussian -> Uniform
+
+  def __init__(self):
+    pass
+
+  def get_params(self):
+    return ()
+
+  def __call__(self, x, params=None, rng_key=None, inverse=False, **kwargs):
+
+    if inverse == False:
+      z = jax.scipy.stats.norm.cdf(x)
+      _, log_det = UnitGaussianPrior()(x)
+    else:
+      z = jax.scipy.stats.norm.ppf(x)
+      _, log_det = UnitGaussianPrior()(z)
+
+    return z, log_det
+
+from nux.priors.other import LogisticPrior
+class LogisticCDF(Flow):
+  # Logistic -> Uniform
+
+  def __init__(self):
+    pass
+
+  def get_params(self):
+    return ()
+
+  def __call__(self, x, params=None, rng_key=None, inverse=False, **kwargs):
+
+    if inverse == False:
+      z = jax.scipy.stats.logistic.cdf(x)
+      _, log_det = LogisticPrior()(x)
+    else:
+      z = jax.scipy.stats.logistic.ppf(x)
+      _, log_det = LogisticPrior()(z)
+
+    return z, log_det
+
 
 if __name__ == "__main__":
   from debug import *

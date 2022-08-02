@@ -7,11 +7,33 @@ from typing import Optional, Mapping, Tuple, Sequence, Union, Any, Callable
 import nux.util as util
 import einops
 
-__all__ = ["WeightNormDense",
+__all__ = ["ZeroInit",
+           "WeightNormDense",
            "GatedDense",
            "WeightNormConv",
            "LayerNorm",
            "GatedConv"]
+
+class ZeroInit():
+  def __init__(self, f):
+    self.f = f
+    self.w = None
+
+  def get_params(self):
+    return dict(f=self.f.get_params(), w=self.w)
+
+  def __call__(self, x, params=None, rng_key=None, **kwargs):
+    if params is None:
+      k1, k2 = random.split(rng_key, 2)
+      self.w = random.normal(k1, (1,))*0.01
+      f_params = None
+    else:
+      self.w = params["w"]
+      f_params = params["f"]
+
+    z = self.f(x, params=f_params, rng_key=rng_key, **kwargs)
+    out = self.w*z
+    return out
 
 class WeightNormDense():
 

@@ -68,7 +68,7 @@ class _coupling(ABC):
     # Apply the conditioner network
     dim = x1.shape[-1]
     self.conditioner = self.make_coupling_net(self.mul*dim)
-    theta = self.conditioner(x2, aux=aux, params=self.conditioner_params, rng_key=k1, is_training=is_training)
+    theta = self.conditioner(x2, aux=aux, params=self.conditioner_params, rng_key=k1, is_training=is_training, **kwargs)
     theta *= self.scale_params
 
     # Split the parameters for the transformer

@@ -8,7 +8,9 @@ __all__ = ["key_tree_like",
            "tree_ndims",
            "tree_equal",
            "tree_concat",
-           "tree_hstack"]
+           "tree_hstack",
+           "tree_array"]
+
 
 def key_tree_like(key, pytree):
   # Figure out what the tree structure is
@@ -48,3 +50,6 @@ def tree_hstack(x, y):
   if x is None:
     return jax.tree_map(lambda x: x[None], y)
   return jax.tree_multimap(lambda a, b: jnp.hstack([a, b]), x, y)
+
+def tree_array(inputs):
+  return jax.tree_multimap(lambda *xs: jnp.array(xs), *inputs)

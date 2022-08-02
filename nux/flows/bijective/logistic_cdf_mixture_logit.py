@@ -67,7 +67,7 @@ def jvp(primals, tangents):
 
 class LogisticCDFMixtureLogit(Flow):
 
-  def __init__(self, K: int=4, newton_inverse=False):
+  def __init__(self, K: int=4, newton_inverse=False, **kwargs):
     """ Used in Flow++ https://arxiv.org/pdf/1902.00275.pdf
     """
     self.K = K

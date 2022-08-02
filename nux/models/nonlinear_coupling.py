@@ -69,7 +69,7 @@ class _coupling(ABC):
     # Apply the conditioner network
     dim = x1.shape[-1]
     self.conditioner = self.make_coupling_net(self.mul*dim)
-    theta = self.conditioner(x2, aux=aux, params=self.conditioner_params, rng_key=k1, is_training=is_training)
+    theta = self.conditioner(x2, aux=aux, params=self.conditioner_params, rng_key=k1, is_training=is_training, **kwargs)
     theta *= self.scale_params
 
     # Split the parameters for the transformer
@@ -81,7 +81,7 @@ class _coupling(ABC):
       params = [dict(theta=_theta), dict(s=s, b=b)]
 
     # Apply the transformer to the input
-    z1, log_det = self.transformer(x1, params=params, rng_key=k2, inverse=inverse)
+    z1, log_det = self.transformer(x1, params=params, rng_key=k2, inverse=inverse, **kwargs)
 
     # Concatenate and return
     z = jnp.concatenate([z1, x2], axis=-1)
@@ -165,7 +165,7 @@ class NonlinearCoupling(Repeat):
     layers.append(PLUMVP())
     layers.append(ShiftScale())
     self.flow = Sequential(layers)
-    super().__init__(flow=self.flow, n_repeats=n_layers, checkerboard=False)
+    super().__init__(flow=self.flow, n_repeats=n_layers, checkerboard=False, **kwargs)
 
 class NonlinearCouplingImage(Repeat):
 
@@ -195,7 +195,7 @@ class NonlinearCouplingImage(Repeat):
     layers.append(OneByOneConv())
     layers.append(ShiftScale())
     self.flow = Sequential(layers)
-    super().__init__(flow=self.flow, n_repeats=n_layers, checkerboard=checkerboard)
+    super().__init__(flow=self.flow, n_repeats=n_layers, checkerboard=checkerboard, **kwargs)
 
 ################################################################################################################
 

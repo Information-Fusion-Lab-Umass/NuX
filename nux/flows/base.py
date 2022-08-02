@@ -255,8 +255,8 @@ class Vmap():
       self.params = params
 
     def apply_fun(x, params, rng_key):
-      z, log_det = self.flow(x[...,None], params=params, rng_key=rng_key, inverse=inverse, **kwargs)
-      return z[...,0], log_det
+      z, log_det = self.flow(x, params=params, rng_key=rng_key, inverse=inverse, **kwargs)
+      return z.squeeze(), log_det
 
     z, log_dets = jax.vmap(apply_fun, in_axes=(-1, 0, 0), out_axes=-1)(x, self.params, keys)
     log_det = log_dets.sum(axis=-1)
