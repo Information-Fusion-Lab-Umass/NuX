@@ -154,7 +154,7 @@ class RationalQuadraticSpline(Flow):
                min_width: Optional[float]=1e-3,
                min_height: Optional[float]=1e-3,
                min_derivative: Optional[float]=1e-3,
-               bounds: Sequence[float]=((-6.0, 6.0), (-6.0, 6.0)),
+               bounds: Sequence[float]=((-10.0, 10.0), (-10.0, 10.0)),
                **kwargs
   ):
     """

@@ -49,7 +49,7 @@ class Mixture():
 
       # For each item in the batch, select a different mixture component
       keys = random.split(rng_key, x.shape[0])
-      selected_params = jax.tree_map(lambda x: x[k], self.component_params)
+      selected_params = jax.tree_util.tree_map(lambda x: x[k], self.component_params)
 
       # Evaluate the flow on only the component
       x, log_pz = jax.vmap(sample)(x, selected_params, keys)

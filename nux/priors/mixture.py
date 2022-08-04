@@ -47,7 +47,7 @@ class Mixture():
           x_masked = x_flat[mask[:,i]].reshape((-1,) + x.shape[1:])
           self.component(x_masked, params=None, rng_key=key, inverse=inverse, reconstruction=reconstruction, **kwargs)
           component_params.append(self.component.get_params())
-        self.component_params = jax.tree_multimap(lambda *xs: jnp.array(xs), *component_params)
+        self.component_params = jax.tree_util.tree_map(lambda *xs: jnp.array(xs), *component_params)
 
         # Based on cluster assignments
         self.pi = jnp.log(mask.sum(axis=0)/x.shape[0])
@@ -65,7 +65,7 @@ class Mixture():
         return x[0], log_pz[0]
 
       keys = random.split(rng_key, x.shape[0])
-      selected_params = jax.tree_map(lambda x: x[k], self.component_params)
+      selected_params = jax.tree_util.tree_map(lambda x: x[k], self.component_params)
       x, log_pz = jax.vmap(sample)(x, selected_params, keys)
 
     else:

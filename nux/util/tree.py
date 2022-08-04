@@ -37,19 +37,19 @@ def tree_ndims(pytree):
   return jax.tree_util.tree_map(lambda x:x.ndim, pytree)
 
 def tree_equal(x, y):
-  return jax.tree_util.tree_all(jax.tree_multimap(lambda x, y: x == y, x, y))
+  return jax.tree_util.tree_all(jax.tree_util.tree_map(lambda x, y: x == y, x, y))
 
 ##########################################################################
 
 def tree_concat(x, y, axis=0):
   if x is None:
     return y
-  return jax.tree_multimap(lambda a, b: jnp.concatenate([a, b], axis=axis), x, y)
+  return jax.tree_util.tree_map(lambda a, b: jnp.concatenate([a, b], axis=axis), x, y)
 
 def tree_hstack(x, y):
   if x is None:
-    return jax.tree_map(lambda x: x[None], y)
-  return jax.tree_multimap(lambda a, b: jnp.hstack([a, b]), x, y)
+    return jax.tree_util.tree_map(lambda x: x[None], y)
+  return jax.tree_util.tree_map(lambda a, b: jnp.hstack([a, b]), x, y)
 
 def tree_array(inputs):
-  return jax.tree_multimap(lambda *xs: jnp.array(xs), *inputs)
+  return jax.tree_util.tree_map(lambda *xs: jnp.array(xs), *inputs)

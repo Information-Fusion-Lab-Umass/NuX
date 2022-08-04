@@ -364,7 +364,7 @@ class LipschitzDenseResBlock():
         gx, block_params = scan_block(gx, (key, None))
         init_params.append(block_params)
       if self.n_layers > 0:
-        self.res_params = jax.tree_multimap(lambda *xs: jnp.array(xs), *init_params)
+        self.res_params = jax.tree_util.tree_map(lambda *xs: jnp.array(xs), *init_params)
       else:
         self.res_params = ()
     else:
@@ -462,7 +462,7 @@ class LipschitzConvResBlock():
         for i, key in enumerate(keys):
           gx, block_params = scan_block(gx, (key, None))
           init_params.append(block_params)
-        self.res_params = jax.tree_multimap(lambda *xs: jnp.array(xs), *init_params)
+        self.res_params = jax.tree_util.tree_map(lambda *xs: jnp.array(xs), *init_params)
       else:
         self.res_params = ()
     else:
@@ -523,6 +523,6 @@ if __name__ == "__main__":
   z2 = net(x, aux=aux, params=params, rng_key=rng_key, is_training=False)
   z3 = net(x[:4], aux=aux[:4], params=params, rng_key=rng_key, is_training=False)
 
-  param_diff = jax.tree_multimap(lambda x,y: jnp.linalg.norm(x-y), params, net.get_params())
+  param_diff = jax.tree_util.tree_map(lambda x,y: jnp.linalg.norm(x-y), params, net.get_params())
 
   import pdb; pdb.set_trace()

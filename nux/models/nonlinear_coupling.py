@@ -107,7 +107,8 @@ class Block(_coupling):
                                                                 hidden_dim,
                                                                 nonlinearity,
                                                                 dropout_prob,
-                                                                n_layers)
+                                                                n_layers,
+                                                                **kwargs)
     else:
       self.make_coupling_net = make_coupling_net
 
@@ -132,7 +133,8 @@ class ImageBlock(_coupling):
                                                               hidden_channel,
                                                               nonlinearity,
                                                               dropout_prob,
-                                                              n_layers)
+                                                              n_layers,
+                                                              **kwargs)
     else:
       self.make_coupling_net = make_coupling_net
 

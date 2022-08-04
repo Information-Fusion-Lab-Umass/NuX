@@ -169,7 +169,7 @@ class Repeat():
         assert x.shape == in_shape
         log_det += _log_det
         init_params.append(block_params)
-      self.repeated_params = jax.tree_multimap(lambda *xs: jnp.array(xs), *init_params)
+      self.repeated_params = jax.tree_util.tree_map(lambda *xs: jnp.array(xs), *init_params)
     else:
       if self.unroll == -1:
         init_params = []
@@ -180,11 +180,11 @@ class Repeat():
           else:
             k = i
           in_shape = x.shape
-          x, (_log_det, block_params) = scan_block(x, (key, jax.tree_map(lambda x: x[k], self.repeated_params)))
+          x, (_log_det, block_params) = scan_block(x, (key, jax.tree_util.tree_map(lambda x: x[k], self.repeated_params)))
           assert x.shape == in_shape
           log_det += _log_det
           init_params.append(block_params)
-        self.repeated_params = jax.tree_multimap(lambda *xs: jnp.array(xs), *init_params)
+        self.repeated_params = jax.tree_util.tree_map(lambda *xs: jnp.array(xs), *init_params)
       else:
         # There is a leaked tracer here because self.flow.get_params() will contain the traced values!
         # This won't affect anything though because we never need those values.

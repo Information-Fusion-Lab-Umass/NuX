@@ -114,7 +114,7 @@ class LogisticCDFMixtureLogit(Flow):
     @partial(jax.vmap, in_axes=in_axes)
     def _f_and_df(weight_logits, means, scales, x):
       primals = weight_logits, means, scales, x
-      tangents = jax.tree_map(jnp.zeros_like, primals[:-1]) + (jnp.ones_like(x),)
+      tangents = jax.tree_util.tree_map(jnp.zeros_like, primals[:-1]) + (jnp.ones_like(x),)
       return jax.jvp(logistic_cdf_mixture_logit, primals, tangents)
 
     # Fill with the parameters

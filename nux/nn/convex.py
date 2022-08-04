@@ -85,7 +85,7 @@ class InputConvexNN():
       for i in range(self.n_hidden_layers):
         (h, x), w = scan_block((h, x), (None, None, None, keys[i]))
         weights.append(w)
-      self.Lp, self.L, self.Laug = jax.tree_multimap(lambda *xs: jnp.array(xs), *zip(weights))[0]
+      self.Lp, self.L, self.Laug = jax.tree_util.tree_map(lambda *xs: jnp.array(xs), *zip(weights))[0]
 
     else:
       (h, _), _ = jax.lax.scan(scan_block, (h, x), (self.Lp, self.L, self.Laug, keys), unroll=1)

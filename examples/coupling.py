@@ -123,6 +123,6 @@ if __name__ == "__main__":
   keys = random.split(rng_key, n_train_iters)
   for i, rng_key in enumerate(keys):
     nll, grad = valgrad(params, next(x_iter), rng_key)
-    params = jax.tree_multimap(lambda x, y: x - lr*y, params, grad)
+    params = jax.tree_util.tree_map(lambda x, y: x - lr*y, params, grad)
 
   import pdb; pdb.set_trace()

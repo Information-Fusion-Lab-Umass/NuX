@@ -199,7 +199,7 @@ class Trainer():
       inputs["i"] = jnp.ones(n_devices)*inputs["i"]
 
       (train_loss, aux), grad = self.pmaped_valgrad(params, inputs)
-      combine = lambda x: jax.tree_map(partial(jnp.mean, axis=0), x)
+      combine = lambda x: jax.tree_util.tree_map(partial(jnp.mean, axis=0), x)
       train_loss, aux, grad = combine(train_loss), combine(aux), combine(grad)
     else:
       (train_loss, aux), grad = self.valgrad(params, inputs)
@@ -211,8 +211,8 @@ class Trainer():
       del aux["params"]
 
     # if catch_nan:
-    #   any_nan_grad = jax.tree_map(lambda x: jnp.any(jnp.isnan(x)), grad)
-    #   if any(jax.tree_leaves(any_nan_grad)):
+    #   any_nan_grad = jax.tree_util.tree_map(lambda x: jnp.any(jnp.isnan(x)), grad)
+    #   if any(jax.tree_util.tree_leaves(any_nan_grad)):
     #     # Don't perform the parameter update
     #     save_state = dict(params=params, inputs=inputs)
     #     import pdb; pdb.set_trace()
@@ -223,8 +223,8 @@ class Trainer():
     # params = self.apply_updates(params, updates)
 
     if self.train_for_loop:
-      any_nan_grad = jax.tree_map(lambda x: jnp.any(jnp.isnan(x)), grad)
-      if any(jax.tree_leaves(any_nan_grad)):
+      any_nan_grad = jax.tree_util.tree_map(lambda x: jnp.any(jnp.isnan(x)), grad)
+      if any(jax.tree_util.tree_leaves(any_nan_grad)):
         pass
       else:
         # Take a gradient step
@@ -278,14 +278,14 @@ class Trainer():
       outs = []
       pbar = tqdm.tqdm(jnp.arange(n_grad_steps), leave=False)
       for i in pbar:
-        _inputs = jax.tree_map(lambda x: x[i], inputs)
+        _inputs = jax.tree_util.tree_map(lambda x: x[i], inputs)
         self.train_state, out = self.grad_step(self.train_state, _inputs, catch_nan=True)
         train_loss = out[0].mean()
         outs.append(out)
         pbar.set_description(f"loss: {train_loss}")
         if jnp.isnan(train_loss):
           break
-      train_losses, aux, grad_summary = jax.tree_multimap(lambda *xs: jnp.array(xs), *outs)
+      train_losses, aux, grad_summary = jax.tree_util.tree_map(lambda *xs: jnp.array(xs), *outs)
     else:
       self.train_state, (train_losses, aux, grad_summary) = self.train_scan_loop(self.train_state, inputs)
 
@@ -344,7 +344,7 @@ class Trainer():
         # Save off the metrics
         t_metrics = dict(losses=test_loss, aux=aux)
         if self.using_map:
-          t_metrics = jax.tree_map(lambda x: x[:,None], t_metrics)
+          t_metrics = jax.tree_util.tree_map(lambda x: x[:,None], t_metrics)
           test_metrics = util.tree_concat(test_metrics, t_metrics, axis=1)
         else:
           test_metrics = util.tree_hstack(test_metrics, t_metrics)
@@ -356,11 +356,11 @@ class Trainer():
 
     # Average the test metrics
     if self.using_map:
-      test_metrics = jax.tree_map(lambda x: jnp.mean(x, axis=1), test_metrics)
-      test_metrics = jax.tree_map(lambda x: x[:,None], test_metrics)
+      test_metrics = jax.tree_util.tree_map(lambda x: jnp.mean(x, axis=1), test_metrics)
+      test_metrics = jax.tree_util.tree_map(lambda x: x[:,None], test_metrics)
       self.test_metrics = util.tree_concat(self.test_metrics, test_metrics, axis=1)
     else:
-      test_metrics = jax.tree_map(jnp.mean, test_metrics)
+      test_metrics = jax.tree_util.tree_map(jnp.mean, test_metrics)
       self.test_metrics = util.tree_hstack(self.test_metrics, test_metrics)
 
     # Mark when we evaluated the test set
@@ -467,7 +467,7 @@ class Trainer():
       # If we are running a new experiment, then override the best model
       best_index = best_losses["index"]
       best_index = best_index.to_numpy()[0]
-      if self.test_eval_times and best_index > self.test_eval_times[-1]:
+      if self.test_eval_times is not None and best_index > self.test_eval_times[-1]:
         current_is_best = True
     else:
       current_is_best = True
@@ -484,7 +484,7 @@ class Trainer():
       # best_train = train_losses.iloc[-1,:]
       best_test = test_losses.iloc[-1] if test_losses.size > 0 else jnp.nan
       best_train = train_losses.iloc[-1]
-      best_idx = self.test_eval_times[-1] if self.test_eval_times else -1
+      best_idx = self.test_eval_times[-1] if self.test_eval_times is not None else -1
       df = pd.DataFrame({"train": best_train,
                          "test": best_test,
                          "index": best_idx*jnp.ones(best_train.shape[0]),
@@ -504,13 +504,13 @@ class Trainer():
 
     if self.using_map:
       for model_index in range(self.n_models):
-        train_aux = jax.tree_map(lambda x: np.array(x[model_index]), self.train_metrics["aux"])
+        train_aux = jax.tree_util.tree_map(lambda x: np.array(x[model_index]), self.train_metrics["aux"])
         train_df = pd.DataFrame(train_aux)
         train_df = train_df.ewm(alpha=0.1).mean()
         train_dfs.append(train_df)
 
         if plot_test:
-          test_aux = jax.tree_map(lambda x: np.array(x[model_index]), self.test_metrics["aux"])
+          test_aux = jax.tree_util.tree_map(lambda x: np.array(x[model_index]), self.test_metrics["aux"])
           test_df = pd.DataFrame(test_aux, index=self.test_eval_times)
           test_dfs.append(test_df)
 
