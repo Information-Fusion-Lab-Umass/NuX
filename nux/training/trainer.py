@@ -283,8 +283,8 @@ class Trainer():
         train_loss = out[0].mean()
         outs.append(out)
         pbar.set_description(f"loss: {train_loss}")
-        if jnp.isnan(train_loss):
-          break
+        # if jnp.isnan(train_loss):
+        #   break
       train_losses, aux, grad_summary = jax.tree_util.tree_map(lambda *xs: jnp.array(xs), *outs)
     else:
       self.train_state, (train_losses, aux, grad_summary) = self.train_scan_loop(self.train_state, inputs)

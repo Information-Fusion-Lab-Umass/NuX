@@ -7,6 +7,14 @@ import jax
 from typing import Optional, Mapping, Tuple, Sequence, Union, Any, Callable
 import jax.lax as lax
 
+def random_mask_from(x, rng_key, maxval):
+  index = random.randint(rng_key, minval=0, maxval=maxval, shape=x.shape[:1])
+  mask = jnp.arange(maxval) == index[:,None]
+  mask = mask.reshape(x.shape).astype(x.dtype)
+  return mask
+
+################################################################################################################
+
 def scaled_weight_standardization_conv(w, gain=None, eps=1e-4):
   fan_in = list_prod(w.shape[:-1])
   mean = jnp.mean(w, axis=(0, 1, 2), keepdims=True)

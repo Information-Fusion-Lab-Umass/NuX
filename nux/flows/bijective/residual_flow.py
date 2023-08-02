@@ -5,7 +5,10 @@ from functools import partial
 from typing import Optional, Mapping, Tuple, Sequence, Union, Any, Callable
 import nux.util as util
 from nux.flows.base import Flow
-from fax import implicit
+try:
+  from fax import implicit
+except:
+  pass
 
 __all__ = ["ResidualFlow"]
 

@@ -77,9 +77,11 @@ class ResNet1D():
         for i, key in enumerate(keys):
           x, block_params = scan_block(x, (key, jax.tree_util.tree_map(lambda x: x[i], self.params)))
           params.append(block_params)
-        self.params = jax.tree_util.tree_map(lambda *xs: jnp.array(xs), *params)
+        # self.params = jax.tree_util.tree_map(lambda *xs: jnp.array(xs), *params)
+        params = jax.tree_util.tree_map(lambda *xs: jnp.array(xs), *params)
       else:
-        x, self.params = jax.lax.scan(scan_block, x, (keys, self.params), unroll=self.unroll)
+        # x, self.params = jax.lax.scan(scan_block, x, (keys, self.params), unroll=self.unroll)
+        x, params = jax.lax.scan(scan_block, x, (keys, self.params), unroll=self.unroll)
     return x
 
 class CouplingResNet1D():

@@ -213,7 +213,9 @@ class AsFlat():
     return z, llc
 
 class Flatten():
-  def __init__(self):
+  def __init__(self, x_shape=None):
+    if x_shape is not None:
+      self.x_shape = x_shape
     pass
 
   def get_params(self):
@@ -223,6 +225,7 @@ class Flatten():
     if inverse == False:
       self.x_shape = x.shape[1:]
       z = x.reshape(x.shape[:1] + (-1,))
+      self.z_shape = z.shape[1:]
     else:
       z = x.reshape(x.shape[:1] + self.x_shape)
 

@@ -77,7 +77,7 @@ class ResNet():
         init_params.append(block_params)
       self.params = jax.tree_util.tree_map(lambda *xs: jnp.array(xs), *init_params)
     else:
-      x, self.params = jax.lax.scan(scan_block, x, (keys, self.params), unroll=self.unroll)
+      x, params = jax.lax.scan(scan_block, x, (keys, self.params), unroll=self.unroll)
 
     return x
 
