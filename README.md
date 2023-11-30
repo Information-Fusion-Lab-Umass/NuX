@@ -1,3 +1,5 @@
+### Check out an improved version of NuX called [generax](https://github.com/EddieCunningham/generax)!
+
 # NuX - Normalizing Flows using JAX
 
 [![.github/workflows/CI.yml](https://github.com/MilesCranmer/NuX/actions/workflows/CI.yml/badge.svg)](https://github.com/MilesCranmer/NuX/actions/workflows/CI.yml)
